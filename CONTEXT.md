@@ -82,6 +82,14 @@ _Avoid_: Parsing (which is only its first step), translation
 Rewriting part of an artefact's intermediate representation into a form closer to its intent, such as a cursor loop into a set-based step. Lowering never does this; raising is optional and recorded in the conversion report.
 _Avoid_: Optimisation, refactoring
 
+**Faithful form**:
+The conversion of an artefact with no raising applied: every construct converted as written. It is always produced.
+_Avoid_: Literal translation, baseline
+
+**Raised form**:
+The conversion of an artefact after raising. It is delivered only if it passes every check the faithful form passes.
+_Avoid_: Optimised version, idiomatic version
+
 **Generation**:
 Turning the intermediate representation into target code.
 _Avoid_: Translation, transpiling
@@ -142,7 +150,7 @@ Running an artefact and its conversion on the same data and comparing the result
 _Avoid_: Validation (too broad), testing
 
 **Observation**:
-What one execution of an artefact produced, in a form shared by every source and target: result sets, output parameters, return value, row counts, any error raised, and the state afterwards of every table it wrote, directly or through triggers and foreign-key actions.
+What one execution of an artefact produced, in a form shared by every source and target: result sets, output parameters, return value, row counts, any error raised, messages printed, and the state afterwards of every table it wrote, directly or through triggers and foreign-key actions.
 _Avoid_: Result, output
 
 **Checkpoint**:
