@@ -103,6 +103,10 @@ A piece of target code the report singles out for review, either because an LLM 
 **Escape hatch**:
 Target code that falls back to embedded SQL because the construct has no reasonable idiomatic equivalent in the target language.
 
+**Session state**:
+What converted code carries in place of the legacy database session: temp tables, the open transaction, the last row count, the last identity value and the error being handled. All writes go through it.
+_Avoid_: Context (which the context builder assembles), connection
+
 **Support library**:
 The versioned package that converted code may import to reproduce source behaviour the target lacks.
 _Avoid_: Helper library, runtime, utils
