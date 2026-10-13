@@ -1,0 +1,17 @@
+{
+  "licence": "Microsoft SQL Server sample databases, MIT licence (github.com/microsoft/sql-server-samples). The backups are downloaded at build time and are not committed.",
+  "backups": [
+    {
+      "database": "AdventureWorks2022",
+      "file": "AdventureWorks2022.bak",
+      "url": "https://github.com/Microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorks2022.bak",
+      "sha256": "d17567adb1521f972e1dc183a7216cea869c4580b5d75632425bcadbaf82ce5e"
+    },
+    {
+      "database": "WideWorldImporters",
+      "file": "WideWorldImporters-Full.bak",
+      "url": "https://github.com/Microsoft/sql-server-samples/releases/download/wide-world-importers-v1.0/WideWorldImporters-Full.bak",
+      "sha256": "e842bad6ce02f74f166947e559dab1b476edd7eaae3da2ab9e3f522f1dd87124"
+    }
+  ]
+}
