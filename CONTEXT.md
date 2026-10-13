@@ -38,7 +38,7 @@ _Avoid_: Schema migration
 ### Extraction
 
 **Extractor**:
-The part of the tool that reads a source's metadata and artefact source code over a read-only connection and records them in the catalog.
+The part of the tool that builds the catalog, either over a read-only connection to a live SQL Server (primary) or from a folder of exported script files (fallback).
 
 **Catalog**:
 The versioned record of everything extracted from a source: table shapes, constraints, dependencies and artefact source code. It is the only thing conversion reads.
