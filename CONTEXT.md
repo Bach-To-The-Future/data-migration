@@ -125,6 +125,22 @@ _Avoid_: Validator, QA
 Running an artefact and its conversion on the same data and comparing the results. When enabled, an artefact counts as converted only if it reconciles.
 _Avoid_: Validation (too broad), testing
 
+**Observation**:
+What one execution of an artefact produced, in a form shared by every source and target: result sets, output parameters, return value, row counts, any error raised, and the state afterwards of every table it wrote, directly or through triggers and foreign-key actions.
+_Avoid_: Result, output
+
+**Checkpoint**:
+The part of an observation taken after one statement: the variables, temp tables and rows written at that point.
+_Avoid_: Trace, snapshot
+
+**Verdict**:
+The testing module's judgement of one artefact: a result for each layer of checks and one overall outcome, with the evidence behind it. No LLM takes part in it and nobody can change it.
+_Avoid_: Test result, status (which is what the conversion report shows a reader)
+
+**Hold-out seeds**:
+Seeds for generating test data that are kept from every step able to change the conversion, and used once, for the final verdict.
+_Avoid_: Test set, validation set
+
 **Not reconciled**:
 The report status of an artefact converted while reconciliation was disabled.
 
