@@ -54,11 +54,19 @@ _Avoid_: Schema migration
 ### Extraction
 
 **Extractor**:
-The part of the tool that builds the catalog, either over a read-only connection to a live SQL Server (primary) or from a folder of exported script files (fallback).
+The part of the tool that builds the catalog from a read-only connection to a live server, from folders of exported files, or from both. It never executes client code and never reads a row of client data.
 
 **Catalog**:
-The versioned record of everything extracted from a source: table shapes, constraints, dependencies and artefact source code. It is the only thing conversion reads.
+The versioned record of everything extracted from a source: table shapes, constraints, references between objects and artefact source code, each fact with where it came from. It is the only thing conversion reads.
 _Avoid_: Metadata store, repository
+
+**Snapshot**:
+The catalog as one extraction left it. A snapshot never changes, and a run uses exactly one.
+_Avoid_: Version, extract
+
+**Control database**:
+Where the tool keeps everything it persists for one engagement: catalog snapshots, the run catalog, observations and verdicts, and that client's lessons. There is one per engagement, and deleting a client's data means deleting it.
+_Avoid_: Metadata database, repository
 
 ### Conversion
 
@@ -87,6 +95,14 @@ _Avoid_: Flagged fragment (which is target code), unparsed block
 
 **Scope barrier**:
 An opaque fragment whose effect on what is in scope cannot be determined, so that everything it might have touched is treated as unknown from that point on.
+
+**Generated description**:
+A natural-language account of an artefact rendered by fixed rules from its intermediate representation, and so always faithful to it.
+_Avoid_: Summary, documentation
+
+**Intent summary**:
+An AI-written account of what an artefact is for. It is labelled as such, is context only, and is never the source of truth.
+_Avoid_: Description (which is generated), explanation
 
 **Context builder**:
 The part of the core that assembles everything an AI step is shown. An AI step never gathers its own context.
