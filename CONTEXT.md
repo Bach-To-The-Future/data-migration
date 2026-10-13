@@ -23,7 +23,7 @@ The person who runs the tool on a client's artefacts. In early use the operator 
 _Avoid_: User
 
 **Core**:
-The part of the tool shared by every source and every target, which no single source or target may require changing.
+The part of the tool shared by every source and every target. A new source or target may add operations to the intermediate representation but may never change what an existing one means.
 
 **Engine**:
 The whole tool apart from its front ends: the core together with every source and every target.
@@ -59,6 +59,34 @@ The part of the tool that builds the catalog, either over a read-only connection
 **Catalog**:
 The versioned record of everything extracted from a source: table shapes, constraints, dependencies and artefact source code. It is the only thing conversion reads.
 _Avoid_: Metadata store, repository
+
+### Conversion
+
+**Intermediate representation**:
+The form of an artefact that the core works on, independent of any source or target.
+_Avoid_: AST, syntax tree, model
+
+**Lowering**:
+Turning a source artefact into the intermediate representation.
+_Avoid_: Parsing (which is only its first step), translation
+
+**Raising**:
+Rewriting part of an artefact's intermediate representation into a form closer to its intent, such as a cursor loop into a set-based step. Lowering never does this; raising is optional and recorded in the conversion report.
+_Avoid_: Optimisation, refactoring
+
+**Generation**:
+Turning the intermediate representation into target code.
+_Avoid_: Translation, transpiling
+
+**External reference**:
+A reference from an artefact to an object outside the catalog, such as another database, a linked server or a system object.
+
+**Opaque fragment**:
+A piece of source kept verbatim, with its position and the reason, because lowering could not express it in the intermediate representation. It is never dropped.
+_Avoid_: Flagged fragment (which is target code), unparsed block
+
+**Scope barrier**:
+An opaque fragment whose effect on what is in scope cannot be determined, so that everything it might have touched is treated as unknown from that point on.
 
 ### Conversion output
 
