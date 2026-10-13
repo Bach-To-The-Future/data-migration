@@ -1,0 +1,1950 @@
+{
+  "about": "First draft of the intermediate representation's vocabulary. This file is the source of truth; operation-vocabulary.md is generated from it by corpus/tools/vocabulary_check.py, which also checks it against the corpus. 'tsql' lists the T-SQL words that lower to an entry and is what the coverage check matches on. 'detect' is an optional pattern used instead of 'tsql' when counting which artefacts use an entry. 'x' is true where the hand conversion in prototype/hand-conversion exercised the entry.",
+  "version": "draft-1",
+  "rules": [
+    "Every operation has one meaning, whatever source it came from. Lowering resolves the source's behaviour, using catalog types and collations, into the operation that means exactly that.",
+    "The vocabulary grows by addition only. A new source or target may add an entry and may never change what an existing one means.",
+    "A target either handles an operation or declares it unsupported, which the report shows as manual work.",
+    "Operations are typed. Where the meaning depends on operand types, there is one operation per meaning (integer_divide and decimal_divide), not one operation with hidden behaviour.",
+    "Comparison of strings always names its comparison rule (case sensitivity, trailing-space handling), taken from SQL Server's collation precedence at lowering.",
+    "The query part is a logical plan in our own words: kinds of step borrowed from Spark's plan concepts, each with the source's meaning."
+  ],
+  "types": [
+    {
+      "name": "boolean",
+      "meaning": "True, false or null.",
+      "tsql": [
+        "BIT"
+      ],
+      "x": true
+    },
+    {
+      "name": "integer(bits, signed)",
+      "meaning": "A whole number of 8, 16, 32 or 64 bits. Going outside the range is an error, never a wrap. SQL Server's tinyint is integer(8, unsigned): 0 to 255.",
+      "tsql": [
+        "TINYINT",
+        "SMALLINT",
+        "INT",
+        "BIGINT"
+      ],
+      "x": true
+    },
+    {
+      "name": "decimal(precision, scale)",
+      "meaning": "An exact decimal number. Results of arithmetic take SQL Server's precision and scale rules.",
+      "tsql": [
+        "DECIMAL",
+        "NUMERIC"
+      ],
+      "x": false
+    },
+    {
+      "name": "money(precision)",
+      "meaning": "An exact decimal with four places, precision 19 or 10, whose multiplication and division truncate to four places at every step.",
+      "tsql": [
+        "MONEY",
+        "SMALLMONEY"
+      ],
+      "x": true
+    },
+    {
+      "name": "float(bits)",
+      "meaning": "A binary floating-point number of 53 or 24 bits.",
+      "tsql": [
+        "FLOAT",
+        "REAL"
+      ],
+      "x": false
+    },
+    {
+      "name": "date",
+      "meaning": "A calendar date with no time and no zone.",
+      "tsql": [
+        "DATE"
+      ],
+      "x": true
+    },
+    {
+      "name": "local_timestamp(rounding)",
+      "meaning": "A date and time with no zone. 'rounding' says how a value is stored: to 1/300 of a second (datetime), to the minute (smalldatetime), or to a number of fractional digits up to 7 (datetime2).",
+      "tsql": [
+        "DATETIME",
+        "SMALLDATETIME",
+        "DATETIME2"
+      ],
+      "x": true
+    },
+    {
+      "name": "timestamp_with_offset(digits)",
+      "meaning": "A date and time with its offset from UTC kept.",
+      "tsql": [
+        "DATETIMEOFFSET"
+      ],
+      "x": false
+    },
+    {
+      "name": "time_of_day(digits)",
+      "meaning": "A time with no date.",
+      "tsql": [
+        "TIME"
+      ],
+      "x": false
+    },
+    {
+      "name": "string(length, unit, fixed, collation)",
+      "meaning": "Text. 'length' is the maximum, or unlimited; 'unit' is bytes or UTF-16 units, as SQL Server counts; 'fixed' means shorter values are padded with spaces; 'collation' gives the comparison rule.",
+      "tsql": [
+        "CHAR",
+        "NCHAR",
+        "VARCHAR",
+        "NVARCHAR",
+        "TEXT",
+        "NTEXT",
+        "SYSNAME"
+      ],
+      "x": true
+    },
+    {
+      "name": "collation(case_sensitive, accent_sensitive, ignore_trailing_spaces, origin)",
+      "meaning": "How two strings compare and sort. 'origin' is explicit, column or default, which decides precedence and whether mixing two is an error.",
+      "tsql": [],
+      "x": true
+    },
+    {
+      "name": "binary(length, fixed)",
+      "meaning": "A sequence of bytes.",
+      "tsql": [
+        "BINARY",
+        "VARBINARY",
+        "IMAGE"
+      ],
+      "x": false
+    },
+    {
+      "name": "guid",
+      "meaning": "A 16-byte identifier that sorts and compares in SQL Server's own byte order, which is not text order.",
+      "tsql": [
+        "UNIQUEIDENTIFIER"
+      ],
+      "x": false
+    },
+    {
+      "name": "xml",
+      "meaning": "An XML document or fragment.",
+      "tsql": [
+        "XML"
+      ],
+      "x": false
+    },
+    {
+      "name": "row_set(columns)",
+      "meaning": "A set of rows with named, typed columns: the type of a table variable, a table-valued parameter, a result set and every query step.",
+      "tsql": [
+        "TABLE"
+      ],
+      "x": true
+    },
+    {
+      "name": "cursor_handle",
+      "meaning": "A position in a set of rows being read one at a time.",
+      "tsql": [
+        "CURSOR"
+      ],
+      "x": true
+    },
+    {
+      "name": "unsupported_type(source_name)",
+      "meaning": "A source type with no neutral meaning yet: sql_variant, hierarchyid, spatial types, rowversion. Anything touching a value of this type is manual.",
+      "tsql": [
+        "SQL_VARIANT",
+        "HIERARCHYID",
+        "GEOGRAPHY",
+        "GEOMETRY",
+        "ROWVERSION",
+        "TIMESTAMP"
+      ],
+      "x": false
+    },
+    {
+      "name": "unknown",
+      "meaning": "A type lowering could not establish, for example when a table shape is missing. Operations on it are flagged.",
+      "tsql": [],
+      "x": false
+    }
+  ],
+  "node_kinds": [
+    {
+      "name": "artefact",
+      "meaning": "The outer record every artefact has: identity, artefact type, tier, dependencies, original source, status. Its body is one of the kinds below, or absent for a recognised type.",
+      "tsql": [
+        "CREATE"
+      ],
+      "x": true,
+      "detect": ""
+    },
+    {
+      "name": "procedure_body",
+      "meaning": "Parameters, a statement list, and what it gives back: a return code, output parameters and result sets in order.",
+      "tsql": [],
+      "x": true
+    },
+    {
+      "name": "view_body",
+      "meaning": "One query.",
+      "tsql": [],
+      "x": true
+    },
+    {
+      "name": "scalar_function_body",
+      "meaning": "Parameters, a statement list and a single returned value.",
+      "tsql": [],
+      "x": true
+    },
+    {
+      "name": "table_function_body",
+      "meaning": "Either one query (inline) or a statement list that fills a declared row set (multi-statement).",
+      "tsql": [],
+      "x": false
+    },
+    {
+      "name": "trigger_body",
+      "meaning": "The table, the timing (after or instead of), the events, and a statement list that can read the inserted and deleted rows.",
+      "tsql": [
+        "TRIGGER"
+      ],
+      "x": true,
+      "detect": ""
+    },
+    {
+      "name": "batch_script_body",
+      "meaning": "An ordered list of batches. Variables do not survive from one batch to the next.",
+      "tsql": [
+        "USE"
+      ],
+      "x": true,
+      "detect": ""
+    },
+    {
+      "name": "opaque_fragment",
+      "meaning": "Source kept verbatim because lowering could not express it, with its position and the reason. It records what it reads and writes in scope where detectable, and is otherwise a scope barrier.",
+      "tsql": [],
+      "x": false
+    },
+    {
+      "name": "dynamic_sql_execution",
+      "meaning": "Execution of SQL text built at run time. The expressions that build the text are lowered; the text itself is not. Always a scope barrier, always manual.",
+      "tsql": [
+        "EXECUTE(",
+        "EXEC(",
+        "SP_EXECUTESQL"
+      ],
+      "x": false,
+      "detect": "\\bsp_executesql\\b|\\bEXEC(?:UTE)?\\s*\\(\\s*(?:@|N?')"
+    },
+    {
+      "name": "schema_change",
+      "meaning": "A statement that creates, alters or drops a permanent object. Schema migration is out of scope, so it is recorded and manual. Temp tables are not schema changes.",
+      "tsql": [
+        "ALTER",
+        "DROP",
+        "INDEX",
+        "STATISTICS",
+        "SEQUENCE",
+        "SYNONYM",
+        "TYPE"
+      ],
+      "x": false,
+      "detect": "\\b(?:ALTER|DROP)\\s+(?:TABLE|INDEX|PARTITION|FULLTEXT|SCHEMA|DATABASE|VIEW|PROCEDURE|SEQUENCE)\\b(?!\\s+(?:IF\\s+EXISTS\\s+)?#)|\\bCREATE\\s+(?:UNIQUE\\s+|CLUSTERED\\s+|NONCLUSTERED\\s+|COLUMNSTORE\\s+)*(?:INDEX|PARTITION|FULLTEXT|SCHEMA|SEQUENCE)\\b"
+    },
+    {
+      "name": "external_reference",
+      "meaning": "A reference to an object outside the catalog: another database, a linked server, a system object.",
+      "tsql": [
+        "OPENQUERY",
+        "OPENROWSET"
+      ],
+      "x": false,
+      "detect": ""
+    },
+    {
+      "name": "permission_change",
+      "meaning": "A statement that grants, revokes or denies a permission, or switches security context. Recorded and manual.",
+      "tsql": [
+        "GRANT",
+        "REVOKE",
+        "DENY",
+        "REVERT"
+      ],
+      "x": false,
+      "detect": "\\b(?:GRANT|REVOKE|DENY)\\s+\\w+|\\bREVERT\\b"
+    }
+  ],
+  "annotations": [
+    {
+      "name": "comment",
+      "meaning": "A source comment, attached to the nearest node and carried to the generated code unchanged. Untrusted text.",
+      "tsql": [],
+      "x": true
+    },
+    {
+      "name": "query_hint",
+      "meaning": "A table hint or query option. Kept on its step and reported as not applicable on the target.",
+      "tsql": [
+        "OPTION",
+        "NOLOCK",
+        "READPAST",
+        "UPDLOCK",
+        "HOLDLOCK",
+        "TABLOCK",
+        "ROWLOCK"
+      ],
+      "x": false,
+      "detect": "\\bOPTION\\s*\\(|\\bWITH\\s*\\(\\s*(?:NOLOCK|READPAST|UPDLOCK|HOLDLOCK|TABLOCK|ROWLOCK|SNAPSHOT)"
+    },
+    {
+      "name": "module_option",
+      "meaning": "An option on the artefact itself: the security context it runs under, schema binding, native compilation, encryption. Reported; none changes the conversion.",
+      "tsql": [
+        "SCHEMABINDING",
+        "NATIVE_COMPILATION",
+        "ENCRYPTION",
+        "EXECUTE AS"
+      ],
+      "x": true,
+      "detect": "\\bSCHEMABINDING\\b|\\bNATIVE_COMPILATION\\b|\\bWITH\\s+ENCRYPTION\\b|\\bEXECUTE\\s+AS\\b|\\bEXEC\\s+AS\\b"
+    },
+    {
+      "name": "stored_setting",
+      "meaning": "The ANSI_NULLS and QUOTED_IDENTIFIER settings stored with a routine, which lowering uses to choose between operations.",
+      "tsql": [
+        "ANSI_NULLS",
+        "QUOTED_IDENTIFIER"
+      ],
+      "x": false,
+      "detect": ""
+    },
+    {
+      "name": "source_position",
+      "meaning": "Where a node came from in the original. Every node has one.",
+      "tsql": [],
+      "x": true
+    },
+    {
+      "name": "producer",
+      "meaning": "Who produced a node: deterministic code, or an LLM with prompt and model version.",
+      "tsql": [],
+      "x": false
+    },
+    {
+      "name": "provenance",
+      "meaning": "Whether a fact a node relies on was read, parsed or assumed.",
+      "tsql": [],
+      "x": false
+    }
+  ],
+  "groups": [
+    {
+      "group": "Declarations and scope",
+      "part": "procedural",
+      "operations": [
+        {
+          "name": "declare_parameter",
+          "meaning": "A typed input to an artefact, with an optional default. An output parameter also carries a value in and gives one back.",
+          "tsql": [
+            "READONLY"
+          ],
+          "x": true,
+          "detect": "\\bREADONLY\\b|\\bOUT(?:PUT)?\\b\\s*[,)\\n]"
+        },
+        {
+          "name": "declare_variable",
+          "meaning": "A typed variable, null until assigned unless given an initial value.",
+          "tsql": [
+            "DECLARE"
+          ],
+          "x": true
+        },
+        {
+          "name": "declare_row_set_variable",
+          "meaning": "A variable holding a row set. A rollback does not undo changes to it.",
+          "tsql": [],
+          "x": false,
+          "detect": "\\bDECLARE\\s+@\\w+\\s+(?:AS\\s+)?TABLE\\b|\\bRETURNS\\s+@\\w+\\s+TABLE\\b"
+        },
+        {
+          "name": "create_temp_table",
+          "meaning": "A table private to the session, visible to called routines, dropped when the routine that created it returns. May declare keys and constraints.",
+          "tsql": [
+            "KEY"
+          ],
+          "x": true,
+          "detect": "\\bCREATE\\s+TABLE\\s+#\\w|\\bINTO\\s+#\\w"
+        },
+        {
+          "name": "create_global_temp_table",
+          "meaning": "A temp table visible to every session. Reported.",
+          "tsql": [],
+          "x": false,
+          "detect": "(?<![\\w#])##\\w+"
+        },
+        {
+          "name": "drop_temp_table",
+          "meaning": "Drop a temp table before its routine ends.",
+          "tsql": [],
+          "x": true,
+          "detect": "\\bDROP\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?#"
+        },
+        {
+          "name": "declare_label",
+          "meaning": "A named point in a statement list that a jump can target.",
+          "tsql": [],
+          "x": true
+        }
+      ]
+    },
+    {
+      "group": "Assignment and control flow",
+      "part": "procedural",
+      "operations": [
+        {
+          "name": "assign",
+          "meaning": "Evaluate an expression and store it in a variable, converting to the variable's type. A value too long for a string variable is cut without an error.",
+          "tsql": [
+            "SET"
+          ],
+          "x": true,
+          "detect": "\\bSET\\s+@\\w+\\s*[-+*/]?="
+        },
+        {
+          "name": "assign_from_rows",
+          "meaning": "Set variables from a query's rows: no row leaves them unchanged; several rows leave the values of the last row processed, which is undefined.",
+          "tsql": [],
+          "x": true,
+          "detect": "\\bSELECT\\s+(?:TOP\\s*\\(?\\s*\\d+\\s*\\)?\\s+)?@\\w+\\s*="
+        },
+        {
+          "name": "assign_from_single_value",
+          "meaning": "Set a variable from a query that must return at most one value: no row gives null; more than one row is an error.",
+          "tsql": [],
+          "x": false,
+          "detect": "\\bSET\\s+@\\w+\\s*=\\s*\\(\\s*SELECT\\b"
+        },
+        {
+          "name": "if",
+          "meaning": "Run one branch when the condition is true and the other when it is false or unknown.",
+          "tsql": [
+            "IF",
+            "ELSE"
+          ],
+          "x": true
+        },
+        {
+          "name": "while",
+          "meaning": "Repeat a block while the condition is true. False or unknown ends it.",
+          "tsql": [
+            "WHILE"
+          ],
+          "x": true
+        },
+        {
+          "name": "break",
+          "meaning": "Leave the innermost loop.",
+          "tsql": [
+            "BREAK"
+          ],
+          "x": false
+        },
+        {
+          "name": "continue",
+          "meaning": "Go to the next pass of the innermost loop.",
+          "tsql": [
+            "CONTINUE"
+          ],
+          "x": false
+        },
+        {
+          "name": "jump",
+          "meaning": "Go to a label.",
+          "tsql": [
+            "GOTO"
+          ],
+          "x": true,
+          "detect": "\\bGOTO\\b"
+        },
+        {
+          "name": "return",
+          "meaning": "End the artefact. A procedure gives back an integer code, zero if none is stated; a function gives back its value.",
+          "tsql": [
+            "RETURN"
+          ],
+          "x": true
+        },
+        {
+          "name": "call_procedure",
+          "meaning": "Run another procedure with arguments by name or position, receive its output parameters and optionally its return code. Its result sets go to the caller's caller.",
+          "tsql": [
+            "EXEC",
+            "EXECUTE"
+          ],
+          "x": true,
+          "detect": "\\bEXEC(?:UTE)?\\s+(?:@\\w+\\s*=\\s*)?(?!sp_executesql\\b|sys\\.sp_executesql\\b|AS\\b)[\\[\\w]"
+        },
+        {
+          "name": "emit_result_set",
+          "meaning": "Send a query's rows to the caller as the next result set, in the query's order if it has one.",
+          "tsql": [
+            "SELECT"
+          ],
+          "x": true,
+          "detect": ""
+        },
+        {
+          "name": "wait",
+          "meaning": "Pause for a duration or until a time of day.",
+          "tsql": [
+            "WAITFOR"
+          ],
+          "x": false
+        }
+      ]
+    },
+    {
+      "group": "Errors and messages",
+      "part": "procedural",
+      "operations": [
+        {
+          "name": "try_catch",
+          "meaning": "Run a block; if a catchable error occurs in it, run the handler. Not catchable: messages of severity 10 or below, and an error resolving a name at the same level as the block.",
+          "tsql": [
+            "TRY",
+            "CATCH"
+          ],
+          "x": true,
+          "detect": "\\bBEGIN\\s+TRY\\b"
+        },
+        {
+          "name": "raise_error",
+          "meaning": "Raise an error with a number, message, severity and state. Severity 11 or above transfers to a handler.",
+          "tsql": [
+            "RAISERROR",
+            "THROW"
+          ],
+          "x": false,
+          "detect": "\\bRAISERROR\\b|\\bTHROW\\s+[\\d@]"
+        },
+        {
+          "name": "rethrow",
+          "meaning": "Inside a handler, raise the error being handled again, unchanged.",
+          "tsql": [],
+          "x": true,
+          "detect": "\\bTHROW\\s*;|\\bTHROW\\s*\\n"
+        },
+        {
+          "name": "emit_message",
+          "meaning": "Send text to the caller's message stream without raising an error.",
+          "tsql": [
+            "PRINT"
+          ],
+          "x": true
+        },
+        {
+          "name": "error_field",
+          "meaning": "Inside a handler, one field of the error being handled: number, message, severity, state, line or procedure.",
+          "tsql": [
+            "ERROR_NUMBER",
+            "ERROR_MESSAGE",
+            "ERROR_SEVERITY",
+            "ERROR_STATE",
+            "ERROR_LINE",
+            "ERROR_PROCEDURE"
+          ],
+          "x": true
+        },
+        {
+          "name": "last_statement_error",
+          "meaning": "The error number of the statement just run, zero if it succeeded. Every statement resets it.",
+          "tsql": [
+            "@@ERROR"
+          ],
+          "x": true
+        },
+        {
+          "name": "set_abort_on_error",
+          "meaning": "Choose whether an error ends the batch and rolls back the transaction (on) or ends only the statement (off).",
+          "tsql": [
+            "XACT_ABORT"
+          ],
+          "x": true
+        }
+      ]
+    },
+    {
+      "group": "Transactions",
+      "part": "procedural",
+      "operations": [
+        {
+          "name": "begin_transaction",
+          "meaning": "Start a transaction, or nest one level deeper in an open one.",
+          "tsql": [
+            "TRANSACTION"
+          ],
+          "x": true,
+          "detect": "\\bBEGIN\\s+TRAN"
+        },
+        {
+          "name": "commit_transaction",
+          "meaning": "Close one level. Only closing the outermost level makes the changes permanent.",
+          "tsql": [
+            "COMMIT"
+          ],
+          "x": true,
+          "detect": "\\bCOMMIT\\b"
+        },
+        {
+          "name": "rollback_transaction",
+          "meaning": "Undo every change since the outermost level began and close all levels.",
+          "tsql": [
+            "ROLLBACK"
+          ],
+          "x": true,
+          "detect": "\\bROLLBACK\\b"
+        },
+        {
+          "name": "save_point",
+          "meaning": "Name a point inside a transaction.",
+          "tsql": [
+            "SAVE"
+          ],
+          "x": false,
+          "detect": "\\bSAVE\\s+TRAN"
+        },
+        {
+          "name": "rollback_to_save_point",
+          "meaning": "Undo changes made since a named point, leaving the transaction open.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "transaction_depth",
+          "meaning": "How many levels are open.",
+          "tsql": [
+            "@@TRANCOUNT"
+          ],
+          "x": false
+        },
+        {
+          "name": "transaction_state",
+          "meaning": "Whether a transaction is open and can still commit: 1, 0 or -1.",
+          "tsql": [
+            "XACT_STATE"
+          ],
+          "x": false
+        },
+        {
+          "name": "set_isolation_level",
+          "meaning": "Choose what concurrent changes a transaction may see. Recorded; under the single-writer assumption it changes nothing.",
+          "tsql": [
+            "ISOLATION"
+          ],
+          "x": false,
+          "detect": "\\bISOLATION\\s+LEVEL\\b"
+        }
+      ]
+    },
+    {
+      "group": "Cursors",
+      "part": "procedural",
+      "operations": [
+        {
+          "name": "declare_cursor",
+          "meaning": "Bind a cursor to a query, with its scope, whether it sees later changes (static, keyset, dynamic, or undefined for fast-forward) and whether it can update.",
+          "tsql": [],
+          "x": true,
+          "detect": "\\bCURSOR\\b.*?\\bFOR\\b"
+        },
+        {
+          "name": "open_cursor",
+          "meaning": "Run the cursor's query and position before the first row.",
+          "tsql": [
+            "OPEN"
+          ],
+          "x": true
+        },
+        {
+          "name": "fetch_cursor",
+          "meaning": "Move to a row (next, prior, first, last, absolute, relative) and store its columns in variables.",
+          "tsql": [
+            "FETCH"
+          ],
+          "x": true
+        },
+        {
+          "name": "fetch_status",
+          "meaning": "Whether the last fetch found a row: 0, or -1 past the end, -2 if the row is gone.",
+          "tsql": [
+            "@@FETCH_STATUS"
+          ],
+          "x": true
+        },
+        {
+          "name": "close_cursor",
+          "meaning": "Release the cursor's rows.",
+          "tsql": [
+            "CLOSE"
+          ],
+          "x": true
+        },
+        {
+          "name": "deallocate_cursor",
+          "meaning": "Remove the cursor.",
+          "tsql": [
+            "DEALLOCATE"
+          ],
+          "x": true
+        },
+        {
+          "name": "write_current_row",
+          "meaning": "Update or delete the row the cursor is on.",
+          "tsql": [],
+          "x": false,
+          "detect": "\\bWHERE\\s+CURRENT\\s+OF\\b"
+        }
+      ]
+    },
+    {
+      "group": "Session state",
+      "part": "procedural",
+      "operations": [
+        {
+          "name": "rows_affected",
+          "meaning": "How many rows the statement just run read or changed. Every statement resets it.",
+          "tsql": [
+            "@@ROWCOUNT",
+            "ROWCOUNT"
+          ],
+          "x": true,
+          "detect": "@@ROWCOUNT\\b"
+        },
+        {
+          "name": "last_identity(scope)",
+          "meaning": "The last identity value generated: in this routine's scope, anywhere in the session, or for a named table by any session.",
+          "tsql": [
+            "SCOPE_IDENTITY",
+            "@@IDENTITY",
+            "IDENT_CURRENT"
+          ],
+          "x": true
+        },
+        {
+          "name": "next_sequence_value",
+          "meaning": "Take the next number from a named sequence. Numbers are never reused, including after a rollback.",
+          "tsql": [],
+          "x": false,
+          "detect": "\\bNEXT\\s+VALUE\\s+FOR\\b"
+        },
+        {
+          "name": "set_session_option",
+          "meaning": "Change a setting that alters how later statements behave: language, first day of the week, null comparison, explicit identity values.",
+          "tsql": [
+            "NOCOUNT",
+            "LANGUAGE",
+            "DATEFIRST",
+            "IDENTITY_INSERT"
+          ],
+          "x": true,
+          "detect": "\\bSET\\s+(?:NOCOUNT|LANGUAGE|DATEFIRST|IDENTITY_INSERT|ANSI_NULLS|QUOTED_IDENTIFIER|ROWCOUNT|DATEFORMAT)\\b"
+        },
+        {
+          "name": "session_value",
+          "meaning": "A value belonging to the session or the machine: the login, the host, the database name, the session number, or a named value set earlier.",
+          "tsql": [
+            "ORIGINAL_LOGIN",
+            "SUSER_SNAME",
+            "HOST_NAME",
+            "DB_NAME",
+            "@@SPID",
+            "SESSION_CONTEXT",
+            "SERVERPROPERTY"
+          ],
+          "x": false
+        },
+        {
+          "name": "role_membership",
+          "meaning": "Whether the current user belongs to a role.",
+          "tsql": [
+            "IS_ROLEMEMBER",
+            "IS_MEMBER"
+          ],
+          "x": false
+        },
+        {
+          "name": "catalog_lookup",
+          "meaning": "A fact about a database object looked up by name or number at run time.",
+          "tsql": [
+            "OBJECT_ID",
+            "SCHEMA_NAME",
+            "OBJECT_NAME"
+          ],
+          "x": false
+        }
+      ]
+    },
+    {
+      "group": "Raised forms",
+      "part": "procedural",
+      "operations": [
+        {
+          "name": "for_each_row",
+          "meaning": "Run a block once per row of a query, in the query's order, over a snapshot taken at the start. Raised from the fetch-loop idiom.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "atomic_region",
+          "meaning": "A block whose changes all happen or none do. Raised from a begin and commit that enclose it on every path.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "named_result",
+          "meaning": "A query's rows under a name, fixed at the point of definition. Raised from a temp table that is filled once and then only read.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "column_expression_function",
+          "meaning": "A scalar function with no loop and no data access, restated as a single expression over its parameters.",
+          "tsql": [],
+          "x": true
+        }
+      ]
+    },
+    {
+      "group": "Reading rows",
+      "part": "query",
+      "operations": [
+        {
+          "name": "read_table",
+          "meaning": "All rows of a table, view, temp table or row-set variable, in no particular order.",
+          "tsql": [
+            "FROM"
+          ],
+          "x": true,
+          "detect": ""
+        },
+        {
+          "name": "read_changed_rows",
+          "meaning": "In a trigger, the rows as they are after the statement (inserted) or as they were before it (deleted).",
+          "tsql": [],
+          "x": true,
+          "detect": "\\b(?:FROM|JOIN)\\s+(?:inserted|deleted)\\b"
+        },
+        {
+          "name": "read_values",
+          "meaning": "A row set written out in the code.",
+          "tsql": [
+            "VALUES"
+          ],
+          "x": false
+        },
+        {
+          "name": "call_table_function",
+          "meaning": "The rows a table-valued function returns for given arguments.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "read_as_of",
+          "meaning": "A table's rows as they were at a point in time, or over a period, by the table's own period columns.",
+          "tsql": [
+            "SYSTEM_TIME"
+          ],
+          "x": false,
+          "detect": "\\bFOR\\s+SYSTEM_TIME\\b"
+        },
+        {
+          "name": "search_text_index",
+          "meaning": "Rows of a table matching a full-text condition, each with a rank.",
+          "tsql": [
+            "CONTAINSTABLE",
+            "FREETEXTTABLE",
+            "CONTAINS",
+            "FREETEXT"
+          ],
+          "x": false
+        },
+        {
+          "name": "shred_json",
+          "meaning": "Turn JSON text into rows.",
+          "tsql": [
+            "OPENJSON"
+          ],
+          "x": false
+        },
+        {
+          "name": "shred_xml",
+          "meaning": "Turn the nodes of an XML value that match a path into rows.",
+          "tsql": [
+            "OPENXML"
+          ],
+          "x": false,
+          "detect": "\\.nodes\\s*\\(|\\bOPENXML\\b"
+        },
+        {
+          "name": "named_query",
+          "meaning": "A query given a name for use later in the same statement.",
+          "tsql": [
+            "WITH"
+          ],
+          "x": true,
+          "detect": "(?:^|;|\\bAS\\b)\\s*WITH\\s+[\\[\\]\\w]+\\s*(?:\\([^)]*\\)\\s*)?AS\\s*\\("
+        },
+        {
+          "name": "recursive_named_query",
+          "meaning": "A named query that refers to itself: an anchor, then a step repeated until it adds no rows or a stated depth is reached.",
+          "tsql": [],
+          "x": false,
+          "detect": "\\bMAXRECURSION\\b"
+        }
+      ]
+    },
+    {
+      "group": "Relational steps",
+      "part": "query",
+      "operations": [
+        {
+          "name": "filter",
+          "meaning": "Keep the rows for which a condition is true. False and unknown both drop the row.",
+          "tsql": [
+            "WHERE",
+            "HAVING"
+          ],
+          "x": true,
+          "detect": ""
+        },
+        {
+          "name": "project",
+          "meaning": "Compute named columns from each row.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "join(kind)",
+          "meaning": "Pair rows of two inputs that satisfy a condition: inner, left, right, full or cross. A null never equals a null.",
+          "tsql": [
+            "JOIN",
+            "ON"
+          ],
+          "x": true,
+          "detect": "\\bJOIN\\b"
+        },
+        {
+          "name": "lateral_join(kind)",
+          "meaning": "For each row of the left input, evaluate the right input using that row, and pair them. 'outer' keeps left rows with no match.",
+          "tsql": [
+            "APPLY"
+          ],
+          "x": false
+        },
+        {
+          "name": "aggregate",
+          "meaning": "Group rows by key expressions and compute one row per group. With no keys, exactly one row even for empty input. Null keys form one group.",
+          "tsql": [
+            "GROUP"
+          ],
+          "x": true,
+          "detect": "\\bGROUP\\s+BY\\b"
+        },
+        {
+          "name": "aggregate_grouping_sets",
+          "meaning": "Aggregate at several levels of grouping at once, including subtotals and a grand total.",
+          "tsql": [
+            "ROLLUP",
+            "CUBE",
+            "GROUPING"
+          ],
+          "x": false,
+          "detect": "\\bROLLUP\\b|\\bCUBE\\b|\\bGROUPING\\s+SETS\\b"
+        },
+        {
+          "name": "window",
+          "meaning": "Compute a value for each row from the rows around it, by partition, order and frame, without merging rows.",
+          "tsql": [
+            "OVER",
+            "PARTITION"
+          ],
+          "x": true,
+          "detect": "\\bOVER\\s*\\("
+        },
+        {
+          "name": "distinct",
+          "meaning": "Remove duplicate rows. For strings, 'duplicate' follows the column's comparison rule, and which spelling survives is undefined.",
+          "tsql": [
+            "DISTINCT"
+          ],
+          "x": false
+        },
+        {
+          "name": "sort",
+          "meaning": "Order rows by keys. Nulls come first ascending. Strings order by their comparison rule. Order among equal keys is undefined.",
+          "tsql": [
+            "ORDER"
+          ],
+          "x": true,
+          "detect": "\\bORDER\\s+BY\\b"
+        },
+        {
+          "name": "limit",
+          "meaning": "Keep the first n rows or n percent, optionally with every row that ties with the last. Without a sort, which rows is undefined.",
+          "tsql": [
+            "TOP"
+          ],
+          "x": false,
+          "detect": "\\bTOP\\b"
+        },
+        {
+          "name": "skip_and_limit",
+          "meaning": "Skip a number of sorted rows, then keep a number.",
+          "tsql": [
+            "OFFSET"
+          ],
+          "x": false
+        },
+        {
+          "name": "union(all)",
+          "meaning": "The rows of both inputs, with or without duplicates removed.",
+          "tsql": [
+            "UNION"
+          ],
+          "x": false
+        },
+        {
+          "name": "intersect",
+          "meaning": "Rows present in both inputs, duplicates removed. Nulls match nulls here.",
+          "tsql": [
+            "INTERSECT"
+          ],
+          "x": false
+        },
+        {
+          "name": "except",
+          "meaning": "Rows of the first input not present in the second, duplicates removed. Nulls match nulls here.",
+          "tsql": [
+            "EXCEPT"
+          ],
+          "x": false
+        },
+        {
+          "name": "pivot",
+          "meaning": "Turn the distinct values of one column into columns, aggregating another.",
+          "tsql": [
+            "PIVOT"
+          ],
+          "x": false
+        },
+        {
+          "name": "unpivot",
+          "meaning": "Turn a set of columns into rows of name and value, dropping nulls.",
+          "tsql": [
+            "UNPIVOT"
+          ],
+          "x": false
+        },
+        {
+          "name": "to_json",
+          "meaning": "Format a query's rows as one JSON text.",
+          "tsql": [
+            "FOR JSON"
+          ],
+          "x": false,
+          "detect": "\\bFOR\\s+JSON\\b"
+        },
+        {
+          "name": "to_xml",
+          "meaning": "Format a query's rows as one XML value.",
+          "tsql": [
+            "FOR XML"
+          ],
+          "x": false,
+          "detect": "\\bFOR\\s+XML\\b"
+        }
+      ]
+    },
+    {
+      "group": "Writing rows",
+      "part": "query",
+      "operations": [
+        {
+          "name": "insert_rows",
+          "meaning": "Add rows to a table from a query or a list of values. Columns not named take their default or generated value. Constraints and triggers apply.",
+          "tsql": [
+            "INSERT",
+            "INTO"
+          ],
+          "x": true,
+          "detect": "\\bINSERT\\b"
+        },
+        {
+          "name": "update_rows",
+          "meaning": "Change columns of the rows of a table that satisfy a condition, optionally taking values from joined rows. If a row matches several joined rows, which one is used is undefined.",
+          "tsql": [
+            "UPDATE"
+          ],
+          "x": true,
+          "detect": "\\bUPDATE\\s+(?!\\()[\\[\\w.@#]"
+        },
+        {
+          "name": "delete_rows",
+          "meaning": "Remove the rows of a table that satisfy a condition, optionally chosen by joining other rows or through a named query.",
+          "tsql": [
+            "DELETE"
+          ],
+          "x": true,
+          "detect": "\\bDELETE\\b"
+        },
+        {
+          "name": "merge_rows",
+          "meaning": "Compare a table with a source on a condition and, per clause, update or delete matched rows, insert unmatched source rows, and update or delete target rows with no source. A target row matched by several source rows is an error for an update.",
+          "tsql": [
+            "MERGE",
+            "USING"
+          ],
+          "x": false,
+          "detect": "\\bMERGE\\b(?!\\s+JOIN)"
+        },
+        {
+          "name": "return_changed_rows",
+          "meaning": "From a write, give back one row per row inserted, updated or deleted, with its values before and after and the action taken, to the caller or into a table.",
+          "tsql": [
+            "OUTPUT"
+          ],
+          "x": false,
+          "detect": "\\bOUTPUT\\s+(?:inserted|deleted|\\$action)\\b"
+        },
+        {
+          "name": "create_table_from_query",
+          "meaning": "Create a table with a query's columns and fill it with its rows.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "truncate_table",
+          "meaning": "Remove every row of a table and reset its identity counter. No trigger fires.",
+          "tsql": [
+            "TRUNCATE"
+          ],
+          "x": false
+        },
+        {
+          "name": "bulk_load",
+          "meaning": "Load rows from a file.",
+          "tsql": [
+            "BULK"
+          ],
+          "x": false
+        }
+      ]
+    },
+    {
+      "group": "Values and references",
+      "part": "expression",
+      "operations": [
+        {
+          "name": "literal",
+          "meaning": "A typed constant.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "null",
+          "meaning": "The absent value, with a type.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "column",
+          "meaning": "A column of a named input, resolved against the catalog or scope.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "variable",
+          "meaning": "The current value of a variable or parameter.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "scalar_query",
+          "meaning": "The single value of a query used as an expression: null for no row, an error for more than one.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "call_scalar_function",
+          "meaning": "The value of a scalar function for given arguments.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "updated_column_test",
+          "meaning": "In a trigger, whether the statement named a column in its list of columns to set, whatever value it set.",
+          "tsql": [
+            "UPDATE("
+          ],
+          "x": true,
+          "detect": "\\bIF\\s+(?:NOT\\s+)?UPDATE\\s*\\("
+        }
+      ]
+    },
+    {
+      "group": "Conversion",
+      "part": "expression",
+      "operations": [
+        {
+          "name": "convert",
+          "meaning": "Change a value to a type by SQL Server's rules. A value that cannot convert is an error.",
+          "tsql": [
+            "CAST",
+            "CONVERT"
+          ],
+          "x": true
+        },
+        {
+          "name": "convert_with_style",
+          "meaning": "Convert between text and a date, number or binary using a numbered format.",
+          "tsql": [],
+          "x": false,
+          "detect": "\\bCONVERT\\s*\\([^()]*(?:\\([^()]*\\)[^()]*)*,[^()]*,\\s*\\d+\\s*\\)"
+        },
+        {
+          "name": "try_convert",
+          "meaning": "As convert, giving null where the value cannot convert.",
+          "tsql": [
+            "TRY_CONVERT",
+            "TRY_CAST",
+            "TRY_PARSE"
+          ],
+          "x": false
+        },
+        {
+          "name": "implicit_convert",
+          "meaning": "A conversion the source did not write, added by lowering wherever SQL Server's type precedence makes one happen.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "fit_to_type",
+          "meaning": "Make a value fit a declared type on assignment or storage: cut a string without error, pad a fixed string, round a date and time, truncate money.",
+          "tsql": [],
+          "x": true
+        }
+      ]
+    },
+    {
+      "group": "Arithmetic",
+      "part": "expression",
+      "operations": [
+        {
+          "name": "add",
+          "meaning": "Sum of two numbers, typed by precedence. Overflow is an error.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "subtract",
+          "meaning": "Difference of two numbers. Overflow is an error.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "multiply",
+          "meaning": "Product of two numbers. Overflow is an error.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "integer_divide",
+          "meaning": "Quotient of two integers, truncated toward zero. Division by zero is an error.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "decimal_divide",
+          "meaning": "Quotient of exact decimals, with SQL Server's result precision and scale. Division by zero is an error.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "money_multiply",
+          "meaning": "Product involving money, truncated to four places.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "money_divide",
+          "meaning": "Quotient involving money, truncated to four places.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "float_divide",
+          "meaning": "Quotient of floating-point numbers.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "modulo",
+          "meaning": "Remainder, with the sign of the dividend.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "negate",
+          "meaning": "The number with its sign changed.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "round(digits, truncate)",
+          "meaning": "Round half away from zero to a number of digits, or truncate; the result keeps the input's type.",
+          "tsql": [
+            "ROUND"
+          ],
+          "x": false
+        },
+        {
+          "name": "numeric_function(name)",
+          "meaning": "Absolute value, ceiling, floor, power, square root, sign, logarithms, each typed as SQL Server types it.",
+          "tsql": [
+            "ABS",
+            "CEILING",
+            "FLOOR",
+            "POWER",
+            "SQRT",
+            "SIGN",
+            "LOG",
+            "EXP"
+          ],
+          "x": false
+        },
+        {
+          "name": "is_numeric_text",
+          "meaning": "Whether text would convert to any numeric type by SQL Server's rules, which accept currency signs, a lone plus or minus, and exponents.",
+          "tsql": [
+            "ISNUMERIC"
+          ],
+          "x": false
+        },
+        {
+          "name": "random_number",
+          "meaning": "A pseudo-random number. Cannot be reproduced.",
+          "tsql": [
+            "RAND"
+          ],
+          "x": false
+        },
+        {
+          "name": "new_guid",
+          "meaning": "A new unique identifier. Cannot be reproduced.",
+          "tsql": [
+            "NEWID",
+            "NEWSEQUENTIALID"
+          ],
+          "x": false
+        }
+      ]
+    },
+    {
+      "group": "Comparison and logic",
+      "part": "expression",
+      "operations": [
+        {
+          "name": "compare(operator, rule)",
+          "meaning": "Equal, not equal, less, greater and their combinations, giving true, false or unknown. Unknown whenever either side is null. For strings 'rule' is the collation's comparison rule.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "compare_null_as_value",
+          "meaning": "Equality in which null equals null, as written under ANSI_NULLS off.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "is_null",
+          "meaning": "Whether a value is null. Never unknown.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "and",
+          "meaning": "True if both are true, false if either is false, otherwise unknown.",
+          "tsql": [
+            "AND"
+          ],
+          "x": true,
+          "detect": ""
+        },
+        {
+          "name": "or",
+          "meaning": "True if either is true, false if both are false, otherwise unknown.",
+          "tsql": [
+            "OR"
+          ],
+          "x": false,
+          "detect": ""
+        },
+        {
+          "name": "not",
+          "meaning": "True becomes false, false becomes true, unknown stays unknown.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "between",
+          "meaning": "Whether a value lies between two bounds, both included.",
+          "tsql": [
+            "BETWEEN"
+          ],
+          "x": true
+        },
+        {
+          "name": "in_list",
+          "meaning": "Whether a value equals any of a list. Unknown if it equals none and the list contains a null.",
+          "tsql": [
+            "IN"
+          ],
+          "x": true,
+          "detect": ""
+        },
+        {
+          "name": "in_query",
+          "meaning": "Whether a value equals any value a query returns, with the same null behaviour.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "exists",
+          "meaning": "Whether a query returns at least one row. Never unknown.",
+          "tsql": [
+            "EXISTS"
+          ],
+          "x": true
+        },
+        {
+          "name": "like(rule)",
+          "meaning": "Whether text matches a pattern with T-SQL's wildcards: percent, underscore, bracketed sets and ranges, and an optional escape character. Follows the comparison rule.",
+          "tsql": [
+            "LIKE"
+          ],
+          "x": false
+        },
+        {
+          "name": "case",
+          "meaning": "The result of the first branch whose condition is true, else the default, else null. Typed by the highest-precedence branch.",
+          "tsql": [
+            "CASE",
+            "IIF",
+            "CHOOSE"
+          ],
+          "x": true
+        },
+        {
+          "name": "first_non_null",
+          "meaning": "The first argument that is not null, typed by the highest-precedence argument.",
+          "tsql": [
+            "COALESCE"
+          ],
+          "x": false
+        },
+        {
+          "name": "null_replacement",
+          "meaning": "The first argument unless it is null, then the second, converted to the first argument's type.",
+          "tsql": [
+            "ISNULL"
+          ],
+          "x": true
+        },
+        {
+          "name": "null_if_equal(rule)",
+          "meaning": "Null if the two arguments compare equal, else the first.",
+          "tsql": [
+            "NULLIF"
+          ],
+          "x": true
+        }
+      ]
+    },
+    {
+      "group": "Text",
+      "part": "expression",
+      "operations": [
+        {
+          "name": "concat_null_propagating",
+          "meaning": "Join strings; null if any part is null.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "concat_null_as_empty",
+          "meaning": "Join values as text, treating null as an empty string.",
+          "tsql": [
+            "CONCAT",
+            "CONCAT_WS"
+          ],
+          "x": false
+        },
+        {
+          "name": "length_without_trailing_spaces",
+          "meaning": "Number of characters, not counting spaces at the end.",
+          "tsql": [
+            "LEN"
+          ],
+          "x": true
+        },
+        {
+          "name": "byte_length",
+          "meaning": "Number of bytes a value occupies as stored.",
+          "tsql": [
+            "DATALENGTH"
+          ],
+          "x": false
+        },
+        {
+          "name": "upper",
+          "meaning": "Text in upper case.",
+          "tsql": [
+            "UPPER"
+          ],
+          "x": true
+        },
+        {
+          "name": "lower",
+          "meaning": "Text in lower case.",
+          "tsql": [
+            "LOWER"
+          ],
+          "x": false
+        },
+        {
+          "name": "trim(side)",
+          "meaning": "Text with spaces removed from the left, the right or both.",
+          "tsql": [
+            "LTRIM",
+            "RTRIM",
+            "TRIM"
+          ],
+          "x": true
+        },
+        {
+          "name": "substring",
+          "meaning": "Part of a string from a position counted from 1 for a length. A start below 1 shortens the result by the shortfall.",
+          "tsql": [
+            "SUBSTRING"
+          ],
+          "x": true
+        },
+        {
+          "name": "left_part",
+          "meaning": "The first n characters.",
+          "tsql": [
+            "LEFT"
+          ],
+          "x": false
+        },
+        {
+          "name": "right_part",
+          "meaning": "The last n characters.",
+          "tsql": [
+            "RIGHT"
+          ],
+          "x": false
+        },
+        {
+          "name": "position_of(rule)",
+          "meaning": "Where one string first occurs in another from a starting position, counted from 1; 0 if absent.",
+          "tsql": [
+            "CHARINDEX"
+          ],
+          "x": true
+        },
+        {
+          "name": "pattern_position(rule)",
+          "meaning": "Where a pattern first matches in a string; 0 if nowhere.",
+          "tsql": [
+            "PATINDEX"
+          ],
+          "x": false
+        },
+        {
+          "name": "replace_text(rule)",
+          "meaning": "Every occurrence of one string replaced by another, matched by the comparison rule.",
+          "tsql": [
+            "REPLACE",
+            "TRANSLATE"
+          ],
+          "x": false
+        },
+        {
+          "name": "overlay",
+          "meaning": "Remove a length of characters at a position and insert a string there. Null when the start is below 1 or past the end, or the length is negative.",
+          "tsql": [
+            "STUFF"
+          ],
+          "x": true
+        },
+        {
+          "name": "repeat_text",
+          "meaning": "A string repeated n times.",
+          "tsql": [
+            "REPLICATE",
+            "SPACE"
+          ],
+          "x": false
+        },
+        {
+          "name": "reverse_text",
+          "meaning": "A string with its characters in reverse order.",
+          "tsql": [
+            "REVERSE"
+          ],
+          "x": false
+        },
+        {
+          "name": "character_from_code",
+          "meaning": "The character for a code, in the database's code page or in Unicode.",
+          "tsql": [],
+          "x": false
+        },
+        {
+          "name": "code_of_character",
+          "meaning": "The code of the first character.",
+          "tsql": [
+            "ASCII",
+            "UNICODE"
+          ],
+          "x": false
+        },
+        {
+          "name": "quote_identifier",
+          "meaning": "A name wrapped in delimiters with any delimiter inside it doubled.",
+          "tsql": [
+            "QUOTENAME"
+          ],
+          "x": false
+        },
+        {
+          "name": "format_value",
+          "meaning": "A number or date as text by a format pattern and culture.",
+          "tsql": [
+            "FORMAT",
+            "STR"
+          ],
+          "x": false
+        },
+        {
+          "name": "split_text",
+          "meaning": "Rows of the pieces of a string between separators.",
+          "tsql": [
+            "STRING_SPLIT"
+          ],
+          "x": false
+        }
+      ]
+    },
+    {
+      "group": "Dates and times",
+      "part": "expression",
+      "operations": [
+        {
+          "name": "current_time(kind)",
+          "meaning": "The moment the statement started: local time to 1/300 of a second, local time to 100 nanoseconds, or UTC. The same throughout one statement.",
+          "tsql": [
+            "GETDATE",
+            "SYSDATETIME",
+            "GETUTCDATE",
+            "SYSUTCDATETIME",
+            "CURRENT_TIMESTAMP"
+          ],
+          "x": false
+        },
+        {
+          "name": "date_add(part)",
+          "meaning": "A date or time moved by a whole number of a unit. Moving by months clamps to the last day of the month.",
+          "tsql": [
+            "DATEADD"
+          ],
+          "x": true
+        },
+        {
+          "name": "date_diff_boundaries(part)",
+          "meaning": "How many boundaries of a unit lie between two moments. Not elapsed time: 23:59 to 00:01 is one day.",
+          "tsql": [
+            "DATEDIFF",
+            "DATEDIFF_BIG"
+          ],
+          "x": true
+        },
+        {
+          "name": "date_part(part)",
+          "meaning": "One field of a date or time as a number. Week and weekday depend on the session's first day of the week.",
+          "tsql": [
+            "DATEPART",
+            "YEAR",
+            "MONTH",
+            "DAY"
+          ],
+          "x": false
+        },
+        {
+          "name": "date_name(part)",
+          "meaning": "One field of a date as text in the session's language.",
+          "tsql": [
+            "DATENAME"
+          ],
+          "x": false
+        },
+        {
+          "name": "date_from_parts",
+          "meaning": "A date or time built from numbers. An impossible date is an error.",
+          "tsql": [
+            "DATEFROMPARTS",
+            "DATETIMEFROMPARTS",
+            "DATETIME2FROMPARTS"
+          ],
+          "x": false
+        },
+        {
+          "name": "end_of_month",
+          "meaning": "The last day of a date's month.",
+          "tsql": [
+            "EOMONTH"
+          ],
+          "x": false
+        },
+        {
+          "name": "is_date_text",
+          "meaning": "Whether text would convert to a date and time under the session's language and date format.",
+          "tsql": [
+            "ISDATE"
+          ],
+          "x": false
+        },
+        {
+          "name": "change_offset",
+          "meaning": "A date and time moved to, or labelled with, an offset from UTC or a named time zone.",
+          "tsql": [
+            "SWITCHOFFSET",
+            "TODATETIMEOFFSET"
+          ],
+          "x": false
+        }
+      ]
+    },
+    {
+      "group": "Aggregates and window functions",
+      "part": "expression",
+      "operations": [
+        {
+          "name": "count_rows",
+          "meaning": "Number of rows, as a 32-bit integer; overflow is an error.",
+          "tsql": [
+            "COUNT"
+          ],
+          "x": true
+        },
+        {
+          "name": "count_values",
+          "meaning": "Number of non-null values of an expression, optionally distinct by its comparison rule.",
+          "tsql": [],
+          "x": true
+        },
+        {
+          "name": "sum",
+          "meaning": "Total of non-null values, typed as SQL Server types it: an integer total stays a 32-bit integer and overflows as an error. Null for no values.",
+          "tsql": [
+            "SUM"
+          ],
+          "x": true
+        },
+        {
+          "name": "average",
+          "meaning": "Total of non-null values divided by their count, typed as SQL Server types it: over integers the result is an integer, truncated. Null for no values.",
+          "tsql": [
+            "AVG"
+          ],
+          "x": true
+        },
+        {
+          "name": "minimum",
+          "meaning": "Smallest non-null value; for strings by the comparison rule.",
+          "tsql": [
+            "MIN"
+          ],
+          "x": false
+        },
+        {
+          "name": "maximum",
+          "meaning": "Largest non-null value; for strings by the comparison rule.",
+          "tsql": [
+            "MAX"
+          ],
+          "x": false
+        },
+        {
+          "name": "join_text",
+          "meaning": "Non-null values joined with a separator, in a stated order.",
+          "tsql": [
+            "STRING_AGG"
+          ],
+          "x": false
+        },
+        {
+          "name": "statistical_aggregate(name)",
+          "meaning": "Standard deviation or variance, sample or population.",
+          "tsql": [
+            "STDEV",
+            "STDEVP",
+            "VAR",
+            "VARP"
+          ],
+          "x": false
+        },
+        {
+          "name": "row_number",
+          "meaning": "1, 2, 3 within a partition in a stated order. Order among ties is undefined.",
+          "tsql": [
+            "ROW_NUMBER"
+          ],
+          "x": true
+        },
+        {
+          "name": "rank(dense)",
+          "meaning": "Position within a partition, ties sharing a position, with or without gaps after them.",
+          "tsql": [
+            "RANK",
+            "DENSE_RANK"
+          ],
+          "x": false
+        },
+        {
+          "name": "bucket_number",
+          "meaning": "Which of n nearly equal groups a row falls in.",
+          "tsql": [
+            "NTILE"
+          ],
+          "x": false
+        },
+        {
+          "name": "offset_value(direction)",
+          "meaning": "A value from a row a number of positions before or after the current one.",
+          "tsql": [
+            "LAG",
+            "LEAD"
+          ],
+          "x": false
+        },
+        {
+          "name": "frame_value(end)",
+          "meaning": "The first or last value in the window frame.",
+          "tsql": [
+            "FIRST_VALUE",
+            "LAST_VALUE"
+          ],
+          "x": false
+        }
+      ]
+    },
+    {
+      "group": "Other values",
+      "part": "expression",
+      "operations": [
+        {
+          "name": "hash_bytes(algorithm, encoding)",
+          "meaning": "A hash of a value's bytes. 'encoding' states how text became bytes, which differs between single-byte and UTF-16 strings.",
+          "tsql": [
+            "HASHBYTES",
+            "CHECKSUM"
+          ],
+          "x": false
+        },
+        {
+          "name": "compress_bytes(direction)",
+          "meaning": "GZip compression or decompression.",
+          "tsql": [
+            "COMPRESS",
+            "DECOMPRESS"
+          ],
+          "x": false
+        },
+        {
+          "name": "json_value(kind)",
+          "meaning": "A scalar or a fragment taken from JSON text by a path, a modified copy of the text, or whether text is valid JSON.",
+          "tsql": [
+            "JSON_VALUE",
+            "JSON_QUERY",
+            "JSON_MODIFY",
+            "ISJSON"
+          ],
+          "x": false
+        },
+        {
+          "name": "xml_value(kind)",
+          "meaning": "A scalar or a fragment taken from an XML value by a path expression, or whether a path matches.",
+          "tsql": [],
+          "x": false,
+          "detect": "\\.(?:value|query|exist)\\s*\\("
+        }
+      ]
+    }
+  ],
+  "syntax_only": {
+    "about": "Words the corpus scan finds before a parenthesis that are syntax, not operations. Listed so the check knows they were considered.",
+    "words": [
+      "AS",
+      "JOIN",
+      "RETURN",
+      "INSERT",
+      "SET",
+      "IF",
+      "FROM",
+      "WHERE",
+      "ON",
+      "WITH",
+      "USING",
+      "AND",
+      "OR",
+      "IN",
+      "EXEC",
+      "EXECUTE",
+      "VALUES",
+      "TOP",
+      "OVER",
+      "OPTION",
+      "TABLE",
+      "UPDATE",
+      "KEY",
+      "PIVOT",
+      "ROLLUP",
+      "SYSTEM_TIME",
+      "ROOT",
+      "EXISTS",
+      "RAISERROR",
+      "ELSE",
+      "DECLARE",
+      "CREATE",
+      "PARTITION",
+      "CURSOR"
+    ]
+  },
+  "aliases_seen": {
+    "about": "Names in the corpus that look like function calls and are table aliases with a column list, all from XML shredding in AdventureWorks views.",
+    "words": [
+      "RESUME",
+      "EMPLOYMENT",
+      "CONTACTINFO",
+      "MFGINSTRUCTIONS",
+      "STEPS"
+    ]
+  }
+}
