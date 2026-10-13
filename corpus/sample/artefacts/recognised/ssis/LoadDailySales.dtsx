@@ -1,0 +1,189 @@
+<?xml version="1.0"?>
+<!--
+  Hand-written for the sample corpus in the SSIS package XML format
+  (PackageFormatVersion 8). It was not produced or opened by SSIS, which
+  cannot run in a container. It is here to be recognised, not executed.
+-->
+<DTS:Executable xmlns:DTS="www.microsoft.com/SqlServer/Dts"
+  DTS:refId="Package"
+  DTS:CreationDate="3/14/2019 9:12:44 AM"
+  DTS:CreationName="Microsoft.Package"
+  DTS:CreatorName="RETAIL\etl_dev"
+  DTS:DTSID="{6C1E5C52-8A1B-4C0E-9B0E-2A4B7B6F1D01}"
+  DTS:ExecutableType="Microsoft.Package"
+  DTS:LocaleID="1033"
+  DTS:ObjectName="LoadDailySales"
+  DTS:PackageType="5"
+  DTS:ProtectionLevel="1"
+  DTS:VersionBuild="27"
+  DTS:VersionGUID="{0E2F6C7A-51D3-4C55-8F0B-9B2E64A1C202}">
+  <DTS:Property DTS:Name="PackageFormatVersion">8</DTS:Property>
+  <DTS:ConnectionManagers>
+    <DTS:ConnectionManager
+      DTS:refId="Package.ConnectionManagers[RetailSample]"
+      DTS:CreationName="OLEDB"
+      DTS:DTSID="{A3A0F2B4-1C8D-4E57-9E44-5D0C7E3B1A03}"
+      DTS:ObjectName="RetailSample">
+      <DTS:ObjectData>
+        <DTS:ConnectionManager
+          DTS:ConnectionString="Data Source=SQLPROD01;Initial Catalog=RetailSample;Provider=SQLNCLI11.1;Integrated Security=SSPI;Auto Translate=False;" />
+      </DTS:ObjectData>
+    </DTS:ConnectionManager>
+    <DTS:ConnectionManager
+      DTS:refId="Package.ConnectionManagers[PriceFile]"
+      DTS:CreationName="FLATFILE"
+      DTS:DTSID="{B7D1C9E0-6F42-4A1B-8C3D-0E9F5A2B4C04}"
+      DTS:ObjectName="PriceFile">
+      <DTS:PropertyExpression DTS:Name="ConnectionString">@[User::InboxFolder] + "prices_" + (DT_WSTR, 8) @[User::LoadDate] + ".csv"</DTS:PropertyExpression>
+      <DTS:ObjectData>
+        <DTS:ConnectionManager
+          DTS:Format="Delimited"
+          DTS:LocaleID="1033"
+          DTS:HeaderRowDelimiter="_x000D__x000A_"
+          DTS:ColumnNamesInFirstDataRow="True"
+          DTS:RowDelimiter=""
+          DTS:TextQualifier="_x0022_"
+          DTS:CodePage="1252"
+          DTS:ConnectionString="\\fileserver01\etl\inbox\prices.csv">
+          <DTS:FlatFileColumns>
+            <DTS:FlatFileColumn DTS:ColumnDelimiter="_x002C_" DTS:MaximumWidth="20" DTS:DataType="129" DTS:ObjectName="Sku" DTS:DTSID="{C1000000-0000-4000-8000-000000000001}" DTS:CreationName="" />
+            <DTS:FlatFileColumn DTS:ColumnDelimiter="_x002C_" DTS:DataType="6" DTS:ObjectName="UnitPrice" DTS:DTSID="{C1000000-0000-4000-8000-000000000002}" DTS:CreationName="" />
+            <DTS:FlatFileColumn DTS:ColumnDelimiter="_x000D__x000A_" DTS:MaximumWidth="30" DTS:DataType="129" DTS:ObjectName="Category" DTS:DTSID="{C1000000-0000-4000-8000-000000000003}" DTS:CreationName="" />
+          </DTS:FlatFileColumns>
+        </DTS:ConnectionManager>
+      </DTS:ObjectData>
+    </DTS:ConnectionManager>
+  </DTS:ConnectionManagers>
+  <DTS:Variables>
+    <DTS:Variable DTS:CreationName="" DTS:DTSID="{D2000000-0000-4000-8000-000000000001}" DTS:Namespace="User" DTS:ObjectName="InboxFolder">
+      <DTS:VariableValue DTS:DataType="8">\\fileserver01\etl\inbox\</DTS:VariableValue>
+    </DTS:Variable>
+    <DTS:Variable DTS:CreationName="" DTS:DTSID="{D2000000-0000-4000-8000-000000000002}" DTS:Namespace="User" DTS:ObjectName="LoadDate">
+      <DTS:VariableValue DTS:DataType="3">20240331</DTS:VariableValue>
+    </DTS:Variable>
+    <DTS:Variable DTS:CreationName="" DTS:DTSID="{D2000000-0000-4000-8000-000000000003}" DTS:Namespace="User" DTS:ObjectName="RowsStaged">
+      <DTS:VariableValue DTS:DataType="3">0</DTS:VariableValue>
+    </DTS:Variable>
+    <DTS:Variable DTS:CreationName="" DTS:DTSID="{D2000000-0000-4000-8000-000000000004}" DTS:Namespace="User" DTS:ObjectName="RemoveMissing">
+      <DTS:VariableValue DTS:DataType="11">0</DTS:VariableValue>
+    </DTS:Variable>
+  </DTS:Variables>
+  <DTS:Executables>
+    <DTS:Executable
+      DTS:refId="Package\Truncate staging"
+      DTS:CreationName="Microsoft.ExecuteSQLTask"
+      DTS:DTSID="{E3000000-0000-4000-8000-000000000001}"
+      DTS:ExecutableType="Microsoft.ExecuteSQLTask"
+      DTS:ObjectName="Truncate staging"
+      DTS:TaskContact="Execute SQL Task">
+      <DTS:ObjectData>
+        <SQLTask:SqlTaskData xmlns:SQLTask="www.microsoft.com/sqlserver/dts/tasks/sqltask"
+          SQLTask:Connection="{A3A0F2B4-1C8D-4E57-9E44-5D0C7E3B1A03}"
+          SQLTask:SqlStatementSource="TRUNCATE TABLE stg.ProductPriceImport;" />
+      </DTS:ObjectData>
+    </DTS:Executable>
+    <DTS:Executable
+      DTS:refId="Package\Load price file"
+      DTS:CreationName="Microsoft.Pipeline"
+      DTS:DTSID="{E3000000-0000-4000-8000-000000000002}"
+      DTS:ExecutableType="Microsoft.Pipeline"
+      DTS:ObjectName="Load price file"
+      DTS:TaskContact="Performs high-performance data extraction, transformation and loading">
+      <DTS:ObjectData>
+        <pipeline version="1">
+          <components>
+            <component refId="Package\Load price file\Price file source" componentClassID="Microsoft.FlatFileSource" name="Price file source">
+              <connections>
+                <connection refId="Package\Load price file\Price file source.Connections[FlatFileConnection]" connectionManagerID="Package.ConnectionManagers[PriceFile]" connectionManagerRefId="Package.ConnectionManagers[PriceFile]" name="FlatFileConnection" />
+              </connections>
+              <outputs>
+                <output refId="Package\Load price file\Price file source.Outputs[Flat File Source Output]" name="Flat File Source Output">
+                  <outputColumns>
+                    <outputColumn refId="Package\Load price file\Price file source.Outputs[Flat File Source Output].Columns[Sku]" dataType="str" length="20" codePage="1252" name="Sku" />
+                    <outputColumn refId="Package\Load price file\Price file source.Outputs[Flat File Source Output].Columns[UnitPrice]" dataType="cy" name="UnitPrice" />
+                    <outputColumn refId="Package\Load price file\Price file source.Outputs[Flat File Source Output].Columns[Category]" dataType="str" length="30" codePage="1252" name="Category" />
+                  </outputColumns>
+                </output>
+              </outputs>
+            </component>
+            <component refId="Package\Load price file\Trim and upper-case Sku" componentClassID="Microsoft.DerivedColumn" name="Trim and upper-case Sku">
+              <inputs>
+                <input refId="Package\Load price file\Trim and upper-case Sku.Inputs[Derived Column Input]" name="Derived Column Input">
+                  <inputColumns>
+                    <inputColumn refId="Package\Load price file\Trim and upper-case Sku.Inputs[Derived Column Input].Columns[Sku]" lineageId="Package\Load price file\Price file source.Outputs[Flat File Source Output].Columns[Sku]" usageType="readWrite">
+                      <properties>
+                        <property dataType="System.String" description="Derived Column Expression" name="Expression">UPPER(TRIM(#{Package\Load price file\Price file source.Outputs[Flat File Source Output].Columns[Sku]}))</property>
+                        <property dataType="System.String" description="Derived Column Friendly Expression" name="FriendlyExpression">UPPER(TRIM(Sku))</property>
+                      </properties>
+                    </inputColumn>
+                  </inputColumns>
+                </input>
+              </inputs>
+            </component>
+            <component refId="Package\Load price file\Count rows" componentClassID="Microsoft.RowCount" name="Count rows">
+              <properties>
+                <property dataType="System.String" name="VariableName">User::RowsStaged</property>
+              </properties>
+            </component>
+            <component refId="Package\Load price file\Staging destination" componentClassID="Microsoft.OLEDBDestination" name="Staging destination">
+              <properties>
+                <property dataType="System.String" name="OpenRowset">[stg].[ProductPriceImport]</property>
+                <property dataType="System.Int32" name="AccessMode" typeConverter="AccessMode">3</property>
+                <property dataType="System.Boolean" name="FastLoadKeepNulls">true</property>
+                <property dataType="System.String" name="FastLoadOptions">TABLOCK,CHECK_CONSTRAINTS</property>
+              </properties>
+              <connections>
+                <connection refId="Package\Load price file\Staging destination.Connections[OleDbConnection]" connectionManagerID="Package.ConnectionManagers[RetailSample]" connectionManagerRefId="Package.ConnectionManagers[RetailSample]" name="OleDbConnection" />
+              </connections>
+            </component>
+          </components>
+          <paths>
+            <path refId="Package\Load price file.Paths[Flat File Source Output]" startId="Package\Load price file\Price file source.Outputs[Flat File Source Output]" endId="Package\Load price file\Trim and upper-case Sku.Inputs[Derived Column Input]" name="Flat File Source Output" />
+            <path refId="Package\Load price file.Paths[Derived Column Output]" startId="Package\Load price file\Trim and upper-case Sku.Outputs[Derived Column Output]" endId="Package\Load price file\Count rows.Inputs[Row Count Input 1]" name="Derived Column Output" />
+            <path refId="Package\Load price file.Paths[Row Count Output 1]" startId="Package\Load price file\Count rows.Outputs[Row Count Output 1]" endId="Package\Load price file\Staging destination.Inputs[OLE DB Destination Input]" name="Row Count Output 1" />
+          </paths>
+        </pipeline>
+      </DTS:ObjectData>
+    </DTS:Executable>
+    <DTS:Executable
+      DTS:refId="Package\Apply prices"
+      DTS:CreationName="Microsoft.ExecuteSQLTask"
+      DTS:DTSID="{E3000000-0000-4000-8000-000000000003}"
+      DTS:ExecutableType="Microsoft.ExecuteSQLTask"
+      DTS:ObjectName="Apply prices"
+      DTS:TaskContact="Execute SQL Task">
+      <DTS:ObjectData>
+        <SQLTask:SqlTaskData xmlns:SQLTask="www.microsoft.com/sqlserver/dts/tasks/sqltask"
+          SQLTask:Connection="{A3A0F2B4-1C8D-4E57-9E44-5D0C7E3B1A03}"
+          SQLTask:SqlStatementSource="EXEC sales.uspApplyPriceImport @RemoveMissing = ?;">
+          <SQLTask:ParameterBinding
+            SQLTask:ParameterName="0"
+            SQLTask:DtsVariableName="User::RemoveMissing"
+            SQLTask:ParameterDirection="Input"
+            SQLTask:DataType="11"
+            SQLTask:ParameterSize="-1" />
+        </SQLTask:SqlTaskData>
+      </DTS:ObjectData>
+    </DTS:Executable>
+  </DTS:Executables>
+  <DTS:PrecedenceConstraints>
+    <DTS:PrecedenceConstraint
+      DTS:refId="Package.PrecedenceConstraints[Constraint]"
+      DTS:CreationName=""
+      DTS:DTSID="{F4000000-0000-4000-8000-000000000001}"
+      DTS:From="Package\Truncate staging"
+      DTS:LogicalAnd="True"
+      DTS:ObjectName="Constraint"
+      DTS:To="Package\Load price file" />
+    <DTS:PrecedenceConstraint
+      DTS:refId="Package.PrecedenceConstraints[Constraint 1]"
+      DTS:CreationName=""
+      DTS:DTSID="{F4000000-0000-4000-8000-000000000002}"
+      DTS:EvalOp="3"
+      DTS:Expression="@[User::RowsStaged] &gt; 0"
+      DTS:From="Package\Load price file"
+      DTS:LogicalAnd="True"
+      DTS:ObjectName="Constraint 1"
+      DTS:To="Package\Apply prices" />
+  </DTS:PrecedenceConstraints>
+</DTS:Executable>

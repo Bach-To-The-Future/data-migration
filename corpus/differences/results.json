@@ -1,0 +1,550 @@
+{
+  "environment": {
+    "sql_server": {
+      "version": "16.0.4295.3",
+      "update_level": "CU27",
+      "edition": "Developer Edition (64-bit)",
+      "database_collation": "SQL_Latin1_General_CP1_CI_AS"
+    },
+    "spark": {
+      "version": "4.0.0",
+      "delta": "4.0.0",
+      "ansi_enabled": "true",
+      "mode": "local, open-source Spark with Delta Lake; not a Databricks Runtime"
+    }
+  },
+  "results": [
+    {
+      "id": "2.2",
+      "title": "String keys differing only in case, in JOIN, GROUP BY, DISTINCT, IN and set operators",
+      "claim": "T-SQL: one key. Spark: separate keys.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              1,
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "counts": {
+          "ok": [
+            0,
+            3,
+            3,
+            0,
+            2,
+            0
+          ]
+        }
+      },
+      "verdict": "confirmed",
+      "note": "T-SQL treats the three spellings as one key in every operator; Spark treats them as three."
+    },
+    {
+      "id": "3.11",
+      "title": "money / money",
+      "claim": "T-SQL: money keeps four decimal places. Spark: DECIMAL(19, 4) division keeps more digits.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              "3.3333",
+              "0.6666",
+              "0.9999"
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "quotients": {
+          "ok": [
+            "3.3333333333333333333",
+            "0.6666666666666666667",
+            "1.00000000000000000"
+          ]
+        }
+      },
+      "verdict": "confirmed",
+      "note": "money / money keeps 4 decimal places (3.3333); DECIMAL(19, 4) division keeps 19 (3.3333333333333333333). T-SQL truncates the quotient (2 / 3 = 0.6666), it does not round."
+    },
+    {
+      "id": "3.12",
+      "title": "ISNUMERIC('$')",
+      "claim": "T-SQL: 1 for '$', '+' and '-'. Spark: no equivalent; a try_cast emulation answers differently.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "isnumeric_function": {
+          "error": "AnalysisException: [UNRESOLVED_ROUTINE] Cannot resolve routine `isnumeric` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]. SQLSTATE: 42883; line 1 pos 7"
+        },
+        "try_cast_emulation": {
+          "ok": [
+            false,
+            false,
+            false,
+            true,
+            false
+          ]
+        }
+      },
+      "verdict": "confirmed",
+      "note": "ISNUMERIC is 1 for '$', '+' and '-'; Spark has no ISNUMERIC and try_cast says none of them is a number."
+    },
+    {
+      "id": "6.4",
+      "title": "SCOPE_IDENTITY(), @@IDENTITY, IDENT_CURRENT",
+      "claim": "T-SQL: the last identity value generated. Spark: no equivalent.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              15,
+              15,
+              15
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "scope_identity": {
+          "error": "AnalysisException: [UNRESOLVED_ROUTINE] Cannot resolve routine `scope_identity` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]. SQLSTATE: 42883; line 1 pos 7"
+        },
+        "at_at_identity": {
+          "error": "ParseException: [PARSE_SYNTAX_ERROR] Syntax error at or near '@'. SQLSTATE: 42601 (line 1, pos 7) | == SQL =="
+        },
+        "ident_current": {
+          "error": "AnalysisException: [UNRESOLVED_ROUTINE] Cannot resolve routine `ident_current` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]. SQLSTATE: 42883; line 1 pos 7"
+        },
+        "delta_identity_column": {
+          "error": "AnalysisException: [UNSUPPORTED_FEATURE.TABLE_OPERATION] The feature is not supported: Table `spark_catalog`.`default`.`d64` does not support identity column. Please check the current catalog and namespace to make sure the qualified table name is expected, and also check the catalog implementation which is configured by \"spark.sql.catalog\". SQLSTATE: 0A000"
+        }
+      },
+      "verdict": "confirmed",
+      "note": "All three return the last identity value in T-SQL; none of them exists in Spark. Open-source Delta 4.0 also rejects identity columns in SQL DDL."
+    },
+    {
+      "id": "7.2",
+      "title": "Three inserts, the second violating a constraint, XACT_ABORT OFF, no TRY",
+      "claim": "T-SQL: only the failing statement is rolled back and the third insert runs. Spark: an uncaught Python exception stops the script at the second.",
+      "tsql": [
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [],
+          "errors": [
+            "The INSERT statement conflicted with the CHECK constraint \"ck_d72\". The conflict occurred in database \"DifferenceScratch\", table \"dbo.d72\", column 'v'."
+          ]
+        },
+        {
+          "sets": [
+            [
+              [
+                1
+              ],
+              [
+                3
+              ]
+            ]
+          ],
+          "errors": []
+        }
+      ],
+      "spark": {
+        "script": {
+          "error": "Py4JJavaError: An error occurred while calling o46.sql. | org.apache.spark.sql.delta.schema.DeltaInvariantViolationException: [DELTA_VIOLATE_CONSTRAINT_WITH_VALUES] CHECK constraint ck_d72 (v > 0) violated by row with values"
+        },
+        "rows_after": [
+          1
+        ]
+      },
+      "verdict": "confirmed",
+      "note": "T-SQL reports the failed insert and still runs the third; the Python script stops at the second."
+    },
+    {
+      "id": "7.6",
+      "title": "What BEGIN TRY ... BEGIN CATCH catches",
+      "claim": "T-SQL: not warnings, and not compile errors at the same level. Spark: a Python except catches every exception, including analysis errors.",
+      "tsql": [
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [],
+          "errors": [
+            "Invalid object name 'dbo.no_such_table_76'."
+          ]
+        },
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [],
+          "errors": []
+        },
+        {
+          "sets": [
+            [
+              [
+                "warning: not caught"
+              ],
+              [
+                "divide by zero: caught"
+              ],
+              [
+                "missing table, one level down: caught by the caller"
+              ]
+            ]
+          ],
+          "errors": []
+        }
+      ],
+      "spark": {
+        "python_except_unresolved_column": "caught",
+        "python_except_missing_table": "caught",
+        "sql_handler_missing_table": {
+          "error": "Py4JJavaError: An error occurred while calling o46.sql. | org.apache.spark.sql.exceptions.SqlScriptingException: {LINE:2} [UNSUPPORTED_FEATURE.SQL_SCRIPTING] The feature is not supported: SQL Scripting is under development and not all features are supported. SQL Scripting enables users to write procedural SQL including control flow and error handling. To enable existing features set \"spark.sql.scr"
+        }
+      },
+      "verdict": "confirmed",
+      "note": "In T-SQL, CATCH does not run for a severity-10 message, and does not run for a missing table referenced at the same level: the procedure stops with an error instead. It does run for divide by zero, and for the same missing table when it is inside a called procedure. A Python except catches the missing table and an unresolved column. A Spark SQL exit handler could not be tried: SQL scripting is off by default in this Spark version."
+    },
+    {
+      "id": "8.1",
+      "title": "MERGE ... ON t.code = s.code with string keys",
+      "claim": "T-SQL: keys match ignoring case and trailing spaces, so the row is updated. Spark: no match, so a second row is inserted.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              "AB01",
+              2
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "merge": {
+          "ok": null
+        },
+        "rows_after": [
+          [
+            "AB01",
+            1
+          ],
+          [
+            "ab01  ",
+            2
+          ]
+        ]
+      },
+      "verdict": "confirmed",
+      "note": "T-SQL matched 'ab01  ' to 'AB01' and updated it; Spark found no match and inserted a second row."
+    },
+    {
+      "id": "8.3",
+      "title": "MERGE ... OUTPUT $action, inserted.*, deleted.*",
+      "claim": "T-SQL: one row per row inserted, updated or deleted. Spark: no OUTPUT clause.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              "UPDATE",
+              1,
+              10,
+              11
+            ],
+            [
+              "INSERT",
+              2,
+              null,
+              20
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "merge_with_output": {
+          "error": "ParseException: [PARSE_SYNTAX_ERROR] Syntax error at or near 'OUTPUT'. SQLSTATE: 42601 (line 5, pos 8) | == SQL =="
+        }
+      },
+      "verdict": "confirmed",
+      "note": "T-SQL returns one row per action; Spark rejects the OUTPUT clause as a syntax error."
+    },
+    {
+      "id": "8.4",
+      "title": "A MERGE target that has triggers",
+      "claim": "T-SQL: AFTER triggers fire for each action. Spark: no triggers, so their side effects do not happen.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              "insert",
+              1
+            ],
+            [
+              "update",
+              1
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "create_trigger": {
+          "error": "ParseException: [PARSE_SYNTAX_ERROR] Syntax error at or near 'TRIGGER'. SQLSTATE: 42601 (line 1, pos 7) | == SQL =="
+        }
+      },
+      "verdict": "confirmed",
+      "note": "Both AFTER triggers fired once for the MERGE in T-SQL; Spark has no CREATE TRIGGER."
+    },
+    {
+      "id": "8.5",
+      "title": "MERGE with one unconditional WHEN MATCHED THEN DELETE and several source rows per target row",
+      "claim": "T-SQL: not stated for the delete-only case. Spark: allowed.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              2
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "merge": {
+          "ok": null
+        },
+        "rows_after": [
+          2
+        ]
+      },
+      "verdict": "refuted",
+      "note": "No difference: both delete the row matched by two source rows and leave the other."
+    },
+    {
+      "id": "9.4",
+      "title": "SUBSTRING('abcdef', 0, 3)",
+      "claim": "T-SQL: 'ab'. Spark: not documented for position 0.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              "ab",
+              "a",
+              "abc"
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "substrings": {
+          "ok": [
+            "abc",
+            "f",
+            "abc"
+          ]
+        }
+      },
+      "verdict": "confirmed",
+      "note": "From position 0, T-SQL returns 'ab' and Spark returns 'abc'. From position -1, T-SQL returns 'a' and Spark returns 'f'."
+    },
+    {
+      "id": "9.8",
+      "title": "STUFF('abc', 0, 1, 'x')",
+      "claim": "T-SQL: NULL when the start is zero, negative or past the end, or the length is negative. Spark: overlay's out-of-range behaviour is not documented.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              null,
+              null,
+              null,
+              "axc"
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "start_0": {
+          "ok": "xabc"
+        },
+        "start_past_end": {
+          "ok": "abcx"
+        },
+        "negative_length": {
+          "ok": "axc"
+        },
+        "normal": {
+          "ok": "axc"
+        }
+      },
+      "verdict": "confirmed",
+      "note": "STUFF returns NULL for start 0, a start past the end and a negative length. overlay returns 'xabc', 'abcx' and 'axc' for the same three."
+    },
+    {
+      "id": "9.10",
+      "title": "SELECT TOP 5 WITH TIES ... ORDER BY x",
+      "claim": "T-SQL: also returns rows that tie with the last row. Spark: LIMIT has no ties option.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              3
+            ],
+            [
+              4
+            ],
+            [
+              5
+            ],
+            [
+              5
+            ],
+            [
+              5
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "limit_5": {
+          "ok": 5
+        },
+        "limit_5_with_ties": {
+          "error": "ParseException: [PARSE_SYNTAX_ERROR] Syntax error at or near 'WITH'. SQLSTATE: 42601 (line 1, pos 89) | == SQL =="
+        },
+        "rank_window": {
+          "ok": 7
+        }
+      },
+      "verdict": "confirmed",
+      "note": "TOP 5 WITH TIES returns 7 rows; LIMIT 5 returns 5 and has no WITH TIES form. A rank() window filtered to <= 5 returns the same 7."
+    },
+    {
+      "id": "9.14",
+      "title": "'C:\\temp\\new' inside embedded SQL text",
+      "claim": "T-SQL: backslash is an ordinary character. Spark: backslash escapes in SQL string literals.",
+      "tsql": {
+        "sets": [
+          [
+            [
+              "C:\\temp\\new",
+              11
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "plain_literal": {
+          "ok": [
+            "C:\temp\new",
+            9
+          ]
+        },
+        "raw_literal": {
+          "ok": [
+            "C:\\temp\\new",
+            11
+          ]
+        }
+      },
+      "verdict": "confirmed",
+      "note": "T-SQL keeps the backslashes (length 11); Spark turns \\t and \\n into a tab and a newline (length 9). A raw literal r'...' keeps them."
+    }
+  ],
+  "also_checked": [
+    {
+      "id": "10 (empty input)",
+      "title": "SUM, AVG, MAX and COUNT(*) over no rows",
+      "claim": "Inferred to agree: NULL for SUM, AVG and MAX, 0 for COUNT(*).",
+      "tsql": {
+        "sets": [
+          [
+            [
+              null,
+              null,
+              0,
+              null
+            ]
+          ]
+        ],
+        "errors": []
+      },
+      "spark": {
+        "aggregates": {
+          "ok": [
+            null,
+            null,
+            0,
+            null
+          ]
+        }
+      },
+      "verdict": "confirmed",
+      "note": "Both return NULL for SUM, AVG and MAX and 0 for COUNT(*) over no rows."
+    }
+  ]
+}

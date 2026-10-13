@@ -1,0 +1,41 @@
+# The sandbox: a disposable SQL Server and a Spark toolbox, both local.
+# Settings come from sandbox/.env, which corpus/build.py creates on first run.
+name: data-migration-sandbox
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:${MSSQL_IMAGE_TAG:-2022-CU27-ubuntu-22.04}
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: ${MSSQL_PID:-Developer}
+      # Server collation is fixed at first start; it also governs tempdb,
+      # so temp-table string comparisons follow it.
+      MSSQL_COLLATION: ${MSSQL_COLLATION:-SQL_Latin1_General_CP1_CI_AS}
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?run corpus/build.py to create sandbox/.env}
+      MSSQL_AGENT_ENABLED: "true"
+    ports:
+      - "127.0.0.1:${MSSQL_PORT:-14333}:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+      - ../corpus/public/.cache:/var/opt/mssql/backup:ro
+    mem_limit: 4g
+
+  # Python with PySpark, Delta and a SQL Server driver. Runs the build and
+  # the difference tests, so the host needs only Docker and Python.
+  tools:
+    build:
+      context: .
+      dockerfile: tools.Dockerfile
+    environment:
+      MSSQL_HOST: sqlserver
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?run corpus/build.py to create sandbox/.env}
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ..:/work
+    working_dir: /work
+    depends_on:
+      - sqlserver
+    profiles: ["tools"]
+
+volumes:
+  sqlserver-data:

@@ -1,0 +1,3 @@
+# Corpus files are hashed in corpus/manifest.json, so their line endings must not vary by machine.
+corpus/** text eol=lf
+sandbox/** text eol=lf
