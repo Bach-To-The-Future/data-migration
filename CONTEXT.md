@@ -88,6 +88,10 @@ _Avoid_: Flagged fragment (which is target code), unparsed block
 **Scope barrier**:
 An opaque fragment whose effect on what is in scope cannot be determined, so that everything it might have touched is treated as unknown from that point on.
 
+**Context builder**:
+The part of the core that assembles everything an AI step is shown. An AI step never gathers its own context.
+_Avoid_: Prompt builder, retriever
+
 ### Conversion output
 
 **Conversion report**:
@@ -104,6 +108,10 @@ The versioned package that converted code may import to reproduce source behavio
 _Avoid_: Helper library, runtime, utils
 
 ### Verification
+
+**Testing module**:
+The part of the core that decides whether a conversion is correct, by checks whose outcome never depends on an LLM.
+_Avoid_: Validator, QA
 
 **Reconciliation**:
 Running an artefact and its conversion on the same data and comparing the results. When enabled, an artefact counts as converted only if it reconciles.
