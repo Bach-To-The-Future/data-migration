@@ -161,7 +161,7 @@ _Avoid_: Test set, validation set
 The report status of an artefact converted while reconciliation was disabled.
 
 **Sandbox**:
-A disposable instance of a source and a target, filled with synthetic data, on which reconciliation runs.
+A disposable instance of a source and a target that the tool controls fully. Reconciliation runs on it with synthetic data, and procedure result shapes are described on it.
 
 **Synthetic data**:
 Rows generated from the catalog rather than copied from a client, deliberately including edge cases.
