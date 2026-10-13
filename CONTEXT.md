@@ -14,8 +14,24 @@ _Avoid_: Source dialect, input language
 A platform together with the language of the files produced for it, such as PySpark on Databricks.
 _Avoid_: Output dialect, destination
 
+**Client**:
+The organisation whose artefacts are converted.
+_Avoid_: Customer, end user
+
+**Operator**:
+The person who runs the tool on a client's artefacts. In early use the operator is a delivery engineer, not a member of the client's staff.
+_Avoid_: User
+
 **Core**:
 The part of the tool shared by every source and every target, which no single source or target may require changing.
+
+**Engine**:
+The whole tool apart from its front ends: the core together with every source and every target.
+_Avoid_: Core (when sources and targets are included), backend
+
+**Front end**:
+A thin layer through which an operator drives the engine, such as a command line or a graphical interface. It holds no conversion logic.
+_Avoid_: UI (when the command line is also meant), app
 
 **Artefact**:
 One unit of legacy script handed to the tool: a query batch, stored procedure, view, user-defined function, trigger, SSIS package or SQL Agent job.
@@ -72,10 +88,10 @@ The report status of an artefact converted while reconciliation was disabled.
 A disposable instance of a source and a target, filled with synthetic data, on which reconciliation runs.
 
 **Synthetic data**:
-Rows generated from the catalog rather than copied from a customer, deliberately including edge cases.
+Rows generated from the catalog rather than copied from a client, deliberately including edge cases.
 
 **Corpus**:
-A set of artefacts used to judge the tool. The sample corpus is written for this project, the public corpus comes from published sample databases, and the real corpus comes from a customer and is kept outside this repository.
+A set of artefacts used to judge the tool. The sample corpus is written for this project, the public corpus comes from published sample databases, and the real corpus comes from a client and is kept outside this repository.
 
 ### Autonomy
 
