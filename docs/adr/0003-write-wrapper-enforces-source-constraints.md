@@ -19,4 +19,4 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 - **Foreign-key actions are reproduced too**: `ON DELETE` and `ON UPDATE` with `CASCADE`, `SET NULL` and `SET DEFAULT`.
 - **All writes must go through the wrapper.** A write made any other way is not checked. This is one reason converted code has a single way to write.
 - **The catalog must hold every constraint**, with check expressions, column defaults and foreign-key actions.
-- **Enforcement is not atomic with the write.** Two jobs writing the same table at once can both pass the check. This is the same caveat as for transactions: correct when the job owns its tables during the run.
+- **Enforcement is not atomic with the write.** Two jobs writing the same table at once can both pass the check. This is the single-writer assumption defined in `CONTEXT.md`, which emulated transactions and assigned identity values also rest on.

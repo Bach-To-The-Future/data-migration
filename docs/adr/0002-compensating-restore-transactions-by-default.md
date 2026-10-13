@@ -15,7 +15,7 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 
 ## Consequences
 
-- **This is not isolation.** Other readers see uncommitted changes, and a restore discards anything else written to those tables in the meantime. It is correct when the job owns its tables during the run and wrong under concurrent writers. The owner accepted this knowingly.
+- **This is not isolation.** Other readers see uncommitted changes, and a restore discards anything else written to those tables in the meantime. It is correct when the job owns its tables during the run and wrong under concurrent writers. This is the single-writer assumption defined in `CONTEXT.md`. The owner accepted it knowingly.
 - **Every transaction is flagged** in the conversion report with that caveat.
 - **Start versions are recorded in the run catalog**, so a job that crashed mid-transaction restores them first when it is resumed or re-run.
 - **The helper fails loudly** if a version it would restore to no longer exists because of `VACUUM` retention.

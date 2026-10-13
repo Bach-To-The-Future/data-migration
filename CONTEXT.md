@@ -107,6 +107,10 @@ Target code that falls back to embedded SQL because the construct has no reasona
 What converted code carries in place of the legacy database session: temp tables, the open transaction, the last row count, the last identity value and the error being handled. All writes go through it.
 _Avoid_: Context (which the context builder assembles), connection
 
+**Single-writer assumption**:
+That during a run, converted code is the only writer to the tables it writes. Emulated transactions, assigned identity values and constraint enforcement are correct only while it holds.
+_Avoid_: Concurrency caveat, exclusive access
+
 **Support library**:
 The versioned package that converted code may import to reproduce source behaviour the target lacks.
 _Avoid_: Helper library, runtime, utils
