@@ -183,7 +183,12 @@ A set of artefacts used to judge the tool. The sample corpus is written for this
 How much a component decides for itself: deterministic code, LLM step, or agent.
 
 **LLM step**:
-One model call with a fixed prompt at a fixed point in a pipeline written in ordinary code.
+One model call with a fixed prompt at a fixed point in a pipeline written in ordinary code. It stays an LLM step when that code makes several calls for candidates, or calls again after a failed check: the code, not the model, decides what happens next.
+_Avoid_: Agent (unless the model chooses its own next step)
+
+**Candidate**:
+One of several outputs an LLM step produces for the same input. Those that pass every check are kept, and a fixed rule picks one.
+_Avoid_: Sample, attempt
 
 **Agent**:
 A model in a loop that chooses its own next step and tools.
