@@ -150,7 +150,7 @@ The part of the core that decides whether a conversion is correct, by checks who
 _Avoid_: Validator, QA
 
 **Reconciliation**:
-Running an artefact and its conversion on the same data and comparing the results. When enabled, an artefact counts as converted only if it reconciles.
+Running an artefact and its conversion on the same data and comparing the results. An artefact counts as converted only if it reconciles, so with reconciliation disabled nothing counts as converted.
 _Avoid_: Validation (too broad), testing
 
 **Observation**:
@@ -170,7 +170,7 @@ Seeds for generating test data that are kept from every step able to change the 
 _Avoid_: Test set, validation set
 
 **Not reconciled**:
-The report status of an artefact converted while reconciliation was disabled.
+The report status of every artefact in a run with reconciliation disabled. It is never reported as converted.
 
 **Sandbox**:
 A disposable instance of a source and a target that the tool controls fully. Reconciliation runs on it with synthetic data, and procedure result shapes are described on it.
