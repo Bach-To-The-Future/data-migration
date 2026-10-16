@@ -23,3 +23,7 @@ The owner set this as a standing rule for the map on 16 October 2026; see the No
 - **"Converted" has one meaning everywhere:** the share of artefacts whose verdict is "Reconciled". Every other status is reported under its own name: weakly tested, not reconcilable locally, blocked, failed, not reconciled.
 - **The directional orchestrator prototype** checks statically only, so it reports "passed static check", never "converted".
 - **Every degradation needs a place in the report.** A component that cannot record one may not degrade at all.
+
+## Amendment, 16 October 2026
+
+"Converted" now also requires passing final validation: an artefact counts as converted only if its verdict is "Reconciled" **and** it passes the independent final validator. "Failed final validation" is one more status reported under its own name. See [ADR 0013](0013-an-independent-final-validator.md).

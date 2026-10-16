@@ -150,7 +150,7 @@ The part of the core that decides whether a conversion is correct, by checks who
 _Avoid_: Validator, QA
 
 **Reconciliation**:
-Running an artefact and its conversion on the same data and comparing the results. An artefact counts as converted only if it reconciles, so with reconciliation disabled nothing counts as converted.
+Running an artefact and its conversion on the same data and comparing the results. An artefact counts as converted only if it reconciles and then passes final validation, so in a preview run nothing counts as converted.
 _Avoid_: Validation (too broad), testing
 
 **Observation**:
@@ -168,6 +168,10 @@ _Avoid_: Test result, status (which is what the conversion report shows a reader
 **Hold-out seeds**:
 Seeds for generating test data that are kept from every step able to change the conversion, and used once, for the final verdict.
 _Avoid_: Test set, validation set
+
+**Final validator**:
+An audit run after the consistency pass that executes the delivered project in a fresh sandbox against the original, sharing no code with the testing module and nothing of its evidence. An artefact that fails it is not converted.
+_Avoid_: Second testing module, QA pass
 
 **Not reconciled**:
 The report status of every artefact in a preview run. It is never reported as converted.
