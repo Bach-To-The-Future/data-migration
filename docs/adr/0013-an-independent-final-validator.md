@@ -9,7 +9,7 @@ The testing module is built to be independent of conversion, but it is still par
 - **Inputs.** The validator is given only:
   - the original source from the catalog snapshot;
   - the delivered project exactly as shipped;
-  - everything needed to recreate the original's database faithfully. The validator builds that database with its own code from the snapshot's raw definitions (captured DDL and settings text), never from the catalog's parsed facts, so an extraction mistake cannot fool both judges.
+  - everything needed to recreate the original's database faithfully. The validator builds that database with its own code from the snapshot's raw definitions (captured DDL and settings text), never from the catalog's parsed facts, so an extraction mistake cannot fool both judges. The raw definitions are folder DDL files kept verbatim, and the rows the extractor reads from each metadata view, captured wholesale.
 
   It never sees the intermediate representation, source links, the run plan, the testing module's verdicts, seeds or data, lessons, worked examples, repair history or intent summaries.
 - **A fresh sandbox.** It runs the delivered project there, so that packaging and environment faults are caught too.
@@ -33,8 +33,10 @@ The mechanics are decided in [How does the final independent validator work?](ht
 - **"Converted" now means "Reconciled" and passed final validation.** This amends [ADR 0012](0012-only-reconciled-counts-as-converted.md). In a preview run nothing is converted anyway.
 - **Every source and target must provide a second, independent runner** for the validator, beside the testing module's. For the Oracle and Snowflake paper designs, that is a second Oracle-side and a second Snowflake-side execution path.
 - **A validator failure stops that artefact until a tool release** that improves the testing module, with one exception. If the artefact was delivered in a raised form, it falls back deterministically to its faithful form, which is validated again with fresh seeds.
+- **The faithful fallback is followed by one short final step**, which re-verifies and re-validates the artefact and its dependents, at most once per artefact. If the faithful form also fails, the artefact is not converted and its dependents are blocked.
+- **One capability, "validate a subset as a delivered project"** (the subset with its callees and triggers, packaged, in a fresh sandbox), is used three times in a run: after the pilot, on demand to confirm a lesson drafted during the bulk, and for the whole project at the end. Each use draws fresh seeds and costs a sandbox run.
 - **The benchmark's quality metric is the share of artefacts converted**, meaning "Reconciled" and passed final validation.
 - **Wall-clock time rises** by one full execution pass per run. The orchestrator benchmark measures speed including it, the same for both orchestrators.
 - **The validator is a separate deliverable in the build**, with its own author, its own code and its own tests.
 
-Amended on 16 October 2026 with the owner's answers on the ticket: inputs from raw definitions, its own schema and role, disclosure treated like a hold-out seed, the faithful fallback, the pass-or-fail bit for gates, and the benchmark metric.
+Amended on 16 October 2026 with the owner's answers on the ticket: inputs from raw definitions, its own schema and role, disclosure treated like a hold-out seed, the faithful fallback and its final step, the pass-or-fail bit for gates, the subset-validation capability, and the benchmark metric.
