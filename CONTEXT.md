@@ -170,7 +170,11 @@ Seeds for generating test data that are kept from every step able to change the 
 _Avoid_: Test set, validation set
 
 **Not reconciled**:
-The report status of every artefact in a run with reconciliation disabled. It is never reported as converted.
+The report status of every artefact in a preview run. It is never reported as converted.
+
+**Preview run**:
+A run with reconciliation disabled. Its report says so on its first line, and every artefact in it is not reconciled.
+_Avoid_: Dry run, quick run
 
 **Sandbox**:
 A disposable instance of a source and a target that the tool controls fully. Reconciliation runs on it with synthetic data, and procedure result shapes are described on it.
