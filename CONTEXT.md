@@ -181,6 +181,42 @@ Rows generated from the catalog rather than copied from a client, deliberately i
 **Corpus**:
 A set of artefacts used to judge the tool. The sample corpus is written for this project, the public corpus comes from published sample databases, and the real corpus comes from a client and is kept outside this repository.
 
+### Learning
+
+**Lesson**:
+A recorded correction the tool applies to later conversions: a trigger, the symptom it answers, a fix, its evidence and a status. A reviewer's fix is a lesson with a human source.
+_Avoid_: Rule (which is fixed code in the tool), memory, feedback
+
+**Trigger**:
+The structural pattern on the intermediate representation that decides where a lesson applies. Names and literals in it are placeholders, and it matches exactly, never by similarity.
+_Avoid_: Condition, match rule
+
+**Global lesson**:
+A lesson made of abstract patterns only, with no client code, names or data, shared by every engagement through the tool's releases.
+
+**Client lesson**:
+A lesson that may refer to one client's objects. It applies only to that client's runs and is deleted with that client's data.
+
+**Lesson set**:
+The lessons in force for a run, with a version. Every result records the version it was verified under.
+
+**Confirmation gate**:
+What a lesson must pass to be applied beyond the artefacts it came from: it fixes them, and breaks nothing in the known-good suite.
+
+**Known-good suite**:
+Artefacts whose conversions reached "Reconciled", re-run to show a change breaks nothing.
+_Avoid_: Regression suite (which also holds the known-bad cases)
+
+**Known-bad case**:
+A wrong conversion kept so that the tests must keep rejecting it.
+
+**Consistency pass**:
+The last stage of a run, which re-verifies every artefact under one frozen lesson set.
+
+**Region replacement**:
+Target code a reviewer supplies for one region of one artefact, as a client lesson. It is regenerated into the output each time, tested like any other code and flagged in the report.
+_Avoid_: Hand edit, override, patch
+
 ### Autonomy
 
 **Autonomy level**:
