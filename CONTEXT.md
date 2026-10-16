@@ -237,6 +237,14 @@ _Avoid_: Using "agent" for any module or any component that calls an LLM
 **Orchestrator**:
 The component that decides which step runs next for each artefact in a run.
 
+**Run plan**:
+The order a run must keep: its phases, and which artefacts must be verified before which. It is computed by code before any conversion and recorded in the run catalog. Within it, the orchestrator chooses what to take next.
+_Avoid_: Schedule, queue
+
+**Pilot**:
+The construct-diverse set of artefacts a run converts and verifies before the rest, so that most lessons are learnt first.
+_Avoid_: Sample (which is the sample corpus), first batch
+
 **Run catalog**:
 The record of every step taken during a run, from which a re-run replays earlier steps instead of deciding them again.
 _Avoid_: Log, checkpoint store
