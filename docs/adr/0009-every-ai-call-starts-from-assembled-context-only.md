@@ -6,7 +6,7 @@ status: accepted
 
 An AI step could be run as a conversation that keeps what it learnt about an artefact, or about the client's code base, from one call to the next. We decided that every model call is stateless: it starts only from the context the context builder assembled for it, and no conversation history carries over between steps, artefacts or candidates. The one exception is a repair run, whose context grows during its work on one failure and is discarded when that failure is settled. Each assembled context is recorded, and the cache of model results lives in the engagement's control database, never shared with another engagement. We chose this because a call that depends only on its recorded inputs can be cached, replayed and audited, and because one client's code then cannot reach another client's results through the model or the cache.
 
-The full decision is in the resolution of [What context does each AI step receive?](https://github.com/Bach-To-The-Future/data-migration/issues/21).
+The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/21#issuecomment-6210945499).
 
 ## Considered options
 
