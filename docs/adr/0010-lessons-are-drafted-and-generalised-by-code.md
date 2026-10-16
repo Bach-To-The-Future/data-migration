@@ -14,7 +14,7 @@ When repair fixes a failure, the tool can learn from it, and something must turn
 
 We chose this because a pattern computed from real triggers matches only what they have in common, and because a model's widening is judgement the gate can only partly check.
 
-The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/23).
+The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/23#issuecomment-6211827394).
 
 ## Considered options
 

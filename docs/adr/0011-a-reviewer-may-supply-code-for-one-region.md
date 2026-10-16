@@ -6,7 +6,7 @@ status: accepted
 
 Converted files are never hand-edited and are always regenerated. Some artefacts will still get stuck: the rules get them wrong, repair runs out of attempts, and no lesson the tool can apply during a run fixes them. We decided that a reviewer may then supply target code for one region of one artefact, as a lesson of the kind called region replacement. It is a client lesson whose trigger matches that artefact only. Its code is put into the output each time the artefact is regenerated, it goes through every check like any other code, and the report flags it as reviewer-supplied, naming the reviewer. We chose this because without it, a delivery team with a stuck artefact would edit the output by hand, where nothing would test it, record it or survive the next run.
 
-The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/23).
+The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/23#issuecomment-6211827394).
 
 ## Considered options
 
