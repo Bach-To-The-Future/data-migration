@@ -109,12 +109,16 @@ A natural-language account of an artefact rendered by fixed rules from its inter
 _Avoid_: Summary, documentation
 
 **Intent summary**:
-An AI-written account of what an artefact is for. It is labelled as such, is context only, and is never the source of truth.
+An AI-written account of what an artefact is for, written for readers of the conversion report. It is labelled as such, is never shown to a conversion step, and is never the source of truth.
 _Avoid_: Description (which is generated), explanation
 
 **Context builder**:
-The part of the core that assembles everything an AI step is shown. An AI step never gathers its own context.
+The part of the core that assembles everything an AI step is shown. An AI step never gathers its own context, and no model call carries anything over from another, except within one repair run.
 _Avoid_: Prompt builder, retriever
+
+**Worked example**:
+An earlier input and its accepted output, shown to an AI step as a model of what to produce. It comes only from an artefact that reconciled, and is withdrawn if later found wrong.
+_Avoid_: Few-shot example, sample
 
 ### Conversion output
 
