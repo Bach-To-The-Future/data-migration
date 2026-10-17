@@ -40,3 +40,7 @@ The mechanics are decided in [the resolution of How does the final independent v
 - **The validator is a separate deliverable in the build**, with its own author, its own code and its own tests.
 
 Amended on 16 October 2026 with the owner's answers on the ticket: inputs from raw definitions, its own schema and role, disclosure treated like a hold-out seed, the faithful fallback and its final step, the pass-or-fail bit for gates, the subset-validation capability, and the benchmark metric.
+
+## Amendment, 17 October 2026: the validator's SQL Server client
+
+The validator talks to SQL Server through Microsoft's JDBC driver, mssql-jdbc (MIT), reading on after each error. The testing module uses Microsoft.Data.SqlClient. Both were tested to return every result set, row count, message and return value after a failed statement that the server carries on from ([Observe the ODBC driver after a failed statement](https://github.com/Bach-To-The-Future/data-migration/issues/34)). So the two judges share no client. Each also cross-checks its client against Extended Events' per-statement row counts from the server. A mismatch is a client defect, reported, and the artefact does not count as converted.
