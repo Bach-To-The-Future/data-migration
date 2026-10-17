@@ -20,3 +20,14 @@ b = SparkSession.builder.master('local[1]') \
   .config('spark.sql.extensions', 'io.delta.sql.DeltaSparkSessionExtension') \
   .config('spark.sql.catalog.spark_catalog', 'org.apache.spark.sql.delta.catalog.DeltaCatalog'); \
 s = configure_spark_with_delta_pip(b).getOrCreate(); s.sql('select 1').collect(); s.stop()"
+
+# Microsoft's ODBC driver, the product's SQL Server driver (ADR 0017: free, not open source,
+# a recorded exception), and pyodbc. pymssql above stays for the corpus tools.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl gnupg ca-certificates \
+    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list -o /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install pyodbc==5.2.0
