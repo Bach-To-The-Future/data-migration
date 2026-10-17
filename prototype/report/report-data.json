@@ -1,0 +1,116 @@
+{
+  "_prototype": "PROTOTYPE, invented data for the report prototype of issue 9. Not a real run.",
+  "run": {
+    "id": "run-2026-10-17-01",
+    "engagement": "Example Retail Ltd",
+    "preview": false,
+    "started": "2026-10-17T08:00:00Z",
+    "finished": "2026-10-17T11:42:00Z",
+    "source": {"platform": "SQL Server", "client_build": "15.0.4385.2 (2019 CU28)", "sandbox_build": "15.0.4430.1 (2019 CU32)", "compatibility_level": 150, "support_rests_on": "test"},
+    "target": {"platform": "PySpark on Databricks", "runtime": "17.3 LTS", "library": "migrt_spark_v1_4_3"},
+    "versions": {"tool": "1.0.0", "lesson_set_global": "g-12", "lesson_set_client": "c-3", "test_definition": "td-7f3a", "validator": "1.0.0"},
+    "retention": {"policy": "zero retention", "location": "Amazon Bedrock", "checked": "effective retention mode 'none' read through the API", "remaining_exposure": "Content never leaves AWS and is never shared with Anthropic."},
+    "model_use": {"ceiling": 400.0, "spent": 287.40, "currency": "USD", "steps_by_tier": {"low": 41, "medium": 0, "high": 118}, "skipped_for_budget": 0, "refusals": [{"artefact": "sales.uspRunMaintenance", "category": "cyber", "fallback": "manual work"}]},
+    "single_writer": "During a run, converted code is the only writer to the tables it writes. Emulated transactions, identity values and constraint checks are correct only while this holds."
+  },
+  "artefacts": [
+    {
+      "name": "sales.uspCreateOrder", "type": "stored procedure", "area": "Sales",
+      "verdict": "Reconciled", "validation": "Passed",
+      "plain": "Creates an order with its lines and reduces stock.",
+      "flags": [{"kind": "single_writer"}, {"kind": "raised", "text": "The order-line loop was rewritten as one set-based step; the faithful form passed the same checks."}],
+      "evidence": {"coverage_original": 0.94, "validator_coverage": 0.91, "mutants": {"killed": 212, "survived": 3, "not_covered": 2, "equivalent": 4}, "tracing": "available", "ran_on": "sandbox", "seeds": {"visible": 5, "holdout": 3}},
+      "constructs": [
+        {"what": "TRY/CATCH with THROW", "status": "converted", "how": "try/except through the support library"},
+        {"what": "Transaction with ROLLBACK in CATCH", "status": "converted with caveat", "caveat": "single_writer"},
+        {"what": "SCOPE_IDENTITY()", "status": "converted with caveat", "caveat": "single_writer"},
+        {"what": "Cursor over order lines", "status": "raised", "producer": "LLM step (high tier), 3 candidates, 1 kept"}
+      ]
+    },
+    {
+      "name": "sales.uspArchiveOrders", "type": "stored procedure", "area": "Sales",
+      "verdict": "Failed", "validation": "Not run",
+      "plain": "Moves orders older than a cut-off date into the archive tables.",
+      "failure": {"dimension": "completeness", "plain": "3 rows that should have been archived were left behind.", "layer": "4, end-to-end reconciliation", "first_divergence": "statement 7 (DELETE ... OUTPUT INTO)", "minimised_input": "2 orders, cut-off 2024-02-29", "seed": "v-3"},
+      "repair": {"attempts": 3, "outcome": "exhausted; left for a reviewer"},
+      "flags": [],
+      "evidence": {"coverage_original": 0.88, "tracing": "available", "ran_on": "sandbox"},
+      "constructs": [
+        {"what": "DELETE with OUTPUT INTO", "status": "converted", "how": "write wrapper"},
+        {"what": "Date boundary on a leap day", "status": "failed", "caveat": "completeness"}
+      ]
+    },
+    {
+      "name": "sales.vMonthlyRevenue", "type": "view", "area": "Finance",
+      "verdict": "Reconciled", "validation": "Passed",
+      "plain": "Monthly revenue per region.",
+      "flags": [{"kind": "pre_existing", "text": "In the original, monthly totals do not add up to the yearly total when an order is refunded in a later month. The conversion reproduces this."}],
+      "evidence": {"coverage_original": 1.0, "validator_coverage": 1.0, "mutants": {"killed": 64, "survived": 0, "not_covered": 0, "equivalent": 1}, "tracing": "available", "ran_on": "sandbox", "seeds": {"visible": 5, "holdout": 3}},
+      "constructs": [
+        {"what": "GROUP BY on a case-insensitive column", "status": "converted", "how": "an original spelling from each group"},
+        {"what": "DATEADD/DATEDIFF month idiom", "status": "converted", "how": "date_trunc"}
+      ]
+    },
+    {
+      "name": "ref.uspApplyPriceImport", "type": "stored procedure", "area": "Pricing",
+      "verdict": "Reconciled", "validation": "Failed",
+      "plain": "Applies a staged price list to the product table.",
+      "defect_notice": "The validator found a difference the testing module missed. The testing module is flagged for a fix; this procedure stays unconverted until a release fixes it.",
+      "flags": [{"kind": "fallback", "text": "A raised form failed final validation; the faithful form was validated again and also failed."}],
+      "evidence": {"coverage_original": 0.97, "validator_coverage": 0.96, "tracing": "available", "ran_on": "sandbox"},
+      "constructs": [
+        {"what": "MERGE with WHEN NOT MATCHED BY SOURCE", "status": "converted", "how": "merge through the write wrapper"},
+        {"what": "Case-sensitive comparison by COLLATE", "status": "converted with caveat", "caveat": "collation assumed for one column"}
+      ]
+    },
+    {
+      "name": "sales.uspOrderSummary", "type": "stored procedure", "area": "Sales",
+      "verdict": "Blocked by a dependency", "validation": "Not run",
+      "plain": "Summarises an order for the confirmation e-mail.",
+      "blocked_by": "sales.uspArchiveOrders",
+      "flags": [],
+      "constructs": [{"what": "Call to sales.uspArchiveOrders", "status": "blocked"}]
+    },
+    {
+      "name": "dbo.uspSearchProducts", "type": "stored procedure", "area": "Catalogue",
+      "verdict": "Not testable: contains manual work", "validation": "Not run",
+      "plain": "Searches product descriptions.",
+      "flags": [{"kind": "manual", "text": "Full-text search (CONTAINS) is not supported on Databricks."}],
+      "constructs": [
+        {"what": "CONTAINS full-text predicate", "status": "manual work", "reason": "unsupported on the target"},
+        {"what": "Paging with OFFSET/FETCH", "status": "converted", "how": "limit and skip"}
+      ]
+    },
+    {
+      "name": "LoadDailySales.dtsx", "type": "SSIS package", "area": "Sales",
+      "verdict": "Recognised", "validation": "Not run",
+      "plain": "Nightly load of the day's sales from the till system.",
+      "flags": [{"kind": "manual", "text": "SSIS packages are recognised and listed, not converted, in v1."}],
+      "constructs": []
+    }
+  ],
+  "acceptances": [],
+  "needs_client": [
+    {"what": "Extract the database ArchiveDB", "why": "2 procedures read it; extracting it would make them reconcilable."},
+    {"what": "Export identity starting values at cutover", "why": "Needed so new order numbers continue from the live system's, not from the highest number in the data."}
+  ],
+  "degradations": [
+    {"kind": "assumption", "where": "ref.Product.Sku", "text": "Collation assumed from the database default; the column's own collation could not be read."},
+    {"kind": "trimmed context", "where": "sales.uspCreateOrder, raising step", "text": "Worked examples cut from 3 to 1 to fit the budget."},
+    {"kind": "unreachable branch", "where": "sales.uspArchiveOrders line 41", "text": "Proved infeasible by the solver; listed, not counted against coverage."},
+    {"kind": "excluded value", "where": "sales.uspCreateOrder", "text": "NEWID() output left out of comparison."},
+    {"kind": "volume", "where": "run", "text": "Tables of 50 rows (validator: up to 5,000); faults that show only at production volume are not tested."}
+  ],
+  "changes_since_last_run": [
+    {"artefact": "sales.uspCreateOrder", "change": "verdict Failed -> Reconciled", "why": "client lesson c-3/L7 (reviewer: J. Doe, delivery engineer)"}
+  ],
+  "open_problems": [
+    {"kind": "repair exhausted", "artefact": "sales.uspArchiveOrders"},
+    {"kind": "testing-module defect", "artefact": "ref.uspApplyPriceImport"}
+  ],
+  "deployment_steps": [
+    "Create the counter state table (definition in the project).",
+    "Run the counter initialisation command at go-live, with the DBA's exported starting values.",
+    "Run it again after any bulk load that bypasses the write wrappers."
+  ]
+}

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="dcterms.created" content="2026-10-17T11:42:00Z"><meta name="dcterms.modified" content="2026-10-17T11:42:00Z"><title>Sign-off (C: questions and answers)</title>
+<style>
+@page { size: A4; margin: 18mm 16mm; @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 8pt; color: #666; } }
+body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 10pt; color: #1a1a1a; line-height: 1.45; max-width: 820px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 17pt; margin: 0 0 4px; } h2 { font-size: 13pt; margin: 22px 0 6px; border-bottom: 1px solid #ccc; padding-bottom: 3px; }
+h3 { font-size: 11pt; margin: 16px 0 4px; }
+table { border-collapse: collapse; width: 100%; margin: 6px 0; } th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; vertical-align: top; font-size: 9pt; }
+th { background: #f2f2f2; } .muted { color: #555; } .tag { display: inline-block; border: 1px solid #888; border-radius: 3px; padding: 0 4px; font-size: 8pt; margin-right: 3px; }
+.ready { color: #1b6e20; } .our_work { color: #9a3412; } .waiting { color: #6b4f00; } .manual { color: #444; }
+.banner { border: 2px solid #9a3412; padding: 6px 10px; font-weight: bold; margin-bottom: 10px; }
+.sign { border: 1px solid #999; padding: 10px; margin-top: 18px; } .sign td { height: 26px; }
+.bar { display: flex; height: 14px; margin: 6px 0 2px; } .bar span { display: block; height: 14px; }
+
+</style></head><body>
+<p class="muted" style="font-size:8pt">PROTOTYPE, invented data. Report data run-2026-10-17-01.</p>
+<h1>Example Retail Ltd: your questions answered</h1><h2>Is our code converted?</h2><div>2 of 7 items are converted, and each was checked by running it against your original on test data, then checked again by an independent second check.</div><h2>What is not converted yet, and why?</h2><div><ul><li><b>Moves orders older than a cut-off date into the archive tables.</b>: Failed: completeness. 3 rows that should have been archived were left behind.</li><li><b>Applies a staged price list to the product table.</b>: Failed final validation. </li><li><b>Summarises an order for the confirmation e-mail.</b>: Blocked by sales.uspArchiveOrders. </li></ul>We are working on these. Nothing is needed from you.</div><h2>What will a person have to do by hand?</h2><div><ul><li><b>Searches product descriptions.</b>: Full-text search (CONTAINS) is not supported on Databricks.</li><li><b>Nightly load of the day&#x27;s sales from the till system.</b>: SSIS packages are recognised and listed, not converted, in v1.</li></ul></div><h2>What do you need from us?</h2><div><ul><li><b>Extract the database ArchiveDB.</b> 2 procedures read it; extracting it would make them reconcilable.</li><li><b>Export identity starting values at cutover.</b> Needed so new order numbers continue from the live system&#x27;s, not from the highest number in the data.</li></ul></div><h2>Did you find problems in our current system?</h2><div><ul><li>In the original, monthly totals do not add up to the yearly total when an order is refunded in a later month. The conversion reproduces this.</li></ul>The converted code behaves the same way, so nothing changes until you decide to fix it.</div><h2>Is there anything the converted code relies on?</h2><div>During a run, converted code is the only writer to the tables it writes. Emulated transactions, identity values and constraint checks are correct only while this holds.</div><h2>What happened to our code during conversion?</h2><div>It was processed under a zero retention arrangement at Amazon Bedrock. Content never leaves AWS and is never shared with Anthropic.</div><div class="sign"><b>Sign-off for this run</b>
+<table><tr><th style="width:30%">Name</th><th style="width:30%">Role</th><th style="width:20%">Date</th><th>Signature</th></tr>
+<tr><td></td><td>Client</td><td></td><td></td></tr><tr><td></td><td>Delivery lead</td><td></td><td></td></tr></table></div>
+</body></html>
