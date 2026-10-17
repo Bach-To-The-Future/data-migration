@@ -41,12 +41,12 @@ A type carries the behaviour that matters, not the source's name for it. The sou
 | `time_of_day(digits)` | A time with no date. | `TIME` | 1 |  |
 | `string(length, unit, fixed, collation)` | Text. 'length' is the maximum, or unlimited; 'unit' is bytes or UTF-16 units, as SQL Server counts; 'fixed' means shorter values are padded with spaces; 'collation' gives the comparison rule. | `CHAR`, `NCHAR`, `VARCHAR`, `NVARCHAR`, `TEXT`, `NTEXT`, `SYSNAME` | 58 | ✓ |
 | `collation(case_sensitive, accent_sensitive, ignore_trailing_spaces, origin)` | How two strings compare and sort. 'origin' is explicit, column or default, which decides precedence and whether mixing two is an error. |  |  | ✓ |
-| `binary(length, fixed)` | A sequence of bytes. | `BINARY`, `VARBINARY`, `IMAGE` | 3 |  |
+| `binary(length, fixed)` | A sequence of bytes. | `BINARY`, `VARBINARY`, `IMAGE`, `ROWVERSION`, `TIMESTAMP` | 3 |  |
 | `guid` | A 16-byte identifier that sorts and compares in SQL Server's own byte order, which is not text order. | `UNIQUEIDENTIFIER` | 0 |  |
 | `xml` | An XML document or fragment. | `XML` | 0 |  |
 | `row_set(columns)` | A set of rows with named, typed columns: the type of a table variable, a table-valued parameter, a result set and every query step. | `TABLE` | 23 | ✓ |
 | `cursor_handle` | A position in a set of rows being read one at a time. | `CURSOR` | 10 | ✓ |
-| `unsupported_type(source_name)` | A source type with no neutral meaning yet: sql_variant, hierarchyid, spatial types, rowversion. Anything touching a value of this type is manual. | `SQL_VARIANT`, `HIERARCHYID`, `GEOGRAPHY`, `GEOMETRY`, `ROWVERSION`, `TIMESTAMP` | 2 |  |
+| `unsupported_type(source_name)` | A source type with no neutral meaning yet: sql_variant, hierarchyid, spatial types. Anything touching a value of this type is manual. | `SQL_VARIANT`, `HIERARCHYID`, `GEOGRAPHY`, `GEOMETRY` | 2 |  |
 | `unknown` | A type lowering could not establish, for example when a table shape is missing. Operations on it are flagged. |  |  |  |
 
 ## Node kinds that are not operations

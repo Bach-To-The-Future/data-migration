@@ -1,6 +1,6 @@
 {
   "about": "First draft of the intermediate representation's vocabulary. This file is the source of truth; operation-vocabulary.md is generated from it by corpus/tools/vocabulary_check.py, which also checks it against the corpus. 'tsql' lists the T-SQL words that lower to an entry and is what the coverage check matches on. 'detect' is an optional pattern used instead of 'tsql' when counting which artefacts use an entry. 'x' is true where the hand conversion in prototype/hand-conversion exercised the entry.",
-  "version": "draft-1",
+  "version": "draft-2",
   "rules": [
     "Every operation has one meaning, whatever source it came from. Lowering resolves the source's behaviour, using catalog types and collations, into the operation that means exactly that.",
     "The vocabulary grows by addition only. A new source or target may add an entry and may never change what an existing one means.",
@@ -116,7 +116,9 @@
       "tsql": [
         "BINARY",
         "VARBINARY",
-        "IMAGE"
+        "IMAGE",
+        "ROWVERSION",
+        "TIMESTAMP"
       ],
       "x": false
     },
@@ -154,14 +156,12 @@
     },
     {
       "name": "unsupported_type(source_name)",
-      "meaning": "A source type with no neutral meaning yet: sql_variant, hierarchyid, spatial types, rowversion. Anything touching a value of this type is manual.",
+      "meaning": "A source type with no neutral meaning yet: sql_variant, hierarchyid, spatial types. Anything touching a value of this type is manual.",
       "tsql": [
         "SQL_VARIANT",
         "HIERARCHYID",
         "GEOGRAPHY",
-        "GEOMETRY",
-        "ROWVERSION",
-        "TIMESTAMP"
+        "GEOMETRY"
       ],
       "x": false
     },

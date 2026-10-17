@@ -485,7 +485,7 @@ The SQL Server half (source types to vocabulary types; see Annex A for each type
 | `binary`, `varbinary`, `image` | `binary(length, fixed)` |
 | `uniqueidentifier` | `guid` |
 | `xml` | `xml` |
-| `timestamp` (`rowversion`) | `binary(8)`, assigned by the database-wide counter (see Further Notes: the vocabulary draft still lists it as unsupported) |
+| `timestamp` (`rowversion`) | `binary(8, fixed)`, assigned by the database-wide counter |
 | `sql_variant`, `hierarchyid`, `geography`, `geometry` | `unsupported_type`: anything touching it is manual |
 
 The PySpark half (vocabulary types to Spark types, with the representation rules published in every delivered project):
@@ -1322,8 +1322,8 @@ Found while compiling this spec and checking each section against every ADR and 
 ### Unfinished work the spec relies on
 
 10. **The error classes and error-mapping tables aren't written.** ADR 0019 fixes their structure: targets map failures to classes, sources map classes to codes. The list of classes and both tables' contents exist only as examples ([What must a new source or target provide?][t17], [How is each construct with no PySpark equivalent converted?][t10]).
-11. **Annex C's entries aren't yet mapped to vocabulary operations.** The SQL Server half is meant to say how each construct behaves "in vocabulary terms" ([ADR 0019][adr19]). The re-filing here copied the entries unchanged, as decided, but each entry's link to the operation that carries its meaning is not written.
-12. **The operation vocabulary is out of step with a later decision.** Annex A still lists `rowversion` and `timestamp` under `unsupported_type`, while [Which SQL Server versions does v1 support?][t26] maps `timestamp` to `binary(8)` with a database-wide counter. This spec follows the later decision; the vocabulary's JSON source needs updating, and its check re-running.
+11. **Fixed on 18 October 2026: Annex C's entries are mapped to vocabulary operations.** Each of the 83 entries now has a Vocabulary column naming the operations and types that carry its meaning, all checked to exist in Annex A. Entry 9.14 is about target-side SQL text in the escape hatch, not a source construct, and says so; it belongs in Annex D only, and is left in both until the owner confirms.
+12. **Fixed on 18 October 2026: the vocabulary follows the later decision on `rowversion`.** Annex A (version draft-2) maps `ROWVERSION` and `TIMESTAMP` to `binary(length, fixed)` and no longer lists them under `unsupported_type`, as [Which SQL Server versions does v1 support?][t26] decided. Their assignment from a database-wide counter is a property of the column, known from the catalog and applied by the write path, like identity. The vocabulary check still accounts for every type in the corpus.
 13. **The control database's tables and the run catalog's record format aren't designed.** [What does the catalog hold and how does conversion read it?][t8] left them to the build, along with the file export's exact form. They are build work, recorded here so it isn't left silently.
 
 ### Values left as versioned settings, with no number decided
@@ -1339,7 +1339,7 @@ Found while compiling this spec and checking each section against every ADR and 
 
 ### Statements in earlier records that later decisions replaced
 
-15. These are wording drifts, not open questions: the later decision is clear, and this spec follows it. They are listed so the earlier text can be corrected.
+15. These are wording drifts, not open questions: the later decision is clear, and this spec follows it. **On 18 October 2026 the map's three Notes and ADR 0017's list were corrected;** the two tickets' tables are corrected by the comments already on them.
     - **The map's "Running" Note** says model results are cached "on input + prompt version + model version". The key decided later also includes the rendered context's hash, the candidate variant, the tier and score, and the attempt number ([ADR 0009][adr9], [How does a run govern its model use?][t30]).
     - **The map's "Support library" Note** says "pinned per run". It is pinned exactly per delivered project, under versioned names ([ADR 0018][adr18]).
     - **The map's "No shortcuts at runtime" Note** says nothing is reported as converted "unless it reached Reconciled". "Converted" also needs a passed final validation ([ADR 0013][adr13]), as the map's Correctness Note already says.

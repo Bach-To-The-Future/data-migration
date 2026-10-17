@@ -8,7 +8,7 @@ The owner set a rule on 17 October 2026: every tool the product uses must be fre
 
 - **Containers.** The product runs on Docker Engine (or Podman) and never depends on Docker Desktop. Docker Desktop may still be used on the owner's development machine, where its licence permits.
 - **SQL Server connections** use Microsoft.Data.SqlClient (MIT), called from Python through pythonnet, for the runners and the extractor. The final validator uses Microsoft's JDBC driver, mssql-jdbc (MIT), so the two judges share no client. For versions these can't connect to (at least 2000, with the boundary confirmed in the build's VM tests), FreeTDS is the fallback for the runners and the extractor, and jTDS (LGPL) for the final validator, so the judges still share no client. jTDS is unmaintained and acceptable only against the isolated old-version test servers, never a client's production server or the extracted server. Where a fallback loses results after an error, the artefact's observation is incomplete: it cannot reach "Reconciled" ("Not reconcilable: incomplete observation") or pass final validation ("Not validated: incomplete observation").
-- **Already compliant:** Python, PySpark, Delta Lake, Postgres, pgvector, sqlglot, ScriptDom (MIT) and .NET, and Z3.
+- **Already compliant:** Python, PySpark, Delta Lake, Postgres, pgvector, sqlglot, ScriptDom (MIT) and .NET, pythonnet (MIT), Z3, WeasyPrint (BSD) with free fonts, and OpenJDK for Spark and the final validator.
 
 The other recorded exceptions are the source and target platforms themselves:
 
