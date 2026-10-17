@@ -23,7 +23,7 @@ Each engagement declares its policy, zero retention or the provider's default. U
 
 We chose this because a promise that holds only for some models or features would depend on configuration a client cannot see.
 
-The full decision is in the resolution of [How does a run govern its model use?](https://github.com/Bach-To-The-Future/data-migration/issues/30).
+The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/30#issuecomment-6235946119).
 
 ## Considered options
 
