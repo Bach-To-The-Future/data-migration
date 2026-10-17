@@ -195,7 +195,7 @@ Optional engagement input from the operator or the client's analyst that describ
 A property every output must keep, such as postings netting to zero, checked on both sides of a reconciliation.
 
 **Pre-existing issue**:
-A business invariant the original itself breaks. It is flagged beside the verdict and never changes it.
+A defect in the legacy logic itself, such as a business invariant the original breaks or a result that depends on the query plan. It is flagged beside the verdict and never changes it.
 _Avoid_: Bug (which could mean a conversion failure)
 
 **Remote tier**:
