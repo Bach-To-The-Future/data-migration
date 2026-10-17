@@ -20,7 +20,7 @@ We decided that each database is routed by its compatibility level:
 
 We chose this because reconciliation writes data and runs code. The only place it may do that is a server shown, by these checks, to hold nothing of the client's.
 
-The full decision is in the resolution of [Which SQL Server versions does v1 support?](https://github.com/Bach-To-The-Future/data-migration/issues/26).
+The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/26#issuecomment-6233615401).
 
 ## Considered options
 
