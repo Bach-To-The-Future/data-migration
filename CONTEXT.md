@@ -152,7 +152,7 @@ That at most one writer writes a table at any moment, converted or not, across e
 _Avoid_: Concurrency caveat, exclusive access
 
 **Write lease**:
-A claim a delivered job records on a table before its first write to it. A second converted writer that finds a live lease fails at once instead of proceeding.
+A claim a delivered job records on a table before its first write to it, kept live by a heartbeat and expiring when the heartbeat stops. A second converted writer that finds a live lease fails at once instead of proceeding.
 _Avoid_: Lock (which suggests the database enforces it)
 
 **Error class**:

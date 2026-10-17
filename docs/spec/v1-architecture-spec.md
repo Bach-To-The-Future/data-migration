@@ -208,7 +208,7 @@ In v1 the **operator** is a delivery engineer. Hosting, sign-in, licensing and b
 
 **Rules that go with the levels.**
 
-1. **Rules first.** An LLM step only attempts constructs no rule covers. If a rule's raised form fails a check, the faithful form is delivered and the rule is reported as faulty. A rule's failure is never handed to a model.
+1. **Rules first.** An LLM step only attempts constructs no rule covers. If a raising rule's output fails a check, the faithful form is delivered and the rule is reported as faulty; that failure is never handed to a model. A failure in a region produced by lowering or generation rules goes to repair, and its fix is kept as a repair patch ([section 9](#9-repair)).
 2. **When attempts run out:** lowering assist falls back to the flagged generation fallback, then manual work; raising falls back to the faithful form; repair falls back to manual work, with its evidence in the report.
 3. **Limits.** Attempt limits per step and a budget per artefact are fixed and versioned by the tool. Each escalation to a higher model tier counts as an attempt.
 4. **Levels can move.** A hard raising case an LLM step gets right every time across the corpus becomes a rule. Repair moves down to an LLM step if the build benchmark shows a single fixed-prompt call fixes as many failures.
@@ -555,8 +555,8 @@ The support library implements, for one target, the vocabulary operations that t
 **Counter state in production.**
 
 - **The state table.** A library-owned Delta table, in a schema the client chooses, holds the identity counters, the row-version counter (each database's `@@DBTS`), **write leases**, transaction start versions and scratch-table registrations. The project includes its definition, and the validator creates it in its fresh sandbox.
-- **Write leases** ([ADR 0021][adr21]). Each delivered job takes a lease on every table it writes before its first write. A second converted writer that finds a live lease fails at once with an error naming the table and the holder. This enforces the single-writer assumption among converted jobs; writers outside the converted code are still bound by it, and the sign-off says so.
-- **Recovery on start** ([ADR 0021][adr21]). At the start of every run, session state checks for unfinished transactions and scratch tables left by a crash and recovers them before any other work: it restores the recorded versions, drops the scratch tables and releases the leases. The recovery command ships in the project for manual use.
+- **Write leases** ([ADR 0021][adr21], amended). Each delivered job takes a lease on every table it writes before its first write. A lease records the job run that holds it and carries a **heartbeat**, refreshed by a background thread independent of the job's work, so a slow but live job never looks expired. A lease is **live** while its heartbeat is fresher than the expiry (10 minutes by default, versioned), and **expired** otherwise. A second converted writer that finds a live lease fails at once with an error naming the table and the holder. This enforces the single-writer assumption among converted jobs; writers outside the converted code are still bound by it, and the sign-off says so.
+- **Recovery on start** ([ADR 0021][adr21], amended). At the start of every run, session state recovers only its own job's unfinished transactions and scratch tables, and those under expired leases, never anything under a live lease, before any other work: it restores the recorded start versions, drops the scratch tables and releases the leases. A job that takes over an expired lease first recovers that lease's unfinished transactions and scratch tables, restoring their start versions, before any write. A crashed job's leases therefore block other writers only until they expire. The recovery command ships in the project for manual use.
 - **The counter initialisation command** must run at go-live and after any bulk load that bypasses the write wrappers; the report lists it as a required deployment step. Identity counters start at the highest existing value, honouring seed and increment. It takes an optional file of per-table starting values, exported by the client's DBA at cutover (`IDENT_CURRENT`, `@@DBTS`), and each counter starts from the larger of that value and the data's highest, because SQL Server's next value can be higher after deletes or rollbacks. Without the file it uses the data alone and warns, and the report lists every counter so initialised. The testing module and the validator run the command after loading test data, and exercise the leases and the recovery, which tests them.
 
 **The API manifest.** A machine-readable manifest of the library's API, versioned with it, gives for each helper its signature and meaning, the silent differences it handles, its twin, and the naive built-in it replaces (for mutation testing). It is the single source for the context builder, mutation testing and the documentation. The final validator never reads it.
@@ -665,7 +665,7 @@ Repair is the only agent outside the orchestrator: a model in a bounded loop tha
 - **What never goes to repair:** a blocked artefact; a failure classed as a testing-module defect (it does not count as a repair attempt); anything from the final validator, whose results never feed repair.
 - **After any repair, checks restart from layer 1.** A failure on a hold-out seed is disclosed to repair in full, those seeds are retired into the visible set, and fresh hold-out seeds are drawn for the next verdict.
 - **Repair patches** ([ADR 0008][adr8], amended). When repair fixes a region produced by deterministic lowering or generation rules, the patch is kept as a flagged **repair patch**, keyed by the hash of the region's inputs and reapplied on every regeneration while those inputs are unchanged. A changed input drops it, and the region is converted and checked afresh.
-- **A successful repair drafts a lesson** ([section 13](#13-lessons)); for a region produced by deterministic rules it also drafts a kind-5 lesson, a proposed rule, so the rule is fixed in a release.
+- **A successful repair drafts a lesson** ([section 13](#13-lessons)). For a region produced by deterministic rules it also records an **open problem for the maintainers**, a proposed rule, in the engagement's control database. It is not a lesson: maintainers fix the rule in a release, writing it without client code.
 
 ### 10. A run: plan, phases and dependencies
 
@@ -739,11 +739,11 @@ It never skips a step, raising included. The cost of so narrow a choice is delib
 
 | Shown | Never shown |
 |---|---|
-| Each item's status, last step, failing layer and dimension, attempts and tiers used, complexity score, cluster and structural-pattern identifiers, cost so far; the run's budget left, elapsed time and ready count | Source text, generated code, failing inputs, seeds of any kind, the final validator's evidence (only its pass or fail) |
+| Each item's status, last step, failing layer and dimension, whether the failing region was produced by deterministic rules or by an AI step, attempts and tiers used, complexity score, cluster and structural-pattern identifiers, cost so far; the run's budget left, elapsed time and ready count | Source text, generated code, failing inputs, seeds of any kind, the final validator's evidence (only its pass or fail) |
 
 The agentic orchestrator's own model calls follow [ADR 0009][adr9] like every other call: assembled by the context builder, cached, checked for retention, and run at the top tier, versioned with the tier table. They draw on a reserved share of the run's ceiling, 5% by default and versioned; when that is spent, the agentic orchestrator falls back to the baseline's policy for the rest of the run ([ADR 0020][adr20], amended).
 
-**The plain-pipeline baseline,** scripted as a careful engineer would: take ready items in run-plan order, pilot first, smallest complexity score first; on a failed check, retry one tier up until the top tier, then repair, then give up at the limit, never early; requeue a blocked item when its callee converts; when the ceiling binds, allocate the budget in run-plan order.
+**The plain-pipeline baseline,** scripted as a careful engineer would: take ready items in run-plan order, pilot first, smallest complexity score first; on a failure in a region produced by an AI step, retry one tier up until the top tier, then repair; on a failure in a region produced by deterministic rules, go straight to repair; give up at the limit, never early; requeue a blocked item when its callee converts; when the ceiling binds, allocate the budget in run-plan order.
 
 **A run keeps one orchestrator throughout,** so its decisions stay replayable. An operator who switches stops the run and starts again with the other orchestrator; every completed model call replays from the cache.
 
@@ -830,11 +830,13 @@ Decided in: [What does the conversion report look like?][t9], with requirements 
 **The client sign-off document,** a one-page verdict letter for a non-technical client and a business analyst:
 
 - a headline sentence and a bar;
-- four groups by what the reader is asked to do: converted and checked; not converted yet (our work); waiting on another item; manual work;
-- what we need from you (for example widening the extraction, exporting identity starting values);
+- five groups by what the reader is asked to do: converted and checked; not converted yet (our work); waiting on another item; waiting on you; manual work;
+- what we need from you: the requests that unblock the items waiting on you, and others such as exporting identity starting values;
 - issues found in the existing system (pre-existing issues);
 - the single-writer condition, stated once as "at most one writer per table at any moment, converted or not, across every project in your environment", with what the tool enforces (write leases between converted jobs) and what it cannot (other writers);
 - one signature block.
+
+**A preview run's sign-off** shows every item under one heading, "Not reconciled: preview run", and has **no signature block**, since nothing in it can be accepted.
 
 A table of business areas is added when a run spans several. At scale, each group is summarised by count and capped at 20 items, pointing to the engineering report.
 
@@ -868,8 +870,11 @@ A table of business areas is added when a run spans several. At scale, each grou
 | Converted | Converted and checked |
 | Failed, Failed final validation, Weakly tested, Blocked by a testing-module defect, Not validated, Not reconcilable: incomplete observation, Awaiting final validation | Not converted yet (our work) |
 | Blocked by (callee) | Waiting on another item |
-| Not reconcilable locally, where widening the extraction or providing a remote tier would fix it | What we need from you |
-| Not reconcilable locally otherwise; Contains manual work; Recognised, not converted | Manual work | **Construct statuses:** converted, or converted with a caveat; raised; manual work; failed; blocked. A construct may also be tagged as produced by a model, as using the escape hatch, or as reviewer-supplied. **Rollup:** construct, artefact, business area (the schema by default, mappable per engagement), run. Recognised artefacts count in the totals as manual work.
+| Not reconcilable locally, where widening the extraction or providing a remote tier would fix it | Waiting on you (its request listed under "What we need from you") |
+| Not reconcilable locally otherwise; Contains manual work; Recognised, not converted | Manual work |
+| Not reconciled (preview run) | Not reconciled: preview run, the only heading in a preview run's sign-off |
+
+**Construct statuses:** converted, or converted with a caveat; raised; manual work; failed; blocked. A construct may also be tagged as produced by a model, as using the escape hatch, or as reviewer-supplied. **Rollup:** construct, artefact, business area (the schema by default, mappable per engagement), run. Recognised artefacts count in the totals as manual work.
 
 **Wording.**
 
@@ -1091,7 +1096,7 @@ Decided in: [How does reconciliation generate data and compare results?][t13], [
 **Comparing.**
 
 - **Rows** are compared as multisets; under a top-level `ORDER BY` the order is checked on the sort keys only, ties in any order. Column names exactly; types through the type mapping.
-- **Values:** decimals and money exact at the mapped scale; strings exact, case and trailing spaces included; dates and times exact at the source type's precision; floats exact, except that silent-difference entry 3.13 gives a tolerance for columns whose lineage includes a floating-point aggregation, named in the evidence. One more catalogued tolerance: 100 ns for the seventh fractional digit of `datetime2(7)`, `time(7)` and `datetimeoffset(7)` columns (entry 4.3), reported per artefact. Apart from these two, no tolerance applies to a whole type or column. Lineage is the original's data flow, found by the parser.
+- **Values:** decimals and money exact at the mapped scale; strings exact, case and trailing spaces included; dates and times exact at the source type's precision; floats exact, except that silent-difference entry 3.13 gives a tolerance for columns whose lineage includes a floating-point aggregation, named in the evidence. One more catalogued tolerance: 100 ns for the seventh fractional digit of `datetime2(7)` and `datetimeoffset(7)` columns (entry 4.3), reported per artefact. `time(7)` needs none: it is kept as a seven-digit string. Apart from these two, no tolerance applies to a whole type or column. Lineage is the original's data flow, found by the parser.
 - **Exclusions,** each listed in the verdict: `NEWID()` and `RAND()` outputs and everything derived from them; for `TOP` without `ORDER BY`, the count must match and every converted row must belong to the full qualifying set (from a parser-made variant run on SQL Server as a check, never as the oracle); for case-insensitive `GROUP BY` and `DISTINCT`, a value matches if case-insensitively equal and that spelling occurs in the group's input. Identity values are compared, because the wrapper reproduces them. Row versions are compared by property: every written row gets a new, strictly larger value, unchanged rows keep theirs.
 - **Plan-dependent constructs** are checked by property, and each occurrence is reported as a pre-existing issue in the legacy logic: ranking over keys that aren't unique must be a valid ranking (consistent with the order keys, ties in any order); `SELECT @v = @v + col` must combine exactly the qualifying values in some order. Outputs derived from them: a filter on the rank keeps only rows SQL Server could have kept under some valid order of ties; an accumulated value passed on as-is must equal some ordering of the qualifying values; any other downstream use is compared by count, type and nullness only on seeds with ties, listed as "not compared by value". **Tie-free seeds** (unique order keys; a single qualifying row or identical qualifying values), derived from the original's structure, feed visible and hold-out seeds, and on them every output is compared by value.
 - **Errors and messages:** system errors match on number and severity (text compared and reported, not deciding); errors the code raises itself (`THROW`, `RAISERROR` above severity 10) match on number, state and exact text; messages are compared and reported, not deciding. After an error the original continued past, where ADR 0004 makes converted code stop, only "an error was raised" is compared, listed as a caveat.
@@ -1160,7 +1165,7 @@ Decided in: [How does the final independent validator work?][t32], [Observe the 
 
 - **Inputs, and only these:** the original source from the snapshot; the delivered project exactly as shipped; the snapshot's raw capture, from which it rebuilds the original's database with its own code, never the catalog's parsed facts. It never sees the representation, source links, the run plan, the testing module's verdicts, seeds or data, lessons, worked examples, repair history or intent summaries, and never reads the support library's API manifest or the silent-differences catalogue.
 - **A fresh sandbox,** running the delivered project from its own packaging, so packaging and environment faults are caught. It follows the same version routing, and needs its own path on any remote tier or old-version test server, with its own login and scratch databases.
-- **Shares no code with the testing module.** Its own generator: coverage-guided random generation from the raw definitions, with a boundary list of its own, feedback from coverage read through Extended Events by its own code, tables from empty up to 5,000 rows, and a fixed input budget. Its own observations: after every call it snapshots every table in its database, with result sets, output parameters, return value, errors and messages. Its own comparison: exact on every value through the published representation rules, with one floating-point bound for aggregates set by its own authors. Its own client: mssql-jdbc, reading on after each error, with jTDS as its fallback for old test servers, cross-checked against Extended Events' row counts. Only the shipped support library is shared, because delivered code imports it; it is part of what is judged. In the build it is written by an agent that has not seen the testing module's code.
+- **Shares no code with the testing module.** Its own generator: coverage-guided random generation from the raw definitions, with a boundary list of its own, feedback from coverage read through Extended Events by its own code, tables from empty up to 5,000 rows, and a fixed input budget. Its own observations: after every call it snapshots every table in its database, with result sets, output parameters, return value, errors and messages. Its own comparison: exact on every value through the published representation rules, with one floating-point bound for aggregates set by its own authors. It applies no other tolerance: the representation rules state that `datetime2(7)` and `datetimeoffset(7)` values keep six fractional digits, so it compares them at six digits. Its own client: mssql-jdbc, reading on after each error, with jTDS as its fallback for old test servers, cross-checked against Extended Events' row counts. Only the shipped support library is shared, because delivered code imports it; it is part of what is judged. In the build it is written by an agent that has not seen the testing module's code.
 - **Without the shared parser:** nondeterminism is found by running each input on the original three times, varying database-scoped `MAXDOP` and the physical load order; output that differs is compared only by row count, types and nullness. The cost: an unordered `TOP` that happens to agree three times can make it fail a correct conversion, which then waits for a release; the defect notice names the output. Time-derived output is found by observation, through its own execution window. A case-insensitive value matches if equal under the column's collation and that spelling occurs in its own input.
 - **Coverage** of the original comes from Extended Events through its own code, drives its generator, and is reported beside the testing module's, never merged.
 - **Deterministic:** SQL Server execution is the only judge, and no model decides anything.
@@ -1385,24 +1390,26 @@ The first version of this spec (commit 2e03553) listed 15 items here. An indepen
 | 14. Values with no number | Still open: item 3 above |
 | 15. Wording drifts in earlier records | Fixed: the map's Notes and [ADR 0017][adr17]'s list corrected |
 
+A second Fable review checked the commit that applied these decisions and found nine points; the owner's answers (S1 to S9) are recorded in the same ticket and applied here: lease liveness and recovery limits (S1), a fifth sign-off group and the preview sign-off (S2), the baseline and the observation for deterministic regions (S3), repair's proposed rule as an open problem, not a lesson (S4), rule 1 narrowed to raising rules (S5), the validator comparing at six digits through the representation rules (S6), `time(7)` out of the tolerance (S7), and the annexes pointing to Annex G (S9).
+
 **The review's findings:**
 
 | Finding | Outcome |
 |---|---|
 | R1. The single-writer assumption ignored concurrent converted jobs | Restated across every project and enforced by **write leases** ([ADR 0021][adr21]); in the sign-off |
 | R2. `retry_up` against engine escalation | The engine escalates inside a step; `retry_up` re-runs the AI step behind a failing region, refused for deterministic regions ([section 11](#11-the-orchestrator-interface)) |
-| R3. Repairs to deterministic output were lost on regeneration | Kept as **repair patches**, plus a proposed-rule lesson ([ADR 0008][adr8], amended) |
+| R3. Repairs to deterministic output were lost on regeneration | Kept as **repair patches**, plus an open problem for the maintainers proposing a rule fix ([ADR 0008][adr8], amended) |
 | R4. Crash recovery needed the run catalog in production | Automatic recovery at the start of every run from the state table; the command still ships ([ADR 0021][adr21]) |
 | R5. The sign-off claimed "behaved like the original" | A flag, "differs from the original after an error", and "except where flagged" ([ADR 0012][adr12], amended) |
 | R6. `datetime2(7)` and `datetimeoffset` were lossy | Offset in a companion column, listed as a target-table requirement; a catalogued 100 ns tolerance for the seventh digit |
-| R7. Catalogue entries with no treatment | Helpers for 2.7, 2.11, 3.6 and 3.10, with a caveat where a helper cannot match exactly |
+| R7. Catalogue entries with no treatment | Helpers for 2.7, 2.11, 3.6 and 3.10; where a helper cannot match SQL Server exactly, the difference is a caveat in the report |
 | R8. Client names could reach global lessons | Promotion rejects catalog identifiers; repair's hypothesis stays client-only ([ADR 0010][adr10], amended) |
 | R9. When the ceiling binds | Defined; `allocate` sets maxima; the agent's calls draw on a reserved 5% ([ADR 0020][adr20], amended) |
 | R10. The agent was tuned on its benchmark corpus | The development corpus is split into tuning and benchmark halves |
 | R11. Missing status rows | Added: blocked in validation, awaiting final validation, fell back to the faithful form |
 | R12. Consumers of the validator's bit | Five permitted consumers listed ([ADR 0013][adr13], amended) |
 | R13. The cross pairings were not walked | Annex B walks Oracle to PySpark and SQL Server to Snowflake; targets declare unrepresentable types unsupported ([ADR 0001][adr1], amended) |
-| R14. Statuses to sign-off groups | A fixed mapping ([section 15](#15-the-conversion-report)) |
+| R14. Statuses to sign-off groups | A fixed mapping to five groups, with a separate preview sign-off without a signature block ([section 15](#15-the-conversion-report)) |
 | R15. "Checked" against "attested" | Checked on Bedrock and Vertex, attested on the direct API, with its 2-year exception stated ([ADR 0016][adr16], amended) |
 | R16. Result shapes at levels 80 and 90 | Remote tier, else the administrator's export, else "could not be described" ([section 3](#3-extraction-and-the-catalog)) |
 | R17. A double tie, and repair's level | A double tie makes the baseline the default; a repair arm added ([Build Commitments](#build-commitments)) |

@@ -2,9 +2,9 @@
 
 Part of the [v1 architecture spec](v1-architecture-spec.md). This half says where Spark's built-ins differ from the meaning SQL Server gives the construct, and which built-in, if any, reproduces it. The support library, comparison tolerances and mutation testing use it.
 
-Entries are copied unchanged from [the research catalogue](../research/tsql-spark-silent-differences.md), the output of [Where do T-SQL and Spark silently disagree?](https://github.com/Bach-To-The-Future/data-migration/issues/6), and keep its IDs, so an entry's two halves can be read side by side. The split follows [ADR 0019](../adr/0019-shared-mappings-are-split-by-source-and-by-target.md). Sections 10 (behaviours that agree) and 11 (what could not be established) stay in the research catalogue, with its method and evidence labels.
+Entries are copied unchanged from [the research catalogue](../research/tsql-spark-silent-differences.md), the output of [Where do T-SQL and Spark silently disagree?](https://github.com/Bach-To-The-Future/data-migration/issues/6), and keep its IDs, so an entry's two halves can be read side by side. The split follows [ADR 0019](../adr/0019-shared-mappings-are-split-by-source-and-by-target.md). Sections 10 (behaviours that agree) and 11 (what could not be established) are in [Annex G](annex-g-agreements-and-tested-differences.md); the research catalogue keeps its method and evidence labels.
 
-Fourteen entries were marked "Inferred" from documentation; thirteen were later confirmed on SQL Server and local Spark, and entry 8.5 was refuted (no difference). Those results are in [`corpus/differences/results.md`](../../corpus/differences/results.md), not in the entries below.
+Fourteen entries were marked "Inferred" from documentation; thirteen were later confirmed on SQL Server and local Spark, and entry 8.5 was refuted (no difference). Those results are in [Annex G](annex-g-agreements-and-tested-differences.md), not in the entries below.
 
 
 ## 1. ANSI mode

@@ -2,9 +2,9 @@
 
 Part of the [v1 architecture spec](v1-architecture-spec.md). This half says how each SQL Server construct behaves, which lowering resolves into an operation with an explicit meaning, and which the test-data generator's edge-case pools exercise.
 
-Entries are copied unchanged from [the research catalogue](../research/tsql-spark-silent-differences.md), the output of [Where do T-SQL and Spark silently disagree?](https://github.com/Bach-To-The-Future/data-migration/issues/6), and keep its IDs, so an entry's two halves can be read side by side. The split follows [ADR 0019](../adr/0019-shared-mappings-are-split-by-source-and-by-target.md). Sections 10 (behaviours that agree) and 11 (what could not be established) stay in the research catalogue, with its method and evidence labels.
+Entries are copied unchanged from [the research catalogue](../research/tsql-spark-silent-differences.md), the output of [Where do T-SQL and Spark silently disagree?](https://github.com/Bach-To-The-Future/data-migration/issues/6), and keep its IDs, so an entry's two halves can be read side by side. The split follows [ADR 0019](../adr/0019-shared-mappings-are-split-by-source-and-by-target.md). Sections 10 (behaviours that agree) and 11 (what could not be established) are in [Annex G](annex-g-agreements-and-tested-differences.md); the research catalogue keeps its method and evidence labels.
 
-Fourteen entries were marked "Inferred" from documentation; thirteen were later confirmed on SQL Server and local Spark, and entry 8.5 was refuted (no difference). Those results are in [`corpus/differences/results.md`](../../corpus/differences/results.md), not in the entries below.
+Thirteen of this half's entries were marked "Inferred" from documentation; twelve were later confirmed on SQL Server and local Spark, and entry 8.5 was refuted (no difference). The fourteenth inferred entry, 9.14, is in Annex D only. Those results are in [Annex G](annex-g-agreements-and-tested-differences.md), not in the entries below.
 
 Entry 9.14 is in Annex D only: it concerns SQL text the target embeds in its escape hatch, not a SQL Server construct (decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28)). So this half has 82 entries and Annex D 83.
 

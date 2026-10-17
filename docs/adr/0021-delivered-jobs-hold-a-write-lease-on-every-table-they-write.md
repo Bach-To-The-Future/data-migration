@@ -32,3 +32,13 @@ The full decision is in the resolution of [Independent review of the assembled s
 - **The state table holds counters, leases, transaction start versions and scratch registrations.** Its schema is shared by every library version and is only ever extended ([ADR 0018](0018-the-support-library-ships-as-source-vendored-per-project.md)).
 - **A job that dies holds its leases** until the next run's start-up recovery releases them, or an operator runs the recovery command.
 - **The testing module and the final validator exercise the lease and the recovery,** as they exercise the counter initialisation command.
+
+## Amendment, 18 October 2026: which leases are live, and what recovery may touch
+
+The second independent review found that recovery could undo a job that was still running. Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding S1:
+
+- **Liveness.** Each lease records the job run that holds it and a heartbeat, refreshed by a background thread independent of the job's work, so a slow but live job never looks expired. A lease is live while its heartbeat is fresher than the expiry (10 minutes by default, versioned), and expired otherwise.
+- **What recovery touches.** Start-up recovery touches only the starting job's own unfinished entries and entries under expired leases, never anything under a live lease.
+- **Taking over an expired lease** first recovers that lease's unfinished transactions and scratch tables, restoring their start versions, before any write.
+
+A crashed job's leases therefore block other writers only until they expire.
