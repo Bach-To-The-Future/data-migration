@@ -281,6 +281,14 @@ _Avoid_: Agent (unless the model chooses its own next step)
 One of several outputs an LLM step produces for the same input. Those that pass every check are kept, and a fixed rule picks one.
 _Avoid_: Sample, attempt
 
+**Model tier**:
+A named pairing of a model and an effort level that an AI step can be routed to. Tiers are ordered; a retry after a failed check moves one tier up.
+_Avoid_: Model size, quality level
+
+**Complexity score**:
+A number computed by code from the intermediate representation of the fragment or region an AI step handles, which decides the lowest tier the step may use.
+_Avoid_: Difficulty (which suggests a judgement)
+
 **Agent**:
 A model in a loop that chooses its own next step and tools.
 _Avoid_: Using "agent" for any module or any component that calls an LLM
