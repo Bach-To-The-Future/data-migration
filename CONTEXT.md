@@ -232,6 +232,10 @@ _Avoid_: Done, migrated, translated
 **Audit sample**:
 Unchanged artefacts that a run validates again with fresh seeds, chosen at random, although their earlier validation result still stands.
 
+**Release hold-out**:
+A fixed part of the public corpus never used to develop the tool, on which each release's acceptance criteria are measured and its headline numbers are taken.
+_Avoid_: Hold-out seeds (which are test data inside one verification), test set
+
 **Not reconciled**:
 The report status of every artefact in a preview run. It is never reported as converted.
 
