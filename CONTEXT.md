@@ -232,6 +232,10 @@ _Avoid_: Done, migrated, translated
 **Audit sample**:
 Unchanged artefacts that a run validates again with fresh seeds, chosen at random, although their earlier validation result still stands.
 
+**Development corpus**:
+The sample corpus and the public corpus minus the release hold-out: everything the tool may be developed, calibrated and benchmarked on.
+_Avoid_: Training set
+
 **Release hold-out**:
 A fixed part of the public corpus never used to develop the tool, on which each release's acceptance criteria are measured and its headline numbers are taken.
 _Avoid_: Hold-out seeds (which are test data inside one verification), test set
