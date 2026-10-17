@@ -13,7 +13,7 @@ Converted code imports the support library at runtime, so a client can't run its
 
 We chose this because a client will not migrate onto code it cannot keep running, read or maintain if the vendor goes away. Exact pinning per project keeps every project running on the exact code it was verified with.
 
-The full decision is in the resolution of [How is the support library packaged, versioned and tested?](https://github.com/Bach-To-The-Future/data-migration/issues/22).
+The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/22#issuecomment-6236257597).
 
 ## Considered options
 
