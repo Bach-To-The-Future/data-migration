@@ -1366,6 +1366,13 @@ Three items found while compiling this spec need design work in the build, not a
 
    Each is set by measurement where the acceptance criteria require it.
 
+### Awaiting the owner's decision
+
+A final review of the lease and sign-off changes, on 18 October 2026, raised two questions that need the owner's decision. They are recorded on [Independent review of the assembled spec][t28]. Until they are answered, a builder follows the stricter reading given here.
+
+4. **When a restarted run may recover its own job's earlier run.** A lease belongs to a job run. A run restarted within the expiry after a crash finds the earlier run's lease still live, so "never anything under a live lease" would make it wait until expiry. Nothing yet says whether, and how, it may tell a crashed earlier run from a live one sooner. Stricter reading: it waits for the expiry, failing at once with an error that says when the lease expires.
+5. **Whether the manual recovery command obeys the live-lease rule.** Section 7 limits only start-up recovery. Stricter reading: the command follows the same rule, own entries and expired leases only, and does nothing under a live lease.
+
 ### Decided after compilation
 
 The first version of this spec (commit 2e03553) listed 15 items here. An independent review on Claude Fable then found 24 more. The owner decided all of them on 18 October 2026; the decisions are recorded in [Independent review of the assembled spec][t28], and applied in this spec, the ADRs, the glossary and the map.

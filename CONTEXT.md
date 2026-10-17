@@ -130,7 +130,7 @@ The one deterministic record of a run's results from which both report documents
 _Avoid_: Report (when the data, not a document, is meant)
 
 **Sign-off document**:
-The short report for the client and their analysts, saying in plain words what is converted, what is not and why, and what the client must do, with a signature block that accepts only the converted items.
+The short report for the client and their analysts, saying in plain words what is converted, what is not and why, and what the client must do, with a signature block that accepts only the converted items. A preview run's sign-off document has no signature block.
 _Avoid_: Summary, executive report
 
 **Engineering report**:
