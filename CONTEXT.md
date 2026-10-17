@@ -202,6 +202,16 @@ _Avoid_: Bug (which could mean a conversion failure)
 A real target platform account, provided for an engagement, where reconciliation runs what the sandbox cannot. It receives synthetic data only.
 _Avoid_: Cloud sandbox, production
 
+**Validation result**:
+The final validator's unchangeable record for one artefact: passed, failed or not validated. It is kept beside the verdict, never merged into it.
+
+**Converted**:
+The status of an artefact whose verdict is "Reconciled" and whose validation result is "passed". No other combination counts.
+_Avoid_: Done, migrated, translated
+
+**Audit sample**:
+Unchanged artefacts that a run validates again with fresh seeds, chosen at random, although their earlier validation result still stands.
+
 **Not reconciled**:
 The report status of every artefact in a preview run. It is never reported as converted.
 
