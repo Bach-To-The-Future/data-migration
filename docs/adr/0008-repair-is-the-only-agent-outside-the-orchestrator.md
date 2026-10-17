@@ -24,3 +24,7 @@ The full decision, with the level, the evidence and what would move each compone
 ## Amendment, 17 October 2026: no narration of the report
 
 The fifth place where AI takes part narrows from "narrating the report, with intent summaries" to **writing intent summaries** only. Both report documents are built from fixed sentence templates filled from the report data, so no model writes report prose. An intent summary appears in the client sign-off document only if a deterministic check passes: every table it names is in the artefact's read and write set, and its action verbs match the artefact's effects. Otherwise a template line built from the generated description is shown. The count of places stays at five. Decided in [What does the conversion report look like?](https://github.com/Bach-To-The-Future/data-migration/issues/9).
+
+## Amendment, 18 October 2026: repair patches to deterministic regions
+
+When repair fixes a region produced by deterministic lowering or generation rules, its patch is kept as a flagged **repair patch**, keyed by the hash of the region's inputs and reapplied on every regeneration while those inputs are unchanged. Repair also drafts a kind-5 lesson, a proposed rule for the maintainers, so the rule itself is fixed in a release. A changed input drops the patch, and the region is converted and checked afresh. Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding R3.

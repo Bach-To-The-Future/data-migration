@@ -148,8 +148,12 @@ What converted code carries in place of the legacy database session: temp tables
 _Avoid_: Context (which the context builder assembles), connection
 
 **Single-writer assumption**:
-That during a run, converted code is the only writer to the tables it writes. Emulated transactions, assigned identity values and constraint enforcement are correct only while it holds.
+That at most one writer writes a table at any moment, converted or not, across every project in an environment. Emulated transactions, assigned identity values and constraint enforcement are correct only while it holds. Converted jobs enforce it among themselves with write leases.
 _Avoid_: Concurrency caveat, exclusive access
+
+**Write lease**:
+A claim a delivered job records on a table before its first write to it. A second converted writer that finds a live lease fails at once instead of proceeding.
+_Avoid_: Lock (which suggests the database enforces it)
 
 **Error class**:
 A neutral kind of failure the core names, such as divide by zero or key violation. Each target maps its runtime's failures to error classes, and each source maps error classes to its own error codes.
@@ -194,7 +198,7 @@ Seeds for generating test data that are kept from every step able to change the 
 _Avoid_: Test set, validation set
 
 **Final validator**:
-An audit run after the consistency pass that executes the delivered project in a fresh sandbox against the original, sharing no code with the testing module and nothing of its evidence. An artefact that fails it is not converted.
+An independent audit that executes the delivered project in a fresh sandbox against the original, sharing no code with the testing module and nothing of its evidence. It runs after the pilot, on demand to confirm a lesson, and on the whole project after the consistency pass. An artefact that fails it is not converted.
 _Avoid_: Second testing module, QA pass
 
 **Data-quality dimension**:
@@ -215,7 +219,7 @@ A defect in the legacy logic itself, such as a business invariant the original b
 _Avoid_: Bug (which could mean a conversion failure)
 
 **Remote tier**:
-A real platform instance, source or target, provided for an engagement, where reconciliation runs what the sandbox cannot. It receives synthetic data only and is never a production system.
+A real platform instance, source or target, provided for an engagement, where reconciliation runs what the sandbox cannot. It receives synthetic data only, is never a production system, and the tool refuses to use it unless its guard's checks pass.
 _Avoid_: Cloud sandbox, production
 
 **Tester login**:
@@ -258,13 +262,17 @@ A set of artefacts used to judge the tool. The sample corpus is written for this
 
 ### Learning
 
+**Repair patch**:
+A fix repair made to a region produced by deterministic rules, kept and reapplied on every regeneration while the region's inputs are unchanged, and flagged as model-produced.
+_Avoid_: Hand edit, override
+
 **Lesson**:
-A recorded correction the tool applies to later conversions: a trigger, the symptom it answers, a fix, its evidence and a status. A reviewer's fix is a lesson with a human source.
+A recorded correction the tool applies to later conversions: a lesson pattern, the symptom it answers, a fix, its evidence and a status. A reviewer's fix is a lesson with a human source.
 _Avoid_: Rule (which is fixed code in the tool), memory, feedback
 
-**Trigger**:
+**Lesson pattern**:
 The structural pattern on the intermediate representation that decides where a lesson applies. Names and literals in it are placeholders, and it matches exactly, never by similarity.
-_Avoid_: Condition, match rule
+_Avoid_: Trigger (which is a database trigger), condition, match rule
 
 **Global lesson**:
 A lesson made of abstract patterns only, with no client code, names or data, shared by every engagement through the tool's releases.

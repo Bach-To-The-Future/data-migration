@@ -24,3 +24,7 @@ The terms used here (intermediate representation, lowering, raising, generation,
 - **Queries are relational steps, not SQL clauses**, keeping the source's names and order. PySpark's DataFrame API is itself a chain of relational steps, so generation for the first target is close to one-to-one.
 - **Lowering depends on the catalog** for types, collations and scopes, so nothing can be converted without an extraction first.
 - **One place still holds pairwise knowledge:** the fallback in which an LLM step returns target code for an opaque fragment. Its output is always flagged in the report.
+
+## Amendment, 18 October 2026: types a target cannot represent
+
+A target that cannot represent a vocabulary type declares it unsupported, as it does for an operation, and anything touching a value of that type is manual work on that target. Found by the independent review (finding R13), decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28).

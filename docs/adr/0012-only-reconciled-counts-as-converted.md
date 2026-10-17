@@ -27,3 +27,7 @@ The owner set this as a standing rule for the map on 16 October 2026; see the No
 ## Amendment, 16 October 2026
 
 "Converted" now also requires passing final validation: an artefact counts as converted only if its verdict is "Reconciled" **and** it passes the independent final validator. "Failed final validation" is one more status reported under its own name. See [ADR 0013](0013-an-independent-final-validator.md).
+
+## Amendment, 18 October 2026: artefacts that differ after an error
+
+An artefact converted under [ADR 0004](0004-stop-at-first-error-unless-at-at-error-is-read.md), stopping where the original carried on after an error, still counts as converted if it reconciles and passes final validation. It carries a flag shown in the client sign-off document beside the item: "differs from the original after an error". The sign-off's headline sentence adds "except where flagged". Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding R5.

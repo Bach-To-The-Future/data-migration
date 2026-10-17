@@ -6,6 +6,8 @@ Entries are copied unchanged from [the research catalogue](../research/tsql-spar
 
 Fourteen entries were marked "Inferred" from documentation; thirteen were later confirmed on SQL Server and local Spark, and entry 8.5 was refuted (no difference). Those results are in [`corpus/differences/results.md`](../../corpus/differences/results.md), not in the entries below.
 
+Entry 9.14 is in Annex D only: it concerns SQL text the target embeds in its escape hatch, not a SQL Server construct (decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28)). So this half has 82 entries and Annex D 83.
+
 The **Vocabulary** column names the operations and types in [Annex A](../spec-drafts/operation-vocabulary.md) that carry each entry's meaning. Lowering resolves the construct into them, using catalog types and collations; where meaning depends on operand types, it chooses the operation that means exactly that. A comparison rule is the case, accent and trailing-space behaviour taken from SQL Server's collation precedence.
 
 ## 1. ANSI mode
@@ -134,7 +136,6 @@ The **Vocabulary** column names the operations and types in [Annex A](../spec-dr
 | 9.11 | `SELECT … INTO #tmp FROM src`, then `src` is modified, then `#tmp` is read | `create_temp_table` from a query (a snapshot) | `#tmp` is a table holding the rows as they were ([SELECT INTO][m-selectinto]) | Both |
 | 9.12 | `UPDATE t SET x = RAND()` | `random_number` | Every affected row gets the same value ([RAND][m-rand]) | Both |
 | 9.13 | `SELECT @v = col FROM t` | `assign_from_rows` | Several rows: `@v` gets the last value returned. No rows: `@v` keeps its previous value ([SELECT @local_variable][m-selectvar]) | Both |
-| 9.14 | `'C:\temp\new'` inside embedded SQL text (the escape hatch, `expr`, `selectExpr`) | None: this is about target-side SQL text in the escape hatch, not a source construct | Backslash is an ordinary character: the constants page defines no backslash escape sequences ([constants][m-constants]) | Inferred |
 
 ## Sources
 

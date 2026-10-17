@@ -12,7 +12,7 @@ Every source works with every target through the core. Nothing is written per pa
 
 | Part | What it is | SQL Server |
 |---|---|---|
-| Extractor | Fills the catalog's neutral skeleton from a live server, files, or both, keeping the four promises: read-only, never runs client code, never reads a row, records what it couldn't extract | Decided extractor, `VIEW DEFINITION` grants |
+| Extractor | Fills the catalog's neutral skeleton from a live server, files, or both, keeping all six promises: a read-only connection; never executes client code; never reads a row of a client table; records what it couldn't extract; a login that never holds the right to execute client code; and a check of its own permissions before reading, failing loudly if any is missing | Decided extractor, `VIEW DEFINITION` grants |
 | Extension fields | Source-specific fields in a separate area on each object, never changing the skeleton's meaning | SQL Server extension area |
 | Raw capture | Every metadata view it reads, captured wholesale, for the final validator | `sys.*` views, system tables on 2000 |
 | Name resolver | The source's own name-resolution rules | |
@@ -55,6 +55,7 @@ Every source works with every target through the core. Nothing is written per pa
 
 - **The vocabulary version** they implement.
 - **The operations, types and node kinds they add.** These are additions only, never a change to what an existing entry means.
+- **For a target, what it doesn't support.** A target that cannot handle an operation, or cannot represent a type, declares it unsupported. Anything using it is manual work on that target, and the report says so. (The rule for types was added on 18 October 2026, in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28).)
 
 ## Oracle PL/SQL as a second source
 
@@ -116,6 +117,47 @@ Everything fits as a target responsibility. No core change beyond those [ADR 001
 | Clients | Python connector and JDBC (Apache 2.0) | One for the testing module, one for the validator |
 | Mutation | SQL | Operators applied to the parsed SQL |
 | Static check | No local compiler | Parsing locally; compiling in the account |
+
+## The cross pairings
+
+Added on 18 October 2026, in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28). The walks above check Oracle against the vocabulary and Snowflake against SQL Server's constructs. These two check the pairings that actually test "only additions to the core": a new source on the existing target, and the existing source on a new target. Paper only.
+
+### Oracle PL/SQL to PySpark
+
+What the PySpark target does with each addition Oracle makes. Nothing changes in the core; where PySpark cannot represent something, it declares it unsupported.
+
+| Oracle addition | PySpark target |
+|---|---|
+| `record(fields)` | A struct value; a struct column inside a DataFrame |
+| `collection(kind, key, element)` | Held in session state as a typed Python collection in driver memory, through support-library helpers for get, set, delete, count, exists and iterate. `BULK COLLECT` streams rows into it, flagged for driver memory like a faithful cursor |
+| `NUMBER(p, s)` with declared precision and scale | `DECIMAL(p, s)` |
+| `NUMBER` with no declared scale (floating scale) | Declared unsupported: Spark's decimal has a fixed scale, so values could be cut. Anything touching it is manual, unless lowering proves a precision and scale that holds every value |
+| Interval types | Spark's ANSI interval types (year-month and day-time) |
+| Timestamp with a named time zone | `TIMESTAMP` plus a companion column holding the zone name, listed as a target-table requirement, as for SQL Server's `datetimeoffset` |
+| `row_locator` (`ROWID`) | Declared unsupported: manual |
+| Packages and package state | Package variables live in session state, keyed by package, initialised on first use in a run, as package state is per session |
+| `assign_exactly_one_row`, `SQL%ROWCOUNT` | Session-state helpers: the first raises the error classes `no_data_found` and `too_many_rows`; the second is a counter that only SQL statements reset, beside `rows_affected` |
+| `FORALL … SAVE EXCEPTIONS` | A helper that runs each write through the write wrapper, collects the failures and raises them together at the end |
+| `raise_exception(code, message)` | An exception carrying the error class and the source's code, mapped by the source's half of the error mapping |
+| `autonomous_block` | Its writes are kept out of the enclosing transaction's restore. If it writes a table the enclosing transaction also writes, compensating restore cannot separate them, and the block is manual |
+| `hierarchical_query` (`CONNECT BY`) | An iterative helper, like recursive common table expressions, keeping depth-first sibling order, `LEVEL`, `PRIOR` and cycle detection |
+| Empty string as null | Applied by lowering wherever a string value is produced; the target sees ordinary `null` |
+| Row-level and `BEFORE` triggers reading and setting new and old values | The write wrapper calls the trigger function per row before the write and writes the rows it returns, flagged for performance |
+
+### SQL Server to Snowflake
+
+How the Snowflake target carries what SQL Server's session holds and PySpark keeps in session state.
+
+| SQL Server behaviour | Snowflake target |
+|---|---|
+| Session state between procedures (`@@ROWCOUNT`, `@@ERROR`, the last identity value, the error being handled) | Converted procedures run with caller's rights, so they share the caller's session. Session state lives in a session-scoped temporary table owned by the support library, read and written through its procedures |
+| Temp tables and their visibility by call depth | Snowflake temporary tables, named with the call depth by the support library so a callee can shadow a caller's `#name` and drop its own on return |
+| `@@ROWCOUNT` | `SQLROWCOUNT` after each statement, copied into session state where the code reads it |
+| Identity values and row versions | Counters in the state table, through the write path |
+| Transactions | Explicit transactions; savepoints declared unsupported or emulated per operation; data-definition statements commit, so a scratch table is never created inside an open transaction |
+| Several result sets from one procedure | Packaged as one result in the convention the entry-point manifest describes |
+| Errors | Snowflake's error codes mapped to error classes, and error classes to SQL Server's codes by the source's half |
+| Case-insensitive comparison | Collation specifiers where every function involved honours them, helpers otherwise, as on Spark |
 
 ## The six target-dependent features on Databricks
 

@@ -38,3 +38,10 @@ The full decision is in [the resolution of the ticket that made it](https://gith
   - **Vertex:** prompt-cache hashes are Google service data.
 - **The direct API's promise rests on an attestation.** The report says so.
 - **Adding Fable later is a new decision.** It would make zero retention impossible for the steps that use it.
+
+## Amendment, 18 October 2026
+
+- **Checked or attested.** The promise is *checked* on Bedrock and Vertex, and *attested* on the direct API, where ZDR cannot be read. Both report documents say which. When the direct API is used, both also state that flagged content can be kept for up to 2 years.
+- **Refusal fallbacks** are restricted to the engagement's allowed models, never Fable or Mythos, and the same retention check runs on the fallback model before it is used.
+
+Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding R15 and Further Note 2.

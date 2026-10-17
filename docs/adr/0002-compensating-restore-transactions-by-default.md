@@ -20,3 +20,7 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 - **Start versions are recorded in the run catalog**, so a job that crashed mid-transaction restores them first when it is resumed or re-run.
 - **The helper fails loudly** if a version it would restore to no longer exists because of `VACUUM` retention.
 - **Table variables are left out of the restore**, because in T-SQL a rollback does not undo changes to them.
+
+## Amendment, 18 October 2026
+
+The single-writer assumption is restated and enforced by a write lease, and delivered code recovers unfinished transactions automatically at the start of every run: see [ADR 0021](0021-delivered-jobs-hold-a-write-lease-on-every-table-they-write.md). In production, start versions are recorded in the support library's state table, not the run catalog.

@@ -27,3 +27,11 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 - **Members are superseded, not deleted.** Once a generalised lesson is confirmed, its members stop applying. If it is later revoked, they return to confirmed, each on its own evidence, and the retroactive search runs for them.
 - **Wider lessons need a person.** A reviewer may add wildcards to a trigger by hand. The lesson then goes through the same gate.
 - **A rule's own mistake still needs a tool release.** During a run, lessons change only what AI steps are given, or route a region to its faithful form or to manual work.
+
+## Amendment, 18 October 2026
+
+- **"Trigger" is renamed "lesson pattern"**, so it is not confused with database triggers. The meaning is unchanged.
+- **What "not by a model" means:** no model decides a lesson's pattern or its confirmation. Repair's one-line hypothesis, which a model writes, is stored in a client lesson as evidence and is dropped when a lesson is promoted to global.
+- **Promotion also rejects any identifier from the client's catalog** (object, column, parameter and other names), wherever it appears in the lesson, beside the checks on literals and verbatim stretches.
+
+Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding R8 and Further Note 5.

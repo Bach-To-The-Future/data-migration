@@ -44,3 +44,15 @@ The full decision is in [the resolution of the ticket that made it](https://gith
   - **The winner:** the winner under the ample ceiling becomes the default.
 - **Both orchestrators stay in the product** behind one switch. After the pilot, if projected spend exceeds the ceiling, the tool warns the operator and points to the switch's documented recommendation. It never switches by itself.
 - **Every action is recorded twice,** as intent and then as result, and steps are idempotent. An interrupted run resumes by replaying its recorded decisions.
+
+## Amendment, 18 October 2026
+
+Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), findings R2, R9, R10, R17 and Further Note 6.
+
+- **`retry_up`.** The engine escalates inside a step: checker failures and failing candidates. The orchestrator sees only failures found after a whole step. Its `retry_up` re-runs the AI step behind the failing region one tier up. The engine refuses it for regions produced by deterministic rules, and at the top tier.
+- **When the ceiling binds.** It binds when projected remaining spend exceeds the remaining budget. From then on, `allocate` sets each artefact's maximum. The agentic orchestrator's own calls draw on a reserved share of the ceiling (5% by default, versioned), and when that is spent it falls back to the baseline's policy.
+- **The agent's tier.** The agentic orchestrator's own calls run at the top tier, versioned with the tier table.
+- **A split development corpus.** The development corpus is split deterministically into a tuning half and a benchmark half. The agent's prompt and tools are developed on the tuning half only, and the benchmark runs on the other. The release hold-out stays untouched. The cost: a smaller, noisier benchmark.
+- **A double tie** on converted share and speed makes the baseline the default.
+- **A repair arm.** One more arm runs 5 cold runs under the ample ceiling with the baseline orchestrator and repair replaced by a single fixed-prompt call. It decides whether repair moves down to an LLM step.
+- **The benchmark needs the whole engine built** first.

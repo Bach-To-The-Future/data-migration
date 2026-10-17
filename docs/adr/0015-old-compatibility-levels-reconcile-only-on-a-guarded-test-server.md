@@ -33,3 +33,7 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 - **"Remote tier" now covers sources as well as targets.** ADR 0014's remote tier was a target account; this one is a source server.
 - **Pre-2005 syntax is converted but can only be verified on the test server**, for example `*=` joins.
 - **Old test servers are unsupported software.** The build tests them on Windows VMs on an isolated network, and licensed installation media for each version is a prerequisite.
+
+## Amendment, 18 October 2026: every source-side remote tier
+
+The guard applies to every source-side remote tier, at any compatibility level. That includes a Windows SQL Server used for features a Linux container lacks (CLR, FILESTREAM, linked servers to other providers) at level 100 or above. Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding R22.

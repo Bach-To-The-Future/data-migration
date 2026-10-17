@@ -21,7 +21,7 @@ This is the first list of what the intermediate representation can say: its type
 ## How to read the tables
 
 - **Comes from** lists T-SQL words that lower to the entry. An empty cell means the entry is chosen by meaning, not by spelling: `integer_divide` comes from `/` only when both operands are integers.
-- **Artefacts** counts how many of the 132 corpus artefacts (34 sample, 98 public) appear to use the entry. It is pattern matching on source text, not parsing, so treat it as an index of where to look. An empty cell means it cannot be counted that way.
+- **Artefacts** counts how many of the 132 corpus artefacts written in SQL (34 sample, 98 public) appear to use the entry. It is pattern matching on source text, not parsing, so treat it as an index of where to look. An empty cell means it cannot be counted that way.
 - **Hand** is ✓ where the hand conversion exercised the entry.
 
 ## Types

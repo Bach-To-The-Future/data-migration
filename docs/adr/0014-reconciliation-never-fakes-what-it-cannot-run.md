@@ -30,3 +30,12 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 ## Amendment, 17 October 2026
 
 The remote tier also covers sources: a dedicated test server of an old SQL Server version, guarded as [ADR 0015](0015-old-compatibility-levels-reconcile-only-on-a-guarded-test-server.md) describes.
+
+## Amendment, 18 October 2026: a guard on target-side remote tiers
+
+A target-side remote tier, such as a Databricks workspace, is guarded like a source-side one. The tool refuses to run unless:
+
+- it reaches the tier as a tester principal that can reach only the tool's own scratch catalog;
+- the workspace differs from the client's target workspace, which the engagement declares.
+
+Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), Further Note 1.

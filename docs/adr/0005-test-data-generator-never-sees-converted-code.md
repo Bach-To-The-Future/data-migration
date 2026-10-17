@@ -40,3 +40,7 @@ The generator's inputs are restated as **nothing derived from converted code**, 
 - inputs built to violate each constraint on a table the artefact writes.
 
 None of these comes from converted code, and the hold-out seeds remain the blind generator's alone. The change was made in [How does reconciliation generate data and compare results?](https://github.com/Bach-To-The-Future/data-migration/issues/13).
+
+## Amendment, 18 October 2026: the step that proposes test inputs
+
+The rule above binds the LLM step that proposes extra test inputs as well as the generator. That step's inputs are the original source, the catalog slice, the coverage gaps of the original, the domain profiles, the business-rules file and the generator's input format: nothing derived from converted code. Its proposals join the visible set only. Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28) (Further Note 9).

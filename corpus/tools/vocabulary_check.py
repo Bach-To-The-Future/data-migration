@@ -169,7 +169,7 @@ def render(vocab, entries, operations, used_by, exercised, sample_count, public_
         "",
         "- **Comes from** lists T-SQL words that lower to the entry. An empty cell means the entry is chosen by meaning, "
         "not by spelling: `integer_divide` comes from `/` only when both operands are integers.",
-        f"- **Artefacts** counts how many of the {sample_count + public_count} corpus artefacts ({sample_count} sample, "
+        f"- **Artefacts** counts how many of the {sample_count + public_count} corpus artefacts written in SQL ({sample_count} sample, "
         f"{public_count} public) appear to use the entry. It is pattern matching on source text, not parsing, so treat it "
         "as an index of where to look. An empty cell means it cannot be counted that way.",
         "- **Hand** is ✓ where the hand conversion exercised the entry.",

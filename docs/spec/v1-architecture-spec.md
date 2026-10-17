@@ -4,7 +4,7 @@
 
 **What this is.** The architecture of a tool that converts a legacy data platform's script artefacts into code for a modern platform. v1 converts SQL Server artefacts into idiomatic PySpark for Databricks. The spec is ready to hand to a build effort. It was compiled on 18 October 2026 from the decisions on [the wayfinding map][map], and it decides nothing new: every decision here was made in a ticket, and each section links to the tickets and ADRs that made it.
 
-**Where something didn't fit.** Contradictions and gaps found while compiling are listed under [Further Notes](#further-notes), with links to the tickets involved. None is settled silently here: where two decisions disagree, the spec states the later one and flags the disagreement there.
+**Where something didn't fit.** Contradictions and gaps found while compiling are listed under [Further Notes](#further-notes), with links to the tickets involved. None is settled silently here: where two decisions disagree, the spec states the later one and flags the disagreement there. An independent review of this spec, and the owner's decisions on it, are recorded in [Independent review of the assembled spec][t28] and applied throughout.
 
 **Conventions.**
 
@@ -15,7 +15,9 @@
   - [Annex B: the source and target contract, with the Oracle and Snowflake paper designs](../spec-drafts/source-target-contract.md);
   - [Annex C: silent differences, the SQL Server half](annex-c-differences-sql-server.md);
   - [Annex D: silent differences, the PySpark half](annex-d-differences-pyspark.md);
-  - [Annex E: what a 2022 sandbox does not reproduce from SQL Server 2008 to 2016](../research/sql-server-version-differences.md).
+  - [Annex E: what a 2022 sandbox does not reproduce from SQL Server 2008 to 2016](../research/sql-server-version-differences.md);
+  - [Annex F: the extractor's grant, revoke and check scripts](annex-f-extractor-scripts.md);
+  - [Annex G: silent differences that agree, what was not established, and what was tested](annex-g-agreements-and-tested-differences.md).
 - **Research notes** in [`docs/research/`](../research/) hold the evidence behind several decisions. They are the record of what was found, not part of the contract.
 - **Nothing here has been built,** apart from the sandbox, the corpus and the throwaway prototypes named under [Prior art](#prior-art-in-this-repository).
 
@@ -95,7 +97,7 @@ The actors are the **operator** (in v1, a delivery engineer running the tool on 
 **AI use and cost**
 
 34. As a client, I want to choose where the model runs (Anthropic's API, Amazon Bedrock or Google Vertex), so that my code goes only where my policies allow.
-35. As a client, I want zero retention by the model provider promised and checked before any call, so that my code is not kept.
+35. As a client, I want zero retention by the model provider promised, and checked or attested before any call, with any exception stated, so that I know exactly what is kept.
 36. As an operator, I want a cost ceiling per run, with warnings and a projection after the pilot, so that spend never surprises the client.
 37. As an operator, I want a run's deterministic work to carry on when the model budget runs out, with every skipped AI step listed, so that budget limits degrade visibly, not silently.
 38. As an operator, I want interrupted runs to resume by replaying recorded steps, and re-runs to reuse cached results, so that crashes and re-runs cost little.
@@ -116,7 +118,7 @@ The actors are the **operator** (in v1, a delivery engineer running the tool on 
 47. As a client's engineer, I want a complete engineering report, worst problems first, with all the evidence, so that I can act on what's wrong.
 48. As a client, I want the report in HTML and PDF that can never disagree, so that the signed PDF and the online version are the same record.
 49. As a client, I want every degradation, assumption and caveat visible, so that nothing is hidden from me.
-50. As a client, I want the conditions the converted code relies on stated once and clearly, starting with the single-writer assumption, so that my operations team can keep them.
+50. As a client, I want the conditions the converted code relies on stated once and clearly, starting with the single-writer assumption, and enforced where the tool can, so that my operations team can keep them.
 51. As a client's engineer, I want the deployment steps listed, including initialising the identity and row-version counters, so that go-live is correct.
 
 **Delivery and maintenance**
@@ -238,7 +240,7 @@ Decided in: [What does the catalog hold and how does conversion read it?][t8], [
 - `SELECT` on `sys.sql_expression_dependencies` in each, for the dependency cross-check only (optional);
 - a user in `msdb` with `SELECT` on `sysjobs`, `sysjobsteps`, `sysschedules`, `sysjobschedules` and `syscategories`.
 
-Nothing at server level and no fixed role: the `msdb` role `SQLAgentReaderRole` can create jobs. On SQL Server 2000, which has no `VIEW DEFINITION`, the login gets database access only and its self-check verifies it holds no `SELECT` on user tables and no `EXECUTE`. Where an old server lets the login read rows anyway, the extractor still never reads a user table, and the report says the promise rests on the tool's behaviour there. The grant, revoke and check scripts are in [the research note][r-perm].
+Nothing at server level and no fixed role: the `msdb` role `SQLAgentReaderRole` can create jobs. On SQL Server 2000, which has no `VIEW DEFINITION`, the login gets database access only and its self-check verifies it holds no `SELECT` on user tables and no `EXECUTE`. Where an old server lets the login read rows anyway, the extractor still never reads a user table, and the report says the promise rests on the tool's behaviour there. The grant, revoke and check scripts are in [Annex F](annex-f-extractor-scripts.md).
 
 **Contents.**
 
@@ -260,7 +262,7 @@ Nothing at server level and no fixed role: the `msdb` role `SQLAgentReaderRole` 
 - **No client data:** nothing derived from table rows, so no statistics and no sample values.
 - **No security metadata:** no users, roles or permission assignments, although `VIEW DEFINITION` exposes them.
 - **"Wholesale"** means every column of each view the extractor already reads, never additional views such as security catalogs or statistics histograms. The final validator rebuilds the original's database from the raw capture with its own code, so an extraction mistake cannot fool both judges (see [The final validator](#the-final-validator)).
-- **Procedure result shapes** are not read by the extractor: SQL Server describes a procedure's result set only to a login holding `EXECUTE`. Each procedure is recreated in the sandbox with the client's settings (compatibility level, `ANSI_NULLS`, `QUOTED_IDENTIFIER`) and described there. A client who wants shapes without the sandbox has their administrator run an export script, read as a folder input. A shape described under assumed settings carries "assumed" provenance. On the corpus, SQL Server could describe 41 of 69 procedures; the other 28 use temp tables or dynamic SQL.
+- **Procedure result shapes** are not read by the extractor: SQL Server describes a procedure's result set only to a login holding `EXECUTE`. Each procedure is recreated in the sandbox with the client's settings (compatibility level, `ANSI_NULLS`, `QUOTED_IDENTIFIER`) and described there. A client who wants shapes without the sandbox has their administrator run an export script, read as a folder input. A shape described under assumed settings carries "assumed" provenance. On the corpus, SQL Server could describe 41 of 69 procedures; the other 28 use temp tables or dynamic SQL. For a database at compatibility level 80 or 90, which no sandbox accepts, shapes are described on the guarded remote tier if one exists, else taken from the administrator's export, else recorded as "could not be described"; the static check then skips the shape comparison, as it does for the 28.
 - **Time zone.** The extractor calls `CURRENT_TIMEZONE()` on every server (it works from SQL Server 2019 CU32, tested). The time zone is a required setting only when that call fails, as on 2017 and earlier, and for extractions from folders alone.
 - **Recognised artefacts.** For an SSIS package or SQL Agent job, the catalog holds an inventory of its contents (tasks or steps, connections, schedules, embedded SQL text) and its references to catalog objects, which show which procedures are entry points. Packages saved with "encrypt all" cannot be inventoried without the key.
 
@@ -350,7 +352,7 @@ Decided in: [What representation does the core work on?][t11], [How is each cons
 
 **Generation** is deterministic: the type and idiom mappings are fixed and versioned. Untranslatable constructs are detected before generation, never trusted to surface from it (sqlglot was seen dropping `BY SOURCE` from a `MERGE` with nothing logged). Every linked expression is emitted as one contiguous, self-contained span of code, so the testing module can evaluate it alone; a layer-1 check verifies this.
 
-**Clusters.** Artefacts identical apart from names are detected from the lowered representation and share one conversion. The representative is verified by tests only, every instance is tested individually, and any human acceptance is a recorded acceptance ([ADR 0006][adr6]). An instance matched alone by a client lesson leaves the cluster and gets a conversion of its own.
+**Clusters.** Two artefacts form a cluster when their lowered representations are identical once every identifier is replaced by a placeholder: literals and parameter defaults must match exactly, and comments are ignored. A cluster shares one conversion. The representative is verified by tests only, every instance is tested individually, and any human acceptance is a recorded acceptance ([ADR 0006][adr6]). An instance matched alone by a client lesson leaves the cluster and gets a conversion of its own.
 
 ### 6. Converted code
 
@@ -362,7 +364,7 @@ Decided in: [How is each construct with no PySpark equivalent converted?][t10], 
 2. **ANSI mode is on,** pinned in every file.
 3. **Python-level emulation is preferred over SQL only Databricks can run,** so converted code stays reconcilable in the sandbox. Where no locally runnable form exists, the artefact is reconciled on an optional remote tier or reported as "Not reconcilable locally" ([ADR 0014][adr14]).
 4. **Writes** use the Delta Python API (`DeltaTable.update`, `.delete`, `.merge`), which is idiomatic and not flagged, always through session state's write wrappers. Reads stay plain DataFrame code.
-5. **What converted code may assume about target tables:** names identical to the source (`database.schema.table` becomes `catalog.schema.table`, with the fixed adjustment rule); types by the fixed mapping below; nothing else. No collation on target columns, no enforced keys, no triggers, no identity columns. Every assumption is listed in the report, and the static check builds its empty tables with the same mappings.
+5. **What converted code may assume about target tables:** names identical to the source (`database.schema.table` becomes `catalog.schema.table`, with the fixed adjustment rule); types by the fixed mapping below; nothing else. No collation on target columns, no enforced keys, no triggers, no identity columns. One requirement: each `datetimeoffset` column has a companion column holding its offset. Every assumption and requirement is listed in the report, and the static check builds its empty tables with the same mappings.
 
 **What each artefact type becomes.**
 
@@ -411,10 +413,10 @@ A scalar function that cannot be a column expression is first raised to one (`IF
 **Transactions and savepoints** ([ADR 0002][adr2]).
 
 - Generated code always uses one helper, a `transaction()` block, whose mechanism is a setting.
-- **Default: compensating restore.** The helper notes each written table's Delta version at `BEGIN TRAN` and restores those versions on `ROLLBACK`. It runs in the sandbox. Start versions are recorded in the run catalog, so a crashed run restores them first. The helper fails loudly if a version has been removed by `VACUUM`. Table variables are left out of the restore, as in T-SQL.
+- **Default: compensating restore.** The helper notes each written table's Delta version at `BEGIN TRAN` and restores those versions on `ROLLBACK`. It runs in the sandbox. Start versions are recorded in the run catalog during testing, and in the support library's state table in production. At the start of every run, session state recovers any unfinished transaction left by a crash before any other work ([ADR 0021][adr21]). The helper fails loudly if a version has been removed by `VACUUM`. Table variables are left out of the restore, as in T-SQL.
 - **Alternative: Databricks' own transactions** (SQL only, Runtime 18 or later, Unity Catalog managed tables). The same generated code switches over; reconciliation then needs a remote tier or reports "Not reconcilable locally".
 - **When a statement fails inside a transaction block,** the block rolls everything back, with the ADR 0004 caveat in the report. `XACT_ABORT ON` and procedures with guarded statements are exact and need no caveat.
-- **This is not isolation:** it rests on the single-writer assumption, and every transaction is flagged.
+- **This is not isolation:** it rests on the single-writer assumption, enforced among converted jobs by write leases ([ADR 0021][adr21]), and every transaction is flagged.
 
 **Triggers.**
 
@@ -423,13 +425,13 @@ A scalar function that cannot be a column expression is first raised to one (`IF
 - Nested triggers follow from trigger functions writing through the wrapper, which enforces SQL Server's 32-level limit and raises the same error. Recursive triggers follow the database's `RECURSIVE_TRIGGERS` and the server's nested-triggers option. Several triggers on one table fire in the order the catalog records; where SQL Server leaves it undefined, the report says so.
 - The report states that writes from outside the converted code do not fire triggers.
 
-**Temp tables and table variables.** The faithful form is a Delta table in a per-run scratch schema, held in session state under its original name, dropped at the end and registered in the run catalog so a crashed run is cleaned up. Visibility follows call depth: a temp table created in a called procedure is dropped when it returns, and a callee may shadow a caller's `#name`. Global temp tables (`##name`) are reported, not treated as private. Temp-table columns take the server's default collation unless the code says `COLLATE DATABASE_DEFAULT`.
+**Temp tables and table variables.** The faithful form is a Delta table in a per-run scratch schema, held in session state under its original name, dropped at the end and registered in the run catalog during testing and in the state table in production, so a crashed run's scratch tables are dropped at the next start. Visibility follows call depth: a temp table created in a called procedure is dropped when it returns, and a callee may shadow a caller's `#name`. Global temp tables (`##name`) are reported, not treated as private. Temp-table columns take the server's default collation unless the code says `COLLATE DATABASE_DEFAULT`.
 
 **Cursors.** The raised form is a set-based step. The faithful form is a driver loop that streams the cursor's rows (`toLocalIterator`), never collecting them all, flagged as row-by-row. It reads a snapshot taken when the cursor opens; `DYNAMIC` and `KEYSET` cursors, and `FAST_FORWARD` loops that write their own source table, are reported with a caveat. `UPDATE … WHERE CURRENT OF` becomes an update by primary key, or is manual without one.
 
 **Errors.**
 
-- `TRY`/`CATCH` becomes `try`/`except` through a helper that re-raises the errors T-SQL's `CATCH` would not have caught, such as a missing object referenced at the same level (finding 7.6 in [`corpus/differences/results.md`](../../corpus/differences/results.md)). `RAISERROR` at severity 10 or below is a message, never an exception.
+- `TRY`/`CATCH` becomes `try`/`except` through a helper that re-raises the errors T-SQL's `CATCH` would not have caught, such as a missing object referenced at the same level (finding 7.6 in [Annex G](annex-g-agreements-and-tested-differences.md)). `RAISERROR` at severity 10 or below is a message, never an exception.
 - Errors raised by converted `THROW` or `RAISERROR` keep their exact number, message, severity and state.
 - Spark and Delta failures are mapped to the core's neutral **error classes** by the target, and error classes to SQL Server numbers, messages and severities by the source ([ADR 0019][adr19]). The mapping records, for each error, whether SQL Server ends the statement or aborts the batch. An unmapped error gets a reserved number, and any source comparison against a number the mapping doesn't cover is flagged.
 - **A failed statement that does not stop the procedure** (`XACT_ABORT` off, no `TRY`): in procedures that read `@@ERROR`, every statement sits in a guarded block that records the error and continues or aborts as SQL Server would. Every other procedure stops at the first error, and the report states the difference ([ADR 0004][adr4]).
@@ -463,6 +465,10 @@ A scalar function that cannot be a column expression is first raised to one (`IF
 | `ISNUMERIC`; `CONVERT` with a style code | Helpers; an unlisted style is manual | Support library |
 | `money` arithmetic | A `money()` wrapper whose operators truncate at every step | Support library |
 | `TOP n WITH TIES` | A rank window | Idiomatic |
+| String ordering under a case-insensitive collation: `ORDER BY`, `MIN`, `MAX`, `<`, `BETWEEN` (2.7) | Helper ordering by SQL Server's collation; a caveat where it cannot match exactly | Support library |
+| `REPLACE` and `CHARINDEX` under a case-insensitive collation (2.11) | Helpers comparing by the collation | Support library |
+| `ROUND` with a non-zero third argument, which truncates (3.6) | Helper | Support library |
+| `float` to string, style 0 (3.10) | Helper reproducing SQL Server's formatting | Support library |
 | `TOP` without `ORDER BY`; `NEWID()`; `RAND()` | Spark's behaviour | Accepted with caveat |
 | Query hints | Kept as annotations | Reported as not applicable |
 
@@ -499,21 +505,21 @@ The PySpark half (vocabulary types to Spark types, with the representation rules
 | `money(19)`, `money(10)` | `DECIMAL(19,4)`, `DECIMAL(10,4)` | Truncating arithmetic |
 | `float(53)`, `float(24)` | `DOUBLE`, `FLOAT` | |
 | `date` | `DATE` | |
-| `local_timestamp` | `TIMESTAMP_NTZ` | Rounding to 1/300 s (`datetime`) or to the minute (`smalldatetime`); `datetime2(7)` loses its seventh digit, reported |
-| `timestamp_with_offset` | `TIMESTAMP` | The original offset is lost, reported |
+| `local_timestamp` | `TIMESTAMP_NTZ` | Rounding to 1/300 s (`datetime`) or to the minute (`smalldatetime`); `datetime2(7)` keeps six fractional digits, and the seventh is compared within a catalogued 100 ns tolerance, reported per artefact |
+| `timestamp_with_offset` | `TIMESTAMP` plus a companion offset column | The offset is kept in the companion column, a target-table requirement listed in the report; seven fractional digits as for `local_timestamp` |
 | `time_of_day` | `STRING` | Fixed-width, zero-padded `HH:MM:SS.fffffff`, so text order is time order; flagged |
 | `string` | `STRING` | `char(n)` padded to `n`; length enforced with SQL Server's truncation error, counted as SQL Server counts (UTF-16 units for `nvarchar`, bytes for `varchar` under UTF-8 collations) |
 | `binary` | `BINARY` | |
 | `guid` | `STRING` | Compared and ordered through the byte-order helper |
 | `xml` | `STRING` | Flagged |
-| `binary(8)` for row versions | `BINARY` | Compared by property, never by raw value |
+| `binary(8, fixed)` for row versions | `BINARY` | Compared by property, never by raw value |
 
 **The escape hatch.** None of the constructs above needs `spark.sql` by default. It remains for a client choosing Databricks' own transactions, and for any query shape generation finds it cannot express in the DataFrame API. Each use is flagged; one that cannot run in the sandbox goes to a remote tier or is "Not reconcilable locally".
 
 **The delivered project.**
 
 - **Layout:** `converted/<Database>/<schema>/<kind>/<Name>.py`, one artefact per file, names kept as in the source under the adjustment rule. A callee is imported as a module, so a dependency is an import.
-- **Carried with it:** the vendored support library ([section 7](#7-the-support-library)); a settings file generated from the catalog snapshot and the engagement; a **manifest of entry points**, one per artefact, saying how to invoke it and read its results; the type mapping's **representation rules**; the definition of the counter state table; the counter initialisation command.
+- **Carried with it:** the vendored support library ([section 7](#7-the-support-library)); a settings file generated from the catalog snapshot and the engagement; a **manifest of entry points**, one per artefact, saying how to invoke it and read its results; the type mapping's **representation rules**; the definition of the state table; the counter initialisation command; the recovery command.
 - **Source comments** appear beside the code generated from them, marked as from the original.
 
 ### 7. The support library
@@ -533,7 +539,8 @@ The support library implements, for one target, the vocabulary operations that t
 - **One version for three things.** The type mapping (target half) and the error mapping (target half) are data files inside the package, so the library version identifies all three. It is the one version in cache keys, and the generator reads the type mapping from the same package.
 - **What the numbers mean:** a patch fixes a bug and changes behaviour only to fix it; a minor release adds helpers; a major release changes signatures. Each tool release pins one library version.
 - **Versioned names.** Each delivered project vendors the library under names that carry its full version: the import name (for example `migrt_spark_v1_4_3`), the distribution name (`migrt-spark-v1-4-3`), and Spark function and temp-table names. Projects pinned to different versions can share one Databricks environment, and a project runs only with the version it was verified under.
-- **One shared state table.** The counter state table is shared, not versioned: two projects writing the same tables must take identity values from the same counters. Its schema is versioned and only ever extended, and every library version reads and writes it the same way.
+- **One shared state table.** The state table is shared, not versioned: two projects writing the same tables must take identity values from the same counters and see each other's write leases. Its schema is versioned and only ever extended, and every library version reads and writes it the same way.
+- **Supported runtimes.** v1 supports Databricks Runtime 17.3 LTS and 18 LTS, both Spark 4 with ANSI mode on by default. Runtime 16.4 LTS (Spark 3.5) is not supported. The sandbox follows the client's declared runtime, so the product ships one Spark image per supported runtime.
 
 **When the library changes.**
 
@@ -547,8 +554,10 @@ The support library implements, for one target, the vocabulary operations that t
 
 **Counter state in production.**
 
-- Identity counters and the row-version counter (each database's `@@DBTS`) live in a library-owned Delta state table, in a schema the client chooses. The project includes its definition, and the validator creates it in its fresh sandbox.
-- **The counter initialisation command** must run at go-live and after any bulk load that bypasses the write wrappers; the report lists it as a required deployment step. Identity counters start at the highest existing value, honouring seed and increment. It takes an optional file of per-table starting values, exported by the client's DBA at cutover (`IDENT_CURRENT`, `@@DBTS`), and each counter starts from the larger of that value and the data's highest, because SQL Server's next value can be higher after deletes or rollbacks. Without the file it uses the data alone and warns, and the report lists every counter so initialised. The testing module and the validator run the command after loading test data, which tests it.
+- **The state table.** A library-owned Delta table, in a schema the client chooses, holds the identity counters, the row-version counter (each database's `@@DBTS`), **write leases**, transaction start versions and scratch-table registrations. The project includes its definition, and the validator creates it in its fresh sandbox.
+- **Write leases** ([ADR 0021][adr21]). Each delivered job takes a lease on every table it writes before its first write. A second converted writer that finds a live lease fails at once with an error naming the table and the holder. This enforces the single-writer assumption among converted jobs; writers outside the converted code are still bound by it, and the sign-off says so.
+- **Recovery on start** ([ADR 0021][adr21]). At the start of every run, session state checks for unfinished transactions and scratch tables left by a crash and recovers them before any other work: it restores the recorded versions, drops the scratch tables and releases the leases. The recovery command ships in the project for manual use.
+- **The counter initialisation command** must run at go-live and after any bulk load that bypasses the write wrappers; the report lists it as a required deployment step. Identity counters start at the highest existing value, honouring seed and increment. It takes an optional file of per-table starting values, exported by the client's DBA at cutover (`IDENT_CURRENT`, `@@DBTS`), and each counter starts from the larger of that value and the data's highest, because SQL Server's next value can be higher after deletes or rollbacks. Without the file it uses the data alone and warns, and the report lists every counter so initialised. The testing module and the validator run the command after loading test data, and exercise the leases and the recovery, which tests them.
 
 **The API manifest.** A machine-readable manifest of the library's API, versioned with it, gives for each helper its signature and meaning, the silent differences it handles, its twin, and the naive built-in it replaces (for mutation testing). It is the single source for the context builder, mutation testing and the documentation. The final validator never reads it.
 
@@ -634,14 +643,14 @@ What was trimmed is recorded with the step.
 | Google Vertex | Request-response logging off by default; prompt-cache hashes are Google service data | Logging off, and no Advanced AI consent |
 
 - **v1 uses only models and features that allow zero retention at all three:** no Fable or Mythos models (30-day retention at every location); only adaptive thinking with effort, structured outputs and strict tools, and prompt caching; no Batch API (29-day retention), Files API, code execution or server tools. The cost: no batch discount, and not the most capable model.
-- **Each engagement declares its policy:** zero retention, or the provider's default. Under zero retention the tool checks before any call and refuses to run if a check fails: on Bedrock the effective mode for the pinned model must be `none`; on Vertex logging must be disabled and no Advanced AI consent granted; on the direct API a named operator's attestation is recorded, because ZDR cannot be read from the API, and the report says the promise rests on it.
+- **Each engagement declares its policy:** zero retention, or the provider's default. Under zero retention the tool verifies before any call and refuses to run otherwise. On Bedrock and Vertex the promise is **checked**: the effective mode for the pinned model must be `none`; logging must be disabled and no Advanced AI consent granted. On the direct API it is **attested**: a named operator's attestation is recorded, because ZDR cannot be read from the API. Both report documents say which, and when the direct API is used, both state that content flagged by Anthropic's trust and safety systems can be kept for up to 2 years ([ADR 0016][adr16], amended).
 - **Residency.** If an engagement names a region, only regional endpoints are used: a region or multi-region on Vertex, never the global endpoint; in-region only on Bedrock, with no cross-region inference; `inference_geo` on the direct API where available. The region is recorded for every call.
 
-**The cost ceiling.** Every run has a required ceiling in money. Spend is computed from recorded token usage and a versioned price table per location, with warnings at 50% and 80%. When it is reached, no new AI step starts and running ones finish; deterministic work carries on (lowering, checks, reconciliation, the consistency pass); each AI step that never started takes its documented fallback and is listed as "skipped: model budget reached". A re-run with a higher ceiling replays every completed call from the cache. After the pilot, if projected spend (the pilot's spend per complexity band, times the bulk artefacts in each band) exceeds the ceiling, the tool warns the operator before the bulk starts and points to the orchestrator switch's documented recommendation; it never switches by itself.
+**The cost ceiling.** Every run has a required ceiling in money. Spend is computed from recorded token usage and a versioned price table per location, with warnings at 50% and 80%. When it is reached, no new AI step starts and running ones finish; deterministic work carries on (lowering, checks, reconciliation, the consistency pass); each AI step that never started takes its documented fallback and is listed as "skipped: model budget reached". A re-run with a higher ceiling replays every completed call from the cache. The ceiling **binds** when projected remaining spend exceeds the remaining budget; from then on the orchestrator allocates it ([section 11](#11-the-orchestrator-interface)). After the pilot, if projected spend (the pilot's spend per complexity band, times the bulk artefacts in each band) exceeds the ceiling, the tool warns the operator before the bulk starts and points to the orchestrator switch's documented recommendation; it never switches by itself.
 
 **Prompts and models.** Prompts, instruction phrasings and output schemas are files in the tool's repository, versioned with it. A change ships only in a release, gated by the known-good and known-bad suites and by each AI step's measured pass rate on the corpus, which must not fall. Prompts are never edited for one engagement: an engagement adapts only through client lessons. Models are pinned per release; changing one, including when a provider retires it, is a release with the full measurement.
 
-**Refusals.** The tool checks `stop_reason` on every call. On a refusal it retries once through the fallback the location supports (Anthropic's server-side fallback, or the SDK's client-side middleware on Bedrock and Vertex), and records the model actually used in the call record and the cache key. If that is refused too, the step takes its documented fallback, reported as "refused" with the refusal's category.
+**Refusals.** The tool checks `stop_reason` on every call. On a refusal it retries once through the fallback the location supports (Anthropic's server-side fallback, or the SDK's client-side middleware on Bedrock and Vertex), restricted to the engagement's allowed models (never Fable or Mythos), with the same retention check run on the fallback model first. It records the model actually used in the call record and the cache key. If that is refused too, the step takes its documented fallback, reported as "refused" with the refusal's category.
 
 ### 9. Repair
 
@@ -655,7 +664,8 @@ Repair is the only agent outside the orchestrator: a model in a bounded loop tha
 - **Bounded.** One repair run per failure, with its own bounded loop and no candidates, always at the top tier. When its context passes the budget, code (never the model) shortens the oldest attempts to "patch summary plus the check it failed". When attempts run out, the artefact is manual work, with repair's evidence in the report.
 - **What never goes to repair:** a blocked artefact; a failure classed as a testing-module defect (it does not count as a repair attempt); anything from the final validator, whose results never feed repair.
 - **After any repair, checks restart from layer 1.** A failure on a hold-out seed is disclosed to repair in full, those seeds are retired into the visible set, and fresh hold-out seeds are drawn for the next verdict.
-- **A successful repair drafts a lesson** ([section 13](#13-lessons)).
+- **Repair patches** ([ADR 0008][adr8], amended). When repair fixes a region produced by deterministic lowering or generation rules, the patch is kept as a flagged **repair patch**, keyed by the hash of the region's inputs and reapplied on every regeneration while those inputs are unchanged. A changed input drops it, and the region is converted and checked afresh.
+- **A successful repair drafts a lesson** ([section 13](#13-lessons)); for a region produced by deterministic rules it also drafts a kind-5 lesson, a proposed rule, so the rule is fixed in a release.
 
 ### 10. A run: plan, phases and dependencies
 
@@ -711,15 +721,15 @@ Decided in: [What orchestrator interface lets an agent and a plain pipeline be s
 
 **An orchestrator is a policy over a fixed engine.** It sees an observation of the run and returns actions, which the engine runs, checks against the plan and limits, and records. The agentic orchestrator (a model in a loop calling the actions as tools) and the plain-pipeline baseline (ordinary code) implement the same interface and drive the same components unchanged. Which one is the default is decided by the build's first experiment ([Build Commitments](#build-commitments)). Both stay in the product behind one switch, the only switch in how the tool uses models.
 
-**Fixed by the engine, the same for both:** the run plan, its phases and partial order; the fixed sequence of steps for each artefact; attempt limits, the budget per artefact and the run's cost ceiling; model routing and escalation; candidates and the rule that picks one; repair's own loop, and that checks restart from layer 1 after it; the final validator's call points; the consistency pass and lesson drafting; the parallelism setting; that a blocked artefact never goes to repair.
+**Fixed by the engine, the same for both:** the run plan, its phases and partial order; the fixed sequence of steps for each artefact; attempt limits, the budget per artefact and the run's cost ceiling; model routing, and escalation inside a step (checker failures and failing candidates); candidates and the rule that picks one; repair's own loop, and that checks restart from layer 1 after it; the final validator's call points; the consistency pass and lesson drafting; the parallelism setting; that a blocked artefact never goes to repair.
 
 **What an orchestrator chooses:**
 
 - (a) **order:** which ready item or unit to take next, within the run plan;
-- (b) **failures:** on a failed check, whether to retry one tier up, send the item to repair, or give up, within the limits;
+- (b) **failures:** on a failure found after a whole step, whether to retry one tier up, send the item to repair, or give up, within the limits. `retry_up` re-runs the AI step behind the failing region one tier up; the engine refuses it for regions produced by deterministic rules, and at the top tier;
 - (c) **giving up early,** before the limits are reached;
 - (d) **requeueing** an item it gave up, or a blocked one, when new information arrives (a lesson confirmed, a callee converted, a similar artefact succeeding). Requeueing never resets attempt counters; an item that used up its attempts gets another chance only through a confirmed lesson matching it, which the consistency pass converts again;
-- (e) **budget allocation:** when the cost ceiling binds, how to spend the remaining budget across items, within each artefact's own maximum.
+- (e) **budget allocation:** once the cost ceiling binds (projected remaining spend exceeds the remaining budget), `allocate` sets each artefact's maximum, within its own budget.
 
 It never skips a step, raising included. The cost of so narrow a choice is deliberate: a wider one would let an orchestrator win on speed by skipping work that "converted" doesn't measure.
 
@@ -731,7 +741,7 @@ It never skips a step, raising included. The cost of so narrow a choice is delib
 |---|---|
 | Each item's status, last step, failing layer and dimension, attempts and tiers used, complexity score, cluster and structural-pattern identifiers, cost so far; the run's budget left, elapsed time and ready count | Source text, generated code, failing inputs, seeds of any kind, the final validator's evidence (only its pass or fail) |
 
-The agentic orchestrator's own model calls follow [ADR 0009][adr9] like every other call: assembled by the context builder, cached, checked for retention, run at a fixed tier, and counted toward the run's ceiling.
+The agentic orchestrator's own model calls follow [ADR 0009][adr9] like every other call: assembled by the context builder, cached, checked for retention, and run at the top tier, versioned with the tier table. They draw on a reserved share of the run's ceiling, 5% by default and versioned; when that is spent, the agentic orchestrator falls back to the baseline's policy for the rest of the run ([ADR 0020][adr20], amended).
 
 **The plain-pipeline baseline,** scripted as a careful engineer would: take ready items in run-plan order, pilot first, smallest complexity score first; on a failed check, retry one tier up until the top tier, then repair, then give up at the limit, never early; requeue a blocked item when its callee converts; when the ceiling binds, allocate the budget in run-plan order.
 
@@ -752,41 +762,39 @@ Decided in: [What makes an agent loop checkpointed and replayable?][t5], [What o
 
 Decided in: [How does the tool learn from its mistakes, and how are earlier conversions brought up to date?][t23], [How does a reviewer's fix get back into the tool?][t16] (folded into it). ADRs: [0010][adr10], [0011][adr11].
 
-**A lesson** is a recorded correction applied to later conversions: a trigger, the symptom it answers, a fix, its evidence and a status. A reviewer's fix is a lesson with a human source, through the same mechanism and the same gate. Code does every part: drafting, generalising, confirming and promoting. No model writes a lesson, so ADR 0008's five places are unchanged.
-
-*(The glossary calls a lesson's pattern a "trigger"; this spec writes **lesson trigger** wherever a database trigger could be meant. See Further Notes.)*
+**A lesson** is a recorded correction applied to later conversions: a lesson pattern, the symptom it answers, a fix, its evidence and a status. A reviewer's fix is a lesson with a human source, through the same mechanism and the same gate. Code does every part: drafting, generalising, confirming and promoting. No model decides a lesson's pattern or its confirmation, so ADR 0008's five places are unchanged; repair's one-line hypothesis, written by a model, is kept in a client lesson as evidence only.
 
 **Where lessons come from.**
 
-- **From a successful repair, drafted by code:** the lesson trigger is the repaired region's pattern with every identifier and literal replaced by a placeholder, matched exactly; the symptom is the failing check's evidence; the fix is the repaired region as a worked example, with repair's one-line hypothesis.
-- **By generalisation:** when two or more drafted lessons share a fix kind and a failure class (the failing layer, check and data-quality dimension) and their lesson triggers differ only at some nodes, code computes their least general generalisation (anti-unification), with typed wildcards at the nodes that differ. A generalisation is rejected before the gate if its root is a wildcard or it fixes fewer than half of the fixed nodes in the smaller member's lesson trigger (a versioned threshold). It runs within one scope only, each time a lesson is drafted, never during the consistency pass, and for fix kinds 1–4 only. Once it is confirmed, its members are superseded; if it is later revoked, they return to confirmed and the retroactive search runs for them.
-- **From a reviewer,** written by hand, who may add wildcards to a lesson trigger.
+- **From a successful repair, drafted by code:** the lesson pattern is the repaired region's pattern with every identifier and literal replaced by a placeholder, matched exactly; the symptom is the failing check's evidence; the fix is the repaired region as a worked example, with repair's one-line hypothesis.
+- **By generalisation:** when two or more drafted lessons share a fix kind and a failure class (the failing layer, check and data-quality dimension) and their lesson patterns differ only at some nodes, code computes their least general generalisation (anti-unification), with typed wildcards at the nodes that differ. A generalisation is rejected before the gate if its root is a wildcard or it fixes fewer than half of the fixed nodes in the smaller member's lesson pattern (a versioned threshold). It runs within one scope only, each time a lesson is drafted, never during the consistency pass, and for fix kinds 1–4 only. Once it is confirmed, its members are superseded; if it is later revoked, they return to confirmed and the retroactive search runs for them.
+- **From a reviewer,** written by hand, who may add wildcards to a lesson pattern.
 - **Not lessons by themselves:** faulty-rule reports, failures that ran out of repair attempts, and lesson conflicts are listed as open problems for a reviewer.
 - **Lessons learnt on the sample and public corpora are global from the start,** since they hold no client code.
 
-**The lesson trigger** is a fragment of representation whose leaves may be typed, numbered placeholders for identifiers and literals; typed wildcards (any expression of a type, any list of statements, any predicate); and optional constraints on type, collation and nullability. Everything else matches exactly. Specificity is the number of nodes it fixes. Matching is always exact and structural, never by vector similarity.
+**The lesson pattern** is a fragment of representation whose leaves may be typed, numbered placeholders for identifiers and literals; typed wildcards (any expression of a type, any list of statements, any predicate); and optional constraints on type, collation and nullability. Everything else matches exactly. Specificity is the number of nodes it fixes. Matching is always exact and structural, never by vector similarity.
 
 **What a fix can be.**
 
 | Kind | Fix | Scope | Effect |
 |---|---|---|---|
-| 1 | Context note | Either | Text for the AI steps whose region the lesson trigger matches |
+| 1 | Context note | Either | Text for the AI steps whose region the lesson pattern matches |
 | 2 | Worked example | Either | A corrected input and output pair, shown to those steps |
 | 3 | Force the faithful form | Either | Disables a raising transform where it matches |
 | 4 | Mark as manual work | Either | For a rule's mistake that can't be fixed during a run; a rule fix is proposed for the next release |
 | 5 | Proposed rule or helper | Global | For the maintainers; no effect during a run |
 | 6 | Region replacement | Client, one artefact | Target code a reviewer supplies for one region, regenerated into the output each time, tested like any other code, flagged as reviewer-supplied ([ADR 0011][adr11]) |
 
-No lesson of any kind can change the type mapping, the handling of silent differences, prompts or tests. A mistake in a deterministic rule is fixed by a tool release; during a run, a lesson can only route the region to its faithful form or to manual work.
+No lesson of any kind can change the type mapping, the handling of silent differences, prompts, or how tests judge. A lesson may add test inputs; they are part of the engagement's test definition and enter the fingerprint as a hash. A mistake in a deterministic rule is fixed by a tool release; during a run, a lesson can only route the region to its faithful form or to manual work.
 
 **The confirmation gate.** A lesson goes from candidate to confirmed when:
 
 - every artefact it came from, and for a generalised lesson every artefact it matches, reaches "Reconciled" with the lesson applied, and passes final validation (only the pass or fail result is used);
-- the **known-good suite** still passes: for a global lesson, the reconciled sample and public corpora outside the release hold-out; for a client lesson, those plus the client's own reconciled artefacts. Only artefacts the lesson trigger matches are re-run.
+- the **known-good suite** still passes: for a global lesson, the reconciled sample and public corpora outside the release hold-out; for a client lesson, those plus the client's own reconciled artefacts. Only artefacts the lesson pattern matches are re-run.
 
-For kinds 1 and 2, whose effect goes through an LLM step, the first condition must hold for every candidate variant. A candidate lesson applies only to its own artefacts until confirmed. The wrong output a lesson fixed is kept as a **known-bad case** the tests must keep rejecting: a client lesson's case stays in that client's control database; a global lesson's case is rebuilt on a corpus artefact the lesson trigger matches, and without one the lesson is not confirmed. The new test inputs a lesson needs are generated blindly from the original, aimed at the lesson trigger's region; inputs a reviewer writes join the visible set only.
+For kinds 1 and 2, whose effect goes through an LLM step, the first condition must hold for every candidate variant. A candidate lesson applies only to its own artefacts until confirmed. The wrong output a lesson fixed is kept as a **known-bad case** the tests must keep rejecting: a client lesson's case stays in that client's control database; a global lesson's case is rebuilt on a corpus artefact the lesson pattern matches, and without one the lesson is not confirmed. The new test inputs a lesson needs are generated blindly from the original, aimed at the lesson pattern's region; inputs a reviewer writes join the visible set only.
 
-**Applying lessons.** Confirmed lessons whose lesson trigger matches the region fill the context builder's applicable-lessons slot, ordered by specificity, client lessons first when specificity is equal. The slot is in every candidate's context and is never trimmed. Between two matched lessons whose fixes conflict, the more specific wins; with equal specificity neither applies and the conflict goes to a reviewer. A lesson that changes a shared conversion re-instantiates and re-tests every instance.
+**Applying lessons.** Confirmed lessons whose lesson pattern matches the region fill the context builder's applicable-lessons slot, ordered by specificity, client lessons first when specificity is equal. The slot is in every candidate's context and is never trimmed. Between two matched lessons whose fixes conflict, the more specific wins; with equal specificity neither applies and the conflict goes to a reviewer. A lesson that changes a shared conversion re-instantiates and re-tests every instance.
 
 **Statuses and revoking.** Candidate, then confirmed, then superseded (promoted to a rule, or covered by a confirmed generalisation) or revoked. Revoking re-runs the retroactive search, and every matched artefact is converted again without the lesson. A revoked lesson is kept with its reason, never deleted, except with its client's data.
 
@@ -794,7 +802,7 @@ For kinds 1 and 2, whose effect goes through an LLM step, the first condition mu
 
 - **Global lessons** live in a lesson store the vendor holds, released with the tool as the global lesson set, never stored in an engagement. A new global lesson reaches an engagement only when it next runs on the release containing it.
 - **Client lessons** live in the engagement's control database. A run pins both lesson-set versions.
-- **Promoting a client lesson to global:** a deterministic check, run inside the engagement because it needs the client's catalog and source, verifies the rewritten lesson holds no client code. It checks string literals of 4 or more characters, and any run of 8 consecutive tokens from the client's source (after removing comments and whitespace), excluding runs made only of vocabulary names. Placeholders are typed nodes in representation and `⟦kind:n⟧` in text. All three numbers are versioned settings. Only the rewritten lesson leaves, and it is confirmed again against the global known-good suite.
+- **Promoting a client lesson to global:** a deterministic check, run inside the engagement because it needs the client's catalog and source, verifies the rewritten lesson holds no client code. It rejects any identifier from the client's catalog (object, column, parameter and other names) wherever it appears, and checks string literals of 4 or more characters, and any run of 8 consecutive tokens from the client's source (after removing comments and whitespace), excluding runs made only of vocabulary names. Placeholders are typed nodes in representation and `⟦kind:n⟧` in text. All three numbers are versioned settings. Only the rewritten lesson leaves, without repair's hypothesis, and it is confirmed again against the global known-good suite.
 - **Authors:** in v1, delivery engineers write client lessons; later, a client's staff may write client lessons only. Only maintainers create, promote and revoke global lessons; promoting a lesson to a rule or helper is a tool change in a release.
 
 **The consistency pass and earlier conversions.** Every run ends with a consistency pass that freezes the lesson set and re-verifies every artefact under it; candidate lessons arising during it are recorded for the next run. The retroactive search finds every artefact a lesson, revocation, retired example, rule version or helper version affects. The report gives "changes since the last run", an impact list per lesson, and the lessons applied at each construct with their scope, source, date and status.
@@ -815,7 +823,7 @@ Decided in: [What does the catalog hold and how does conversion read it?][t8], [
 
 Decided in: [What does the conversion report look like?][t9], with requirements posted to it by most other tickets. ADRs: [0006][adr6], [0008][adr8] (amended), [0012][adr12]. Prototype: [`prototype/report/`](../../prototype/report/).
 
-**Each run produces one deterministic report data file** (`report-data.json`, with a versioned schema) **and two documents rendered from it, each as HTML and PDF.** Every sentence in both is a fixed template filled from the data. The only AI-written text is the intent summary, shown only when a deterministic check passes. English only.
+**Each run produces one deterministic report data file** (`report-data.json`, with a versioned schema, whose run-specific fields (times, durations, cost, audit-sample results) sit in a section of their own) **and two documents rendered from it, each as HTML and PDF.** Every sentence in both is a fixed template filled from the data. The only AI-written text is the intent summary, shown only when a deterministic check passes. English only.
 
 **Rendering.** A standard-library renderer turns the data into HTML, byte-identical across renders. WeasyPrint (BSD) turns the same HTML into PDF, with fonts and the renderer version pinned and the document dates set from the run's finish time (`dcterms.created`, `dcterms.modified`, `SOURCE_DATE_EPOCH`); without that, a PDF carries its render time. The two formats can differ only in layout. The sign-off PDF is PDF/A, with free fonts embedded.
 
@@ -825,7 +833,7 @@ Decided in: [What does the conversion report look like?][t9], with requirements 
 - four groups by what the reader is asked to do: converted and checked; not converted yet (our work); waiting on another item; manual work;
 - what we need from you (for example widening the extraction, exporting identity starting values);
 - issues found in the existing system (pre-existing issues);
-- the single-writer condition, stated once;
+- the single-writer condition, stated once as "at most one writer per table at any moment, converted or not, across every project in your environment", with what the tool enforces (write leases between converted jobs) and what it cannot (other writers);
 - one signature block.
 
 A table of business areas is added when a run spans several. At scale, each group is summarised by count and capped at 20 items, pointing to the engineering report.
@@ -839,6 +847,8 @@ A table of business areas is added when a run spans several. At scale, each grou
 | Reconciled | Passed | Converted |
 | Reconciled | Failed | Failed final validation |
 | Reconciled | Not validated | Not validated: (reason) |
+| Reconciled | Blocked in validation by a callee that failed or was not validated | Blocked by (callee) |
+| Reconciled | Not yet run (for example a run interrupted before final validation) | Awaiting final validation; not converted |
 | Reconciled, weakly tested | Not run | Weakly tested |
 | Failed | Not run | Failed: (dimension) |
 | Blocked by a dependency | Not run | Blocked by (callee) |
@@ -849,11 +859,22 @@ A table of business areas is added when a run spans several. At scale, each grou
 | (recognised artefact type) | Not run | Recognised, not converted |
 | Not reconciled (preview run) | Not run | Not reconciled |
 
-**Flags** sit beside a status, never replacing it: relies on the single-writer assumption; pre-existing issue; relies on an accepted dependency; recorded acceptance; raised form; reviewer-supplied region. **Construct statuses:** converted, or converted with a caveat; raised; manual work; failed; blocked. A construct may also be tagged as produced by a model, as using the escape hatch, or as reviewer-supplied. **Rollup:** construct, artefact, business area (the schema by default, mappable per engagement), run. Recognised artefacts count in the totals as manual work.
+**Flags** sit beside a status, never replacing it: relies on the single-writer assumption; differs from the original after an error (ADR 0004; shown in the sign-off); pre-existing issue; relies on an accepted dependency; recorded acceptance; raised form; fell back to the faithful form; reviewer-supplied region; repair patch.
+
+**Sign-off groups,** from each status:
+
+| Status | Sign-off group |
+|---|---|
+| Converted | Converted and checked |
+| Failed, Failed final validation, Weakly tested, Blocked by a testing-module defect, Not validated, Not reconcilable: incomplete observation, Awaiting final validation | Not converted yet (our work) |
+| Blocked by (callee) | Waiting on another item |
+| Not reconcilable locally, where widening the extraction or providing a remote tier would fix it | What we need from you |
+| Not reconcilable locally otherwise; Contains manual work; Recognised, not converted | Manual work | **Construct statuses:** converted, or converted with a caveat; raised; manual work; failed; blocked. A construct may also be tagged as produced by a model, as using the escape hatch, or as reviewer-supplied. **Rollup:** construct, artefact, business area (the schema by default, mappable per engagement), run. Recognised artefacts count in the totals as manual work.
 
 **Wording.**
 
-- "Converted and checked" reads: "on every test we ran, the converted code behaved like the original, and an independent second check agreed." It never claims equivalence in general.
+- "Converted and checked" reads: "on every test we ran, the converted code behaved like the original, and an independent second check agreed, except where flagged." It never claims equivalence in general. An item flagged "differs from the original after an error" shows the flag beside it in the sign-off ([ADR 0012][adr12], amended).
+- **The retention promise** says whether it was checked (Bedrock, Vertex) or attested (direct API), and on the direct API states that flagged content can be kept for up to 2 years.
 - **The plain-language line per artefact** in the sign-off is its intent summary, footnoted as AI-written and context only, and shown only if every table it names is in the artefact's read and write set and its action verbs, from a fixed list, match the artefact's effects (creates, adds, inserts: insert; updates, changes, sets: update; deletes, removes: delete; reads, returns, lists: read only; other verbs are ignored, and a summary claiming only reads fails if the artefact writes). Otherwise a template line built from the generated description is shown. The engineering report shows both, each labelled.
 - ISO dates; object names exactly as in the source; a preview run's banner as the first line of both documents; marked secrets masked wherever code appears; the final validator's failing inputs never shown, only its defect notice.
 
@@ -895,7 +916,7 @@ Decided in: [Which SQL Server versions does v1 support?][t26], [Which behaviours
 - **What a 2022 container does not reproduce** from 2008–2016 is catalogued in Annex E: 19 removed features that fail at every level (an artefact using one is "Not reconcilable locally"), 16 changes no level covers, and 31 a level does cover. Of 29 level-gated behaviours tested, 28 matched. **RC4 encryption at level 100** creates and opens keys without error but `ENCRYPTBYKEY` returns `NULL`, so such artefacts are "Not reconcilable locally". The parser flags any artefact using a listed construct, and the report lists it.
 - **Windows-only features** make an artefact "Not reconcilable locally" unless a Windows remote tier of that version exists: `EXTERNAL_ACCESS` and `UNSAFE` CLR; FILESTREAM and FileTable; `xp_cmdshell` and other extended procedures; distributed transactions; linked servers to providers other than SQL Server. The report names the feature.
 
-**The source-side remote tier for levels 80 and 90** ([ADR 0015][adr15]): a dedicated test server of that version receiving synthetic data only, never production data. The tool refuses to run unless every check passes:
+**Source-side remote tiers** ([ADR 0015][adr15], amended): a dedicated test server receiving synthetic data only, never production data, for levels 80 and 90 and for any level when Windows-only features need one. The guard applies to every source-side remote tier, and the tool refuses to run unless every check passes:
 
 - a **tester login**, never the extractor's, holding no `sysadmin` or other server-level role (`dbcreator` included), granted `CREATE ANY DATABASE` directly (on 2000, `CREATE DATABASE` in `master`), and keeping `VIEW ANY DATABASE` so the database list it sees is complete;
 - the server holds no databases other than system databases and the tool's own scratch databases;
@@ -919,7 +940,7 @@ Decided in: [Which SQL Server versions does v1 support?][t26], [Which behaviours
 
 Decided in: [What must a new source or target provide?][t17], [Which parsers can read T-SQL, PL/SQL and SSIS packages well enough to build on?][t2]. ADRs: [0001][adr1], [0019][adr19]. Annex: [B](../spec-drafts/source-target-contract.md).
 
-**Each source and each target implements a fixed contract** (Annex B gives it in full). A source provides an extractor, extension fields and a raw capture; a name resolver, parsers per version, and lowering; secret patterns and a version policy; the mapping from error classes to its own codes; the source halves of the differences catalogue and the type mapping; a runner, tracing and coverage; two complete clients sharing no code, one per judge, and per-statement row counts from the server; the validator's own path; a vocabulary list for lessons. A target provides generation and an unsupported list; the target halves of the type mapping (with published representation rules) and the differences catalogue; the mapping from its runtime's failures to error classes; a support library; an entry-point manifest; layer-1 code checks, expression extraction and mutation operators with the helper-to-built-in mapping; a tracer; sandbox, remote-tier and validator runners; optionally a second renderer; a vocabulary list for lessons. Both declare the vocabulary version they implement and what they add, and never change an existing meaning. Both use free tools or recorded exceptions.
+**Each source and each target implements a fixed contract** (Annex B gives it in full). A source provides an extractor, extension fields and a raw capture; a name resolver, parsers per version, and lowering; secret patterns and a version policy; the mapping from error classes to its own codes; the source halves of the differences catalogue and the type mapping; a runner, tracing and coverage; two complete clients sharing no code, one per judge, and per-statement row counts from the server; the validator's own path; a vocabulary list for lessons. A target provides generation and an unsupported list; the target halves of the type mapping (with published representation rules) and the differences catalogue; the mapping from its runtime's failures to error classes; a support library; an entry-point manifest; layer-1 code checks, expression extraction and mutation operators with the helper-to-built-in mapping; a tracer; sandbox, remote-tier and validator runners; optionally a second renderer; a vocabulary list for lessons. Both declare the vocabulary version they implement and what they add, and never change an existing meaning. A target that cannot handle an operation or represent a type declares it unsupported, and anything using it is manual work on that target ([ADR 0001][adr1], amended). Both use free tools or recorded exceptions. A source's extractor keeps all six promises of [section 3](#3-extraction-and-the-catalog).
 
 **Mappings shared by a source and a target are split** into a source half and a target half that meet at the vocabulary ([ADR 0019][adr19]), so S sources and T targets need S + T of each, not S × T:
 
@@ -933,6 +954,8 @@ Decided in: [What must a new source or target provide?][t17], [Which parsers can
 
 **Oracle PL/SQL, on paper.** Everything fits as an addition: types (records, collections, Oracle `NUMBER`, intervals, timestamps with a named time zone, `ROWID`), node kinds (packages with session state; triggers parameterised by timing and level), and operations (among them `assign_exactly_one_row`, `SQL%ROWCOUNT`, collection operations, `BULK COLLECT` and `FORALL`, `raise_exception`, `autonomous_block`, `hierarchical_query`, empty string as null). Wrapped source and the `MODEL` clause are recognised only. Parsing with the grammars-v4 PL/SQL grammar or sqlfluff; clients `python-oracledb` (thin mode) and Oracle's JDBC driver (a recorded exception); sandbox Oracle Database Free 23ai (a platform exception), with 19c and earlier on a guarded source-side remote tier unless shown faithful.
 
+**The cross pairings, on paper.** Annex B also walks Oracle PL/SQL onto the PySpark target and SQL Server onto Snowflake. Among its results: Oracle's `NUMBER` with no declared scale and `ROWID` are declared unsupported by PySpark; collections live in session state; an autonomous block that writes a table its enclosing transaction also writes is manual. On Snowflake, converted procedures run with caller's rights and keep session state in a session-scoped temporary table.
+
 **Snowflake SQL, on paper.** Everything fits as a target responsibility: the write path checks keys and foreign keys and emulates triggers (Snowflake enforces only `NOT NULL`); identity values from counters in a state table; savepoints declared unsupported or emulated; errors mapped to error classes, with one handler block per statement where ADR 0004 needs execution to continue; several result sets packaged by a convention the entry-point manifest describes; the support library as a schema of SQL functions and procedures vendored under a versioned schema name; an instrumented test copy with checkpoints in event tables; the Python connector and JDBC as clients (Apache 2.0). There is no local engine, so a Snowflake account is the remote tier where layers 2–6 and the final validator run.
 
 ### 18. Tools, licences and client promises
@@ -944,7 +967,7 @@ Decided in: [ADR 0017][adr17] (the owner's free-tools rule), [Observe the ODBC d
 | Need | Tool | Licence |
 |---|---|---|
 | Language | Python 3.12 | Open source |
-| Target runtime in the sandbox | PySpark and Delta Lake, pinned to a named Databricks Runtime (the sandbox is 17.3 LTS: Spark 4.0.0, Delta 4.0.0, JDK 17, Python 3.12) | Apache 2.0 |
+| Target runtime in the sandbox | PySpark and Delta Lake, matched to the client's declared Databricks Runtime: 17.3 LTS (Spark 4.0.0, Delta 4.0.0, JDK 17, Python 3.12) or 18 LTS (Spark 4.1.0); one image per supported runtime | Apache 2.0 |
 | Control database | Postgres, later pgvector | Open source |
 | T-SQL parsing | ScriptDom on .NET, through pythonnet | MIT |
 | Query-level SQL | sqlglot | MIT |
@@ -965,9 +988,9 @@ Decided in: [ADR 0017][adr17] (the owner's free-tools rule), [Observe the ODBC d
 - **The extractor** is read-only, never executes client code, never reads a row of client data, never holds `EXECUTE`, and checks its own permissions ([section 3](#3-extraction-and-the-catalog)).
 - **Synthetic data only.** The sandbox and every remote tier receive synthetic data generated from the catalog and the original, never client data. Profiling the client's real data and shadow runs on real data are out of scope.
 - **No security metadata** is stored, and **marked secrets** are masked before any model or report sees them and never written into generated code.
-- **Zero retention** can be promised and is checked at every model location ([section 8](#8-ai-steps)).
+- **Zero retention** can be promised at every model location: checked on Bedrock and Vertex, attested on the direct API, with the direct API's 2-year exception for flagged content stated ([section 8](#8-ai-steps)).
 - **One control database per engagement,** dropped to delete a client's data; client lessons and examples never leave it; global lessons hold no client code by a deterministic check.
-- **The single-writer assumption** is the one condition the converted code places on the client's operations: during a run, converted code is the only writer to the tables it writes.
+- **The single-writer assumption** is the one condition the converted code places on the client's operations: at most one writer per table at any moment, converted or not, across every project in the environment. Converted jobs enforce it among themselves with write leases ([ADR 0021][adr21]).
 
 ## Testing Decisions
 
@@ -1026,13 +1049,13 @@ Flags beside a verdict: pre-existing issue; relies on an accepted dependency; re
 
 1. No LLM takes part in any verdict. Verdicts are computed by deterministic code from observations.
 2. SQL Server execution of the original is the only oracle. Tolerances come only from the silent-differences catalogue, and only where the original's lineage passes a catalogued difference.
-3. The data generator, and the LLM step proposing inputs, see nothing derived from converted code ([ADR 0005][adr5], amended twice). Inputs derived from converted code (candidate disagreements, mutant-directed inputs, minimised failing inputs, reviewer-written inputs) join the visible set only; the blind generator alone owns the hold-out seeds that decide a verdict.
+3. The data generator, and the LLM step proposing inputs, see nothing derived from converted code ([ADR 0005][adr5], amended three times). The step's inputs are the original, the catalog slice, coverage gaps of the original, the domain profiles, the business-rules file and the input format. Inputs derived from converted code (candidate disagreements, mutant-directed inputs, minimised failing inputs, reviewer-written inputs) join the visible set only; the blind generator alone owns the hold-out seeds that decide a verdict.
 4. Final verdicts run on hold-out seeds repair never saw. Hold-out seeds are single-use: a failure on one is disclosed to repair in full, those seeds are retired into the visible set, and fresh ones are drawn.
 5. Comparison code shares no code with the support library.
 6. Repair may change only the artefact's (or its unit's) representation and generated code.
 7. After any repair, checks restart from layer 1.
 8. Expected observations from the original are captured once per input and stored in the run catalog, so no repair attempt can shift them.
-9. Every verdict records a fingerprint of the test definition: generator version, seeds and seed counts, comparison rules, tolerance catalogue, mutation operators, thresholds, domain-profile versions, the business-rules file's hash, the invariants, the edge-case pool version, tie-free seed counts and the solver version. A verdict whose fingerprint doesn't match the tool's pinned definition is invalid, and the retroactive search picks it up.
+9. Every verdict records a fingerprint of the test definition: generator version, seed counts (the seed values are recorded with the verdict, not in the fingerprint), the hash of the engagement's lesson-added test inputs, comparison rules, tolerance catalogue, mutation operators, thresholds, domain-profile versions, the business-rules file's hash, the invariants, the edge-case pool version, tie-free seed counts and the solver version. A verdict whose fingerprint doesn't match the tool's pinned definition is invalid, and the retroactive search picks it up.
 10. Nobody can change a verdict ([ADR 0006][adr6]). An operator may attach a recorded acceptance, with name and reason, shown beside the verdict and never in place of it.
 11. The testing module is itself tested ([Testing the tool itself](#testing-the-tool-itself)).
 
@@ -1042,7 +1065,7 @@ Flags beside a verdict: pre-existing issue; relies on an accepted dependency; re
 
 Decided in: [How does reconciliation generate data and compare results?][t13], [Which SQL Server versions does v1 support?][t26], [Can a SQL Server container and local PySpark stand in for the real platforms?][t4]. ADRs: [0005][adr5], [0014][adr14], [0015][adr15].
 
-**Reconciliation never fakes what it cannot run** ([ADR 0014][adr14]). External objects outside the extraction are never stubbed: an artefact touching one is "Not reconcilable locally" until it is extracted, and the report lists each external database whose extraction would make artefacts reconcilable, with how many it would unlock. The clock is never faked: SQL Server on Linux ignores `libfaketime` (tested). Code the sandbox can't run goes to an optional **remote tier**, a real platform instance provided for the engagement that receives synthetic data only (a Databricks workspace; on paper, a Snowflake account; or, for old SQL Server levels, a guarded source-side test server).
+**Reconciliation never fakes what it cannot run** ([ADR 0014][adr14]). External objects outside the extraction are never stubbed: an artefact touching one is "Not reconcilable locally" until it is extracted, and the report lists each external database whose extraction would make artefacts reconcilable, with how many it would unlock. The clock is never faked: SQL Server on Linux ignores `libfaketime` (tested). Code the sandbox can't run goes to an optional **remote tier**, a real platform instance provided for the engagement that receives synthetic data only (a Databricks workspace; on paper, a Snowflake account; or a guarded source-side test server). Every remote tier is guarded: a target-side tier is reached as a tester principal that can reach only the tool's scratch catalog, in a workspace different from the client's declared target workspace, and the tool refuses to run otherwise ([ADR 0014][adr14], amended).
 
 **Data generation** (the generator is blind: it sees nothing derived from converted code).
 
@@ -1050,7 +1073,7 @@ Decided in: [How does reconciliation generate data and compare results?][t13], [
 - **Constraints:** types by construction; distinct values for keys; existing parents for foreign keys (orphans only where the catalog marks a key disabled or not trusted); check constraints solved where the solver can, otherwise rejection sampling within a budget (an unsatisfiable one is recorded and its table gets fewer rows). For every constraint on a table the artefact writes, inputs are also generated that make its writes violate it, exercising the write wrapper and the original's error paths.
 - **Values:** discriminating values (non-zero, unequal, varied magnitude) and an edge-case pool per type and collation drawn from the silent-differences catalogue: `NULL`, empty string, trailing spaces, mixed case, Unicode, boundary dates, numeric boundaries and values near overflow, values that round, duplicates in non-key columns. Tables hold 50 rows by default; faults that show only at volume are not tested, and the report says so.
 - **Row placement on Spark:** several partitions with shuffled row placement, fixed per seed, so code depending on row order fails in the sandbox.
-- **Inputs solved from the original's conditions:** every `WHERE`, `IF`, `CASE WHEN` and join condition is encoded for Z3, modelling T-SQL semantics (`NULL` three-valued logic, collation, implicit conversion), to find inputs making each true and false. What it can't model is "not solved". Solved targets feed visible and hold-out seeds. The same mechanism aims inputs at a lesson trigger's region.
+- **Inputs solved from the original's conditions:** every `WHERE`, `IF`, `CASE WHEN` and join condition is encoded for Z3, modelling T-SQL semantics (`NULL` three-valued logic, collation, implicit conversion), to find inputs making each true and false. What it can't model is "not solved". Solved targets feed visible and hold-out seeds. The same mechanism aims inputs at a lesson pattern's region.
 - **LLM proposals** use the same input format, are checked against every constraint, and join the visible set only. The cost: a branch only a proposal reaches never counts toward the deciding run.
 - **Seeds:** 5 visible and 3 hold-out per verification by default, both versioned.
 - **Domain profiles and the business-rules file.** Declarative, in a fixed vocabulary (value domains, distributions, relationships between columns, invariants: sum-equals, count-equals, unique-where, not-null-where, references). A deterministic mapping by name and type binds them to tables and columns automatically; the report lists every mapping and unused rule, and the operator may override. Most rows follow the rules; a fixed share deliberately breaks them where the database's own constraints allow. v1 ships four profiles: retail sales and orders, inventory, general ledger and finance, people and HR. A new industry profile ships in a release once a corpus from that industry exists to test it against. The business-rules file is engagement input in the control database, read only by the testing module and the test-input step.
@@ -1062,13 +1085,13 @@ Decided in: [How does reconciliation generate data and compare results?][t13], [
 - **Isolation:** each verification gets its own scratch database on the sandbox SQL Server, built from catalog definitions with the client's database collation, compatibility level and per-routine settings, with the originals of the artefact, its callees and its triggers. A database snapshot is taken after loading and reverted before each input. On Spark, each verification has its own session and warehouse directory, with Delta tables reloaded per input. Both are dropped afterwards. The cost: a few seconds per input on Spark, so a run over thousands of artefacts takes hours.
 - **Invoking each artefact type:** a procedure by `EXEC` with every result set, output parameters, return value, messages, error and after-state captured; a scalar function over all argument tuples in one query; a table-valued function and a view by `SELECT *`; a trigger through generated DML on its table (single-row, multi-row and zero-row inserts, updates and deletes); a batch as written. The converted side is called the same way through its entry point.
 - **The clock:** the SQL Server side records the time before and after each call and the converted side's clock is set to the start; a time-derived value (found from the original's data flow) matches if it falls inside that window, and every use of the window is reported under timeliness. Session values (`SUSER_SNAME()`, `HOST_NAME()`, `DB_NAME()`, `@@SPID`) are read from SQL Server and given to the converted side.
-- **The sandbox per run:** one SQL Server container per run, matched to the client in server collation (which temp tables use), version (by the routing in [section 16](#16-sql-server-versions)) and time zone; the Spark container pinned to a named Databricks Runtime; all versions recorded in every verdict. A mismatch the tool can't fix carries "assumed" provenance. The final validator's fresh sandbox is a separate container.
+- **The sandbox per run:** one SQL Server container per run, matched to the client in server collation (which temp tables use), version (by the routing in [section 16](#16-sql-server-versions)) and time zone; the Spark container for the client's declared Databricks Runtime ([section 7](#7-the-support-library)); all versions recorded in every verdict. A mismatch the tool can't fix carries "assumed" provenance. The final validator's fresh sandbox is a separate container.
 - **The client:** the runner uses SqlClient with errors delivered as messages, and cross-checks it against Extended Events' per-statement row counts.
 
 **Comparing.**
 
 - **Rows** are compared as multisets; under a top-level `ORDER BY` the order is checked on the sort keys only, ties in any order. Column names exactly; types through the type mapping.
-- **Values:** decimals and money exact at the mapped scale; strings exact, case and trailing spaces included; dates and times exact at the source type's precision; floats exact, except that silent-difference entry 3.13 gives a tolerance for columns whose lineage includes a floating-point aggregation, named in the evidence. No tolerance ever applies to a whole type or column by default. Lineage is the original's data flow, found by the parser.
+- **Values:** decimals and money exact at the mapped scale; strings exact, case and trailing spaces included; dates and times exact at the source type's precision; floats exact, except that silent-difference entry 3.13 gives a tolerance for columns whose lineage includes a floating-point aggregation, named in the evidence. One more catalogued tolerance: 100 ns for the seventh fractional digit of `datetime2(7)`, `time(7)` and `datetimeoffset(7)` columns (entry 4.3), reported per artefact. Apart from these two, no tolerance applies to a whole type or column. Lineage is the original's data flow, found by the parser.
 - **Exclusions,** each listed in the verdict: `NEWID()` and `RAND()` outputs and everything derived from them; for `TOP` without `ORDER BY`, the count must match and every converted row must belong to the full qualifying set (from a parser-made variant run on SQL Server as a check, never as the oracle); for case-insensitive `GROUP BY` and `DISTINCT`, a value matches if case-insensitively equal and that spelling occurs in the group's input. Identity values are compared, because the wrapper reproduces them. Row versions are compared by property: every written row gets a new, strictly larger value, unchanged rows keep theirs.
 - **Plan-dependent constructs** are checked by property, and each occurrence is reported as a pre-existing issue in the legacy logic: ranking over keys that aren't unique must be a valid ranking (consistent with the order keys, ties in any order); `SELECT @v = @v + col` must combine exactly the qualifying values in some order. Outputs derived from them: a filter on the rank keeps only rows SQL Server could have kept under some valid order of ties; an accumulated value passed on as-is must equal some ordering of the qualifying values; any other downstream use is compared by count, type and nullness only on seeds with ties, listed as "not compared by value". **Tie-free seeds** (unique order keys; a single qualifying row or identical qualifying values), derived from the original's structure, feed visible and hold-out seeds, and on them every output is compared by value.
 - **Errors and messages:** system errors match on number and severity (text compared and reported, not deciding); errors the code raises itself (`THROW`, `RAISERROR` above severity 10) match on number, state and exact text; messages are compared and reported, not deciding. After an error the original continued past, where ADR 0004 makes converted code stop, only "an error was raised" is compared, listed as a caveat.
@@ -1141,7 +1164,7 @@ Decided in: [How does the final independent validator work?][t32], [Observe the 
 - **Without the shared parser:** nondeterminism is found by running each input on the original three times, varying database-scoped `MAXDOP` and the physical load order; output that differs is compared only by row count, types and nullness. The cost: an unordered `TOP` that happens to agree three times can make it fail a correct conversion, which then waits for a release; the defect notice names the output. Time-derived output is found by observation, through its own execution window. A case-insensitive value matches if equal under the column's collation and that spelling occurs in its own input.
 - **Coverage** of the original comes from Extended Events through its own code, drives its generator, and is reported beside the testing module's, never merged.
 - **Deterministic:** SQL Server execution is the only judge, and no model decides anything.
-- **One-way, apart from a pass-or-fail bit.** Only the pass or fail result may be used, and only by gates: lesson confirmation and worked-example qualification. Its inputs, evidence and failure details never reach any conversion component.
+- **One-way, apart from a pass-or-fail bit.** Only the pass or fail result may be used, by five consumers: lesson confirmation, worked-example qualification, the pilot barrier, dependency blocking, and the orchestrator's observation ([ADR 0013][adr13], amended). Its inputs, evidence and failure details never reach any conversion component.
 - **A failure** marks the artefact "Failed final validation", not converted, and flags a defect in the testing module. The failing input is treated like a disclosed hold-out seed: maintainers may see it, it never enters the testing module's data, and it is retired. A testing-module fix counts only if the testing module then catches the failure with its own blind data; repair acts on the artefact only after that. The defect notice says when the testing module had passed it under a tolerance. One deterministic step needs no release: an artefact delivered in a raised form falls back to its faithful form and is validated again with fresh seeds, after which one short final step re-verifies and re-validates it and its dependents, once per artefact. If the faithful form fails too, it is not converted and its dependents are blocked.
 - **"Not validated"** whenever it cannot recreate an object or run something, with the reason. Never a pass.
 - **Callees and cycles:** each artefact is validated against the delivered callees and triggers, and a cycle as one unit.
@@ -1158,6 +1181,7 @@ Decided in: [What does the testing module own, and how is it kept independent?][
 - **Each judge's client cross-check** is confirmed on known cases, including nested statements such as triggers, before the judge may issue results.
 - **The support library's tests.** Each helper has a spec naming the T-SQL construct it reproduces and the catalogue entries it handles. Its tests run the construct on SQL Server and the helper on Spark over the same inputs (edge-case pools, random values, every entry it names), across a matrix of collations (case- and accent-sensitive and insensitive, `SQL_` and Windows collations, `_BIN2`, `_100_`, UTF-8), every compatibility level at which its behaviour differs, each supported SQL Server container version, and several partitions with shuffled row placement. The tests' comparison code shares no code with the library. Each library version declares the Databricks Runtimes it supports and is tested on local Spark pinned to each, with the Python patch version pinned too. Each release also runs the suite once on the vendor's own Databricks workspace per supported runtime, with synthetic data only, to catch what local Spark can't reproduce (Photon, Databricks' own patches). Each twin and its column helper are tested against the same SQL Server cases, and a property test on every release checks they agree on random inputs.
 - **The validator's self-test,** before a version may issue results: it must kill its own fixed sample of mutants of known-good delivered projects (using neither the testing module's known-bad cases nor its mutation operators); known-good delivered projects must pass (corpus artefacts the testing module reconciled, each signed off by a named maintainer, and once validator versions exist, passed by an earlier one); and **identity runs** must pass, running each self-test artefact with the original on both sides, SQL Server against SQL Server, through its own generator, nondeterminism detection, clock window and comparison. The self-test records which checks rest on identity runs and which on reviewed projects; identity runs never touch the Spark side or the representation rules.
+- **Write leases and recovery on start** are exercised by both judges, and crash-recovery cases are part of the support library's tests.
 - **Prompts and models** change only in a release gated by the known-good and known-bad suites and by each AI step's measured pass rate.
 
 ### Prior art in this repository
@@ -1182,6 +1206,7 @@ Decided in: [What acceptance criteria make the five selling points checkable?][t
 
 - It carries the headline numbers, reported separately; sample-corpus and public-corpus results are also reported separately.
 - It is never used for development: not for rules, prompts, lessons, the global worked-example pool, the known-good suite the lesson gate re-runs, the validator's self-test projects, the surviving-mutant calibration, model-tier calibration, or developing the orchestrators.
+- **In measurement runs,** lessons drafted from hold-out artefacts are discarded, hold-out artefacts are kept out of the engagement's worked-example pool, and the pilot is drawn from development artefacts only.
 - Looking at a hold-out failure counts as development: per-artefact hold-out results go only to release reviewers, and a failure seen there is fixed only once reproduced on a development artefact.
 - It is small: about 33 artefacts, roughly 13 of them testable stored procedures, so one procedure is about 7.7%. Per-construct gates are therefore measured on the whole corpus and headline gates on the hold-out. **Measured on the whole corpus, the per-construct gates partly measure fit,** until a real corpus enlarges the hold-out.
 
@@ -1202,7 +1227,7 @@ Decided in: [What acceptance criteria make the five selling points checkable?][t
 | Criterion | Target |
 |---|---|
 | Testable stored procedures converted | ≥ 80% |
-| All artefacts of converted types converted | ≥ 75% |
+| Artefacts of converted types converted, excluding the 15 with dynamic SQL (116) | ≥ 75% |
 | Triggers converted | ≥ 75% |
 | For each hard construct used by 10 or more artefacts, those artefacts converted (dynamic SQL excluded) | ≥ 70% each, on the whole corpus |
 | For each hard construct used by fewer than 10 artefacts (savepoints, `MERGE`, `OUTPUT` and so on) | At least one converted |
@@ -1230,7 +1255,7 @@ Decided in: [What acceptance criteria make the five selling points checkable?][t
 
 | Criterion | Target |
 |---|---|
-| A warm re-run produces a byte-identical delivered project and report data | 100% |
+| A warm re-run produces a byte-identical delivered project, and byte-identical report data outside its run-specific section (times, durations, cost, audit-sample results) | 100% |
 | Across three cold runs, artefacts with the same status in all three | ≥ 95% |
 | An injected helper fix reaches every artefact that uses the helper | 100% |
 | An edit to delivered code is detected by `check-project` | 100% |
@@ -1258,14 +1283,14 @@ What this spec commits the build to, beyond implementing the decisions above. Ea
 **The build's first experiment: the orchestrator benchmark** ([What orchestrator interface lets an agent and a plain pipeline be swapped?][t15], [ADR 0020][adr20]).
 
 - **The hypothesis** is the owner's: an agentic orchestrator converts more than a plain pipeline. It is tested, not assumed. No directional prototype was run before the build: its setup would have differed too much from the product to give trustworthy evidence.
-- **Setup:** the development corpus (the sample corpus plus the public corpus minus the release hold-out, which stays untouched); reconciliation on; identical settings for both orchestrators (parallelism, limits, routing, versions).
+- **Setup:** the development corpus (the sample corpus plus the public corpus minus the release hold-out, which stays untouched), split deterministically into a tuning half and a benchmark half; reconciliation on; identical settings for both orchestrators (parallelism, limits, routing, versions). The benchmark needs the whole engine built first.
 - **Two conditions, 5 cold runs of each orchestrator in each,** 20 runs in all: an ample ceiling that doesn't bind, and a binding ceiling set after the ample runs at 60% of the baseline's measured spend there.
-- **Deciding, in each condition:** on converted share, the agentic orchestrator wins only if its mean beats the baseline's by more than the larger of the two run-to-run ranges and by at least 2 artefacts; otherwise it's a tie, and speed decides by the same rule on mean wall-clock time.
+- **Deciding, in each condition,** on the benchmark half: on converted share, the agentic orchestrator wins only if its mean beats the baseline's by more than the larger of the two run-to-run ranges and by at least 2 artefacts; otherwise it's a tie, and speed decides by the same rule on mean wall-clock time. A tie on both makes the baseline the default.
 - **Guardrails, flagged but not deciding:** cost per converted artefact more than 2× the baseline's; status stability below 95%.
 - **Also tested:** an interrupted run resumes by replaying; a crash between doing the work and recording it duplicates no effect.
-- **Development rule:** the agent's prompt and tools are developed on the development corpus only.
+- **Development rule:** the agent's prompt and tools are developed on the tuning half only. The cost: a smaller, noisier benchmark.
 - **After it:** both orchestrators stay behind one switch; the winner under the ample ceiling becomes the default, recorded in a decision record; if the binding-ceiling result disagrees, the switch's documentation recommends the other orchestrator for engagements expected to hit their ceiling.
-- **Repair's level** is re-examined from the same runs: if a single fixed-prompt call fixes as many failures given the same evidence, repair moves down to an LLM step ([ADR 0008][adr8]).
+- **A repair arm:** 5 more cold runs under the ample ceiling, with the baseline orchestrator and repair replaced by a single fixed-prompt call given the same evidence. If it fixes as many failures, repair moves down to an LLM step ([ADR 0008][adr8], [ADR 0020][adr20], amended).
 
 **Build-phase checks and deliverables.**
 
@@ -1305,47 +1330,76 @@ From [the map][map]:
 
 ## Further Notes
 
-Found while compiling this spec and checking each section against every ADR and the map's Notes. **None of these is settled in the spec.** Each needs the owner's decision, or a confirmation that the reading stated here is right. Numbered for reference.
+### What is still open
 
-### Contradictions and gaps that need a decision
+Three items found while compiling this spec need design work in the build, not a decision now. Each is recorded here so it is not left silently.
 
-1. **A target-side remote tier has no guard.** A source-side test server is guarded: the tool refuses to run unless it holds nothing of the client's and isn't the extracted server ([ADR 0015][adr15], [Which SQL Server versions does v1 support?][t26]). A target-side remote tier, a Databricks workspace "provided by the vendor or the client" ([ADR 0014][adr14], [How does reconciliation generate data and compare results?][t13]), has no equivalent check, yet reconciliation writes synthetic data and runs code there. Nothing stops a client's production workspace being used. Needs a decision: a matching guard (what it checks), or a stated reason none is needed.
-2. **A refusal fallback may break the zero-retention promise.** On a refusal, the tool retries through Anthropic's server-side fallback or the SDK's client-side middleware ([How does a run govern its model use?][t30]). Those choose the fallback model. Nothing says it must be a model allowed under zero retention (not Fable or Mythos), or that on Bedrock its effective retention mode is checked like the pinned model's ([ADR 0016][adr16]). Needs a decision: restrict fallbacks to models checked under the engagement's policy, or name the risk.
-3. **The release hold-out and learning within a measurement run.** The hold-out is never used for development: not for lessons, worked examples or calibration ([What acceptance criteria make the five selling points checkable?][t19]). But a release measurement run converts the whole corpus as a run, and within a run the tool drafts lessons, confirms them and draws worked examples from the engagement pool ([How does the tool learn from its mistakes, and how are earlier conversions brought up to date?][t23], [What context does each AI step receive?][t21]), and the pilot may include hold-out artefacts ([In what order does a run process its artefacts?][t31]). Lessons drafted from hold-out artefacts during a measurement run are global by default, being from the public corpus. Needs a decision: whether in-run learning from hold-out artefacts is allowed during measurement, and that such lessons are discarded rather than kept in the global set.
-4. **Which artefacts the 75% gate counts.** "All artefacts of converted types converted ≥ 75%" ([What acceptance criteria make the five selling points checkable?][t19]) is stated over 131 artefacts, which include the 15 with dynamic SQL that can never convert. That makes the effective target about 85% of the rest. The 80% gate on stored procedures explicitly excludes them; this one doesn't say. Needs a decision on the denominator.
-5. **The glossary's "trigger" collides with database triggers.** `CONTEXT.md` defines **Trigger** as a lesson's structural pattern ([How does the tool learn from its mistakes, and how are earlier conversions brought up to date?][t23]), while "trigger" is also a converted artefact type throughout. This spec writes "lesson trigger". Needs a decision: rename the glossary term, or keep it with a qualifier.
-6. **The agentic orchestrator's tier is unspecified.** Its own model calls "run at a fixed tier" ([What orchestrator interface lets an agent and a plain pipeline be swapped?][t15]), but which tier, and whether it is versioned with the other tier settings, isn't stated. A builder would have to guess, and it affects the benchmark's cost guardrail.
-7. **Which Databricks Runtime the sandbox matches.** The sandbox's Spark container is "pinned to a named Databricks Runtime" per run ([How does reconciliation generate data and compare results?][t13]), the toolbox is pinned to 17.3 LTS ([Build the sample SQL Server database and corpus][t7]), and each support-library version supports several runtimes (for example 16.4, 17.3 and 18 LTS, [How is the support library packaged, versioned and tested?][t22]). Whether a run's sandbox follows the client's runtime, and so whether the product ships one Spark image per supported runtime, isn't decided. 16.4 LTS is Spark 3.5, where ANSI mode is off by default and several behaviours differ ([Can a SQL Server container and local PySpark stand in for the real platforms?][t4]).
-8. **What makes two artefacts a cluster.** Artefacts "identical apart from names" share one conversion ([Which autonomy level does each component get?][t14]), but whether literals, comments, whitespace or parameter defaults may differ isn't defined. A builder would have to guess, and a wrong rule shares a conversion across artefacts that behave differently.
-9. **ADR 0005's text predates the test-input step's wider context.** ADR 0005 says any LLM proposing test inputs sees "only the catalog and the original artefact". Its second amendment restates the *generator's* inputs as "nothing derived from converted code", but the test-input step now also gets the domain profiles, the business-rules file and coverage gaps ([How does reconciliation generate data and compare results?][t13]), and the ADR doesn't say the same rule covers it. The reading here is that it does; confirm, and amend the ADR's wording.
+1. **The error classes and error-mapping tables aren't written.** [ADR 0019][adr19] fixes their structure: targets map failures to classes, sources map classes to codes. The list of classes and both tables' contents exist only as examples ([What must a new source or target provide?][t17], [How is each construct with no PySpark equivalent converted?][t10]).
+2. **The control database's tables and the run catalog's record format aren't designed,** nor the snapshot export's exact form ([What does the catalog hold and how does conversion read it?][t8]).
+3. **Values left as versioned settings, with no number decided:**
+   - attempt limits per AI step, and the budget per artefact;
+   - the token size budget per AI step;
+   - the tier table (the one given is an example) and the complexity score's formula;
+   - the default parallelism;
+   - the rejection-sampling budget, the delta-debugging budget, and the share of rows that deliberately break domain rules;
+   - the final validator's input budget and its floating-point bound for aggregates;
+   - the surviving-mutant threshold, calibrated in the build.
 
-### Unfinished work the spec relies on
+   Each is set by measurement where the acceptance criteria require it.
 
-10. **The error classes and error-mapping tables aren't written.** ADR 0019 fixes their structure: targets map failures to classes, sources map classes to codes. The list of classes and both tables' contents exist only as examples ([What must a new source or target provide?][t17], [How is each construct with no PySpark equivalent converted?][t10]).
-11. **Fixed on 18 October 2026: Annex C's entries are mapped to vocabulary operations.** Each of the 83 entries now has a Vocabulary column naming the operations and types that carry its meaning, all checked to exist in Annex A. Entry 9.14 is about target-side SQL text in the escape hatch, not a source construct, and says so; it belongs in Annex D only, and is left in both until the owner confirms.
-12. **Fixed on 18 October 2026: the vocabulary follows the later decision on `rowversion`.** Annex A (version draft-2) maps `ROWVERSION` and `TIMESTAMP` to `binary(length, fixed)` and no longer lists them under `unsupported_type`, as [Which SQL Server versions does v1 support?][t26] decided. Their assignment from a database-wide counter is a property of the column, known from the catalog and applied by the write path, like identity. The vocabulary check still accounts for every type in the corpus.
-13. **The control database's tables and the run catalog's record format aren't designed.** [What does the catalog hold and how does conversion read it?][t8] left them to the build, along with the file export's exact form. They are build work, recorded here so it isn't left silently.
+### Decided after compilation
 
-### Values left as versioned settings, with no number decided
+The first version of this spec (commit 2e03553) listed 15 items here. An independent review on Claude Fable then found 24 more. The owner decided all of them on 18 October 2026; the decisions are recorded in [Independent review of the assembled spec][t28], and applied in this spec, the ADRs, the glossary and the map.
 
-14. These are fixed and versioned by the tool, but no value has been decided. Each is build work, set by measurement where the acceptance criteria require it:
-    - attempt limits per AI step, and the budget per artefact ([Which autonomy level does each component get?][t14]);
-    - the token size budget per AI step ([What context does each AI step receive?][t21]);
-    - the tier table (the one given is "for example") and the complexity score's formula ([How does a run govern its model use?][t30]);
-    - the default parallelism ([In what order does a run process its artefacts?][t31]);
-    - the rejection-sampling budget for check constraints, the delta-debugging budget, and the share of rows that deliberately break domain rules ([How does reconciliation generate data and compare results?][t13]);
-    - the final validator's input budget and its floating-point bound for aggregates ([How does the final independent validator work?][t32]);
-    - the surviving-mutant threshold, calibrated in the build ([What acceptance criteria make the five selling points checkable?][t19]).
+**The original Further Notes:**
 
-### Statements in earlier records that later decisions replaced
+| Item | Outcome |
+|---|---|
+| 1. A target-side remote tier had no guard | Guarded like a source-side one ([ADR 0014][adr14], amended); see Reconciliation |
+| 2. A refusal fallback could break zero retention | Fallbacks restricted to allowed models and checked first ([ADR 0016][adr16], amended) |
+| 3. The release hold-out in measurement runs | Lessons from hold-out artefacts discarded, hold-out kept out of the engagement example pool, pilot from development artefacts only |
+| 4. The 75% gate's denominator | Excludes the 15 dynamic-SQL artefacts: 116 |
+| 5. "Trigger" collided with database triggers | Renamed **lesson pattern** in the glossary and [ADR 0010][adr10] |
+| 6. The agentic orchestrator's tier | The top tier, versioned ([ADR 0020][adr20], amended) |
+| 7. Which Databricks Runtime the sandbox matches | The client's declared runtime; v1 supports 17.3 LTS and 18 LTS ([section 7](#7-the-support-library)) |
+| 8. What makes a cluster | Identical lowered representation with identifiers as placeholders; literals and defaults exact; comments ignored ([section 5](#5-lowering-raising-and-generation)) |
+| 9. ADR 0005's wording | Amended to cover the test-input step and list its inputs |
+| 10. Error classes and tables | Still open: item 1 above |
+| 11. Annex C not mapped to the vocabulary | Fixed: every entry has a Vocabulary column |
+| 12. `rowversion` unsupported in the vocabulary | Fixed: mapped to `binary(length, fixed)` (vocabulary draft-2) |
+| 13. Control database schema | Still open: item 2 above |
+| 14. Values with no number | Still open: item 3 above |
+| 15. Wording drifts in earlier records | Fixed: the map's Notes and [ADR 0017][adr17]'s list corrected |
 
-15. These are wording drifts, not open questions: the later decision is clear, and this spec follows it. **On 18 October 2026 the map's three Notes and ADR 0017's list were corrected;** the two tickets' tables are corrected by the comments already on them.
-    - **The map's "Running" Note** says model results are cached "on input + prompt version + model version". The key decided later also includes the rendered context's hash, the candidate variant, the tier and score, and the attempt number ([ADR 0009][adr9], [How does a run govern its model use?][t30]).
-    - **The map's "Support library" Note** says "pinned per run". It is pinned exactly per delivered project, under versioned names ([ADR 0018][adr18]).
-    - **The map's "No shortcuts at runtime" Note** says nothing is reported as converted "unless it reached Reconciled". "Converted" also needs a passed final validation ([ADR 0013][adr13]), as the map's Correctness Note already says.
-    - **The type table in [How is each construct with no PySpark equivalent converted?][t10]** lists `rowversion` as having no target type. [Which SQL Server versions does v1 support?][t26] later mapped it, as a comment on that ticket records.
-    - **The same ticket's error table** maps Spark errors straight to SQL Server numbers. [ADR 0019][adr19] split it into error classes, as a comment on that ticket records.
-    - **[ADR 0017][adr17]'s list of compliant tools** predates WeasyPrint (BSD), pythonnet (MIT) and the JDK the final validator needs (OpenJDK). All three are free and open source, so the rule holds; the list is incomplete.
+**The review's findings:**
+
+| Finding | Outcome |
+|---|---|
+| R1. The single-writer assumption ignored concurrent converted jobs | Restated across every project and enforced by **write leases** ([ADR 0021][adr21]); in the sign-off |
+| R2. `retry_up` against engine escalation | The engine escalates inside a step; `retry_up` re-runs the AI step behind a failing region, refused for deterministic regions ([section 11](#11-the-orchestrator-interface)) |
+| R3. Repairs to deterministic output were lost on regeneration | Kept as **repair patches**, plus a proposed-rule lesson ([ADR 0008][adr8], amended) |
+| R4. Crash recovery needed the run catalog in production | Automatic recovery at the start of every run from the state table; the command still ships ([ADR 0021][adr21]) |
+| R5. The sign-off claimed "behaved like the original" | A flag, "differs from the original after an error", and "except where flagged" ([ADR 0012][adr12], amended) |
+| R6. `datetime2(7)` and `datetimeoffset` were lossy | Offset in a companion column, listed as a target-table requirement; a catalogued 100 ns tolerance for the seventh digit |
+| R7. Catalogue entries with no treatment | Helpers for 2.7, 2.11, 3.6 and 3.10, with a caveat where a helper cannot match exactly |
+| R8. Client names could reach global lessons | Promotion rejects catalog identifiers; repair's hypothesis stays client-only ([ADR 0010][adr10], amended) |
+| R9. When the ceiling binds | Defined; `allocate` sets maxima; the agent's calls draw on a reserved 5% ([ADR 0020][adr20], amended) |
+| R10. The agent was tuned on its benchmark corpus | The development corpus is split into tuning and benchmark halves |
+| R11. Missing status rows | Added: blocked in validation, awaiting final validation, fell back to the faithful form |
+| R12. Consumers of the validator's bit | Five permitted consumers listed ([ADR 0013][adr13], amended) |
+| R13. The cross pairings were not walked | Annex B walks Oracle to PySpark and SQL Server to Snowflake; targets declare unrepresentable types unsupported ([ADR 0001][adr1], amended) |
+| R14. Statuses to sign-off groups | A fixed mapping ([section 15](#15-the-conversion-report)) |
+| R15. "Checked" against "attested" | Checked on Bedrock and Vertex, attested on the direct API, with its 2-year exception stated ([ADR 0016][adr16], amended) |
+| R16. Result shapes at levels 80 and 90 | Remote tier, else the administrator's export, else "could not be described" ([section 3](#3-extraction-and-the-catalog)) |
+| R17. A double tie, and repair's level | A double tie makes the baseline the default; a repair arm added ([Build Commitments](#build-commitments)) |
+| R18. Byte-identical re-runs against run-specific data | Run-specific fields sit in their own section, excluded from the gate |
+| R19. Seeds in the fingerprint; lessons and tests | Seed counts, not values; lesson-added inputs enter as a hash; lessons never change how tests judge |
+| R20. Four extractor promises in Annex B against six | Annex B now requires all six |
+| R21. Material only linked to | Moved into Annex F (extractor scripts) and Annex G (agreements, open points, tested differences) |
+| R22. A Windows remote tier at level 100+ was unguarded | The guard applies to every source-side remote tier ([ADR 0015][adr15], amended) |
+| R23. The glossary limited the validator to the end of a run | Amended to its three uses |
+| R24. 132 against 133 artefacts | Not a gap: the 133rd is the SSIS package, which isn't SQL; Annex A now says "written in SQL" |
+| Entry 9.14 | Moved to Annex D only |
 
 <!-- Link references -->
 
@@ -1353,7 +1407,6 @@ Found while compiling this spec and checking each section against every ADR and 
 [t2]: https://github.com/Bach-To-The-Future/data-migration/issues/2
 [t4]: https://github.com/Bach-To-The-Future/data-migration/issues/4
 [t5]: https://github.com/Bach-To-The-Future/data-migration/issues/5
-[t7]: https://github.com/Bach-To-The-Future/data-migration/issues/7
 [t8]: https://github.com/Bach-To-The-Future/data-migration/issues/8
 [t9]: https://github.com/Bach-To-The-Future/data-migration/issues/9
 [t10]: https://github.com/Bach-To-The-Future/data-migration/issues/10
@@ -1374,6 +1427,7 @@ Found while compiling this spec and checking each section against every ADR and 
 [t25]: https://github.com/Bach-To-The-Future/data-migration/issues/25
 [t26]: https://github.com/Bach-To-The-Future/data-migration/issues/26
 [t27]: https://github.com/Bach-To-The-Future/data-migration/issues/27
+[t28]: https://github.com/Bach-To-The-Future/data-migration/issues/28
 [t30]: https://github.com/Bach-To-The-Future/data-migration/issues/30
 [t31]: https://github.com/Bach-To-The-Future/data-migration/issues/31
 [t32]: https://github.com/Bach-To-The-Future/data-migration/issues/32
@@ -1399,6 +1453,7 @@ Found while compiling this spec and checking each section against every ADR and 
 [adr18]: ../adr/0018-the-support-library-ships-as-source-vendored-per-project.md
 [adr19]: ../adr/0019-shared-mappings-are-split-by-source-and-by-target.md
 [adr20]: ../adr/0020-orchestrators-are-policies-over-a-fixed-engine.md
+[adr21]: ../adr/0021-delivered-jobs-hold-a-write-lease-on-every-table-they-write.md
 [vocab-json]: ../spec-drafts/operation-vocabulary.json
 [r-perm]: ../research/extractor-permissions.md
 [r-replay]: ../research/replayable-agent-loops.md
