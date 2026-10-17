@@ -21,7 +21,7 @@ The testing module is built to be independent of conversion, but it is still par
 
 We chose this because a second judge that shares nothing with the first is the only way to catch the first judge's own mistakes. We accept the cost of an extra full execution pass for it.
 
-The mechanics are decided in [How does the final independent validator work?](https://github.com/Bach-To-The-Future/data-migration/issues/32).
+The mechanics are decided in [the resolution of How does the final independent validator work?](https://github.com/Bach-To-The-Future/data-migration/issues/32#issuecomment-6231461796).
 
 ## Considered options
 
