@@ -1312,6 +1312,20 @@ What this spec commits the build to, beyond implementing the decisions above. Ea
 | Model-tier calibration per complexity band, outside the release hold-out | [How does a run govern its model use?][t30] |
 | The first real client corpus re-measures every acceptance criterion | [What acceptance criteria make the five selling points checkable?][t19] |
 
+**Design work and values the build must set.** Each was left open on purpose; the right-hand column says what decides it.
+
+| Commitment | What decides it |
+|---|---|
+| The list of neutral error classes, the PySpark half (Spark and Delta failures to classes) and the SQL Server half (classes to error numbers, messages and severities, and whether each ends the statement or aborts the batch) | The errors the corpus raises, catches or tests for (`THROW`, `RAISERROR`, `ERROR_NUMBER()` and `@@ERROR` comparisons), and the failures Spark and Delta raise for the same operations in the sandbox. Each entry is tested in the sandbox; anything unmapped gets the reserved number and is flagged ([ADR 0019][adr19], [section 6](#6-converted-code)) |
+| The control database's tables, the run catalog's record format, and the snapshot export's form | What the spec requires them to hold and do: immutable snapshots with content hashes and provenance ([section 3](#3-extraction-and-the-catalog)); every record listed in [section 12](#12-the-run-catalog-caching-and-resuming), with replay and every cache key it names; the final validator's separate schema and role ([section 14](#14-the-control-database)); dropping one database to delete a client's data ([ADR 0007][adr7]) |
+| Attempt limits per AI step, and the budget per artefact | Measured pass rates per step and tier on the development corpus, before the benchmark; the same values for both orchestrators |
+| The token size budget per AI step | The measured size of assembled contexts on the corpus, so that the never-trimmed parts fit for the 2,413-line procedure's largest regions |
+| The tier table and the complexity score's formula | Tier calibration per complexity band on the development corpus ([Acceptance Criteria](#acceptance-criteria)); the first release routes everything to the top tier |
+| The default parallelism | The sandbox's capacity: memory and CPU for concurrent scratch databases and Spark sessions on the machine that runs the sandbox |
+| The rejection-sampling budget, the delta-debugging budget, and the share of rows that deliberately break domain rules | Run time per layer on the corpus, against the coverage thresholds the acceptance criteria set |
+| The final validator's input budget and its floating-point bound for aggregates | The validator's own authors, from its self-test (identity runs and its known-good projects), never from the testing module's values |
+| The surviving-mutant threshold | Calibration on known-good conversions (already listed above) |
+
 ## Out of Scope
 
 From [the map][map]:
@@ -1332,7 +1346,7 @@ From [the map][map]:
 
 ### What is still open
 
-Three items found while compiling this spec need design work in the build, not a decision now. Each is recorded here so it is not left silently.
+Three items found while compiling this spec need design work in the build, not a decision now. Each is listed under [Build Commitments](#build-commitments) with what decides it, so none is left silently.
 
 1. **The error classes and error-mapping tables aren't written.** [ADR 0019][adr19] fixes their structure: targets map failures to classes, sources map classes to codes. The list of classes and both tables' contents exist only as examples ([What must a new source or target provide?][t17], [How is each construct with no PySpark equivalent converted?][t10]).
 2. **The control database's tables and the run catalog's record format aren't designed,** nor the snapshot export's exact form ([What does the catalog hold and how does conversion read it?][t8]).
