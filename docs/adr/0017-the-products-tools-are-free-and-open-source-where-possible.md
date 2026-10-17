@@ -6,7 +6,7 @@ status: accepted
 
 The owner set a rule on 17 October 2026: every tool the product uses must be free, and open source wherever possible. The Claude models are excepted.
 
-- **Containers** run on Podman, or on Docker Engine in WSL2, never on Docker Desktop.
+- **Containers** run on Docker Engine in WSL2 (preferred) or Podman, never on Docker Desktop.
 - **SQL Server connections** use Microsoft's ODBC driver. It is free but not open source, a recorded exception. For versions it can't connect to (at least 2000 and 2005, with the boundary confirmed in the build's VM tests), FreeTDS is the fallback driver.
 - **Already compliant:** Python, PySpark, Delta Lake, Postgres, pgvector, sqlglot, ScriptDom (MIT) and .NET, and Z3.
 
@@ -25,6 +25,6 @@ We chose this because a product sold to many clients shouldn't carry licence cos
 
 ## Consequences
 
-- **The sandbox and the corpus build must run on Podman.** They were built on Docker, and running them on Podman is still to be established.
+- **The sandbox and the corpus build must run on Docker Engine in WSL2.** They were built on Docker Desktop. [Run the sandbox on Docker Engine in WSL2 and observe the ODBC driver](https://github.com/Bach-To-The-Future/data-migration/issues/34) establishes this.
 - **The product's runners use the ODBC driver.** Behaviour observed with `pymssql` in the corpus tools, such as result sets lost after a failed statement, has to be established again for ODBC.
 - **Any new tool must meet the rule,** or be added to the recorded exceptions with its reason.
