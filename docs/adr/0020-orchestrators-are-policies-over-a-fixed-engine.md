@@ -29,7 +29,7 @@ We chose this because a narrow, explicit choice is the only fair way to compare 
 
 The directional prototype planned for this decision was dropped by the owner: its setup differed too much from the product to give trustworthy evidence. The benchmark is the build's first experiment instead.
 
-The full decision is in the resolution of [What orchestrator interface lets an agent and a plain pipeline be swapped?](https://github.com/Bach-To-The-Future/data-migration/issues/15).
+The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/15#issuecomment-6237311379).
 
 ## Considered options
 
