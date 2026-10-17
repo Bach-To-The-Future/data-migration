@@ -161,6 +161,14 @@ _Avoid_: Result, output
 The part of an observation taken after one statement: the variables, temp tables and rows written at that point.
 _Avoid_: Trace, snapshot
 
+**Instrumented copy**:
+A copy of an original into which the parser inserts statements that report checkpoints. It supplies checkpoints only, never the expected results, and is trusted only where it behaves exactly as the original does.
+_Avoid_: Traced original, debug build
+
+**Mutant**:
+A copy of converted code with one small fault planted, which the tests must catch. One that is never caught is a survivor.
+_Avoid_: Fault injection (which suggests runtime faults)
+
 **Verdict**:
 The testing module's judgement of one artefact: a result for each layer of checks and one overall outcome, with the evidence behind it. No LLM takes part in it and nobody can change it.
 _Avoid_: Test result, status (which is what the conversion report shows a reader)
