@@ -29,3 +29,14 @@ Two sources of test inputs now come from converted code:
 The rule above is relaxed for them, and only this far: **the blind generator alone owns the hold-out seeds that decide a verdict.** Inputs derived from converted code may be added to the visible set only. They can make tests stricter, by finding a failure, and can never decide a pass.
 
 This replaces "never data built from the mutant itself" with "never in the hold-out set". The reason in the decision above still holds where it matters: a pass is only ever decided by data the conversion could not have shaped. The change was made in [Which autonomy level does each component get?](https://github.com/Bach-To-The-Future/data-migration/issues/14).
+
+## Amendment, 17 October 2026
+
+The generator's inputs are restated as **nothing derived from converted code**, in place of "only the catalog and the original artefact". Within that rule, the blind generator also draws on:
+
+- industry domain profiles shipped with the tool;
+- an optional business-rules file from the operator or the client's analyst;
+- inputs solved from the original's own conditions;
+- inputs built to violate each constraint on a table the artefact writes.
+
+None of these comes from converted code, and the hold-out seeds remain the blind generator's alone. The change was made in [How does reconciliation generate data and compare results?](https://github.com/Bach-To-The-Future/data-migration/issues/13).

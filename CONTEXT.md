@@ -65,7 +65,7 @@ The catalog as one extraction left it. A snapshot never changes, and a run uses 
 _Avoid_: Version, extract
 
 **Control database**:
-Where the tool keeps everything it persists for one engagement: catalog snapshots, the run catalog, observations and verdicts, and that client's lessons. There is one per engagement, and deleting a client's data means deleting it.
+Where the tool keeps everything it persists for one engagement: catalog snapshots, the run catalog, observations and verdicts, that client's lessons and business-rules file, and the final validator's own evidence. There is one per engagement, and deleting a client's data means deleting it.
 _Avoid_: Metadata database, repository
 
 ### Conversion
@@ -172,6 +172,27 @@ _Avoid_: Test set, validation set
 **Final validator**:
 An audit run after the consistency pass that executes the delivered project in a fresh sandbox against the original, sharing no code with the testing module and nothing of its evidence. An artefact that fails it is not converted.
 _Avoid_: Second testing module, QA pass
+
+**Data-quality dimension**:
+One of seven headings under which every difference found by reconciliation is reported: completeness, uniqueness, validity, accuracy, consistency, conformity and timeliness.
+
+**Domain profile**:
+A versioned description of the business sense of one industry's data, shipped with the tool, which synthetic data follows for most rows.
+_Avoid_: Data profile (which would mean profiling client data)
+
+**Business-rules file**:
+Optional engagement input from the operator or the client's analyst that describes their data's business sense. Only the testing module and the step proposing test inputs read it.
+
+**Business invariant**:
+A property every output must keep, such as postings netting to zero, checked on both sides of a reconciliation.
+
+**Pre-existing issue**:
+A business invariant the original itself breaks. It is flagged beside the verdict and never changes it.
+_Avoid_: Bug (which could mean a conversion failure)
+
+**Remote tier**:
+A real target platform account, provided for an engagement, where reconciliation runs what the sandbox cannot. It receives synthetic data only.
+_Avoid_: Cloud sandbox, production
 
 **Not reconciled**:
 The report status of every artefact in a preview run. It is never reported as converted.
