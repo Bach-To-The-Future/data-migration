@@ -21,7 +21,7 @@ We decided that each is split into a half per source and a half per target, whic
 
 We chose this because S sources and T targets then need S + T of each, not S × T. SQL Server's behaviour on Databricks does not change.
 
-The full decision is in the resolution of [What must a new source or target provide?](https://github.com/Bach-To-The-Future/data-migration/issues/17). The paper design is in [`docs/spec-drafts/source-target-contract.md`](../spec-drafts/source-target-contract.md).
+The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/17#issuecomment-6236778253). The paper design is in [`docs/spec-drafts/source-target-contract.md`](../spec-drafts/source-target-contract.md).
 
 ## Considered options
 
