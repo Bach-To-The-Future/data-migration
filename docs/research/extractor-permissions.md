@@ -203,3 +203,14 @@ These are the checks the test ran; the expected output above is what they return
 [tz]: https://learn.microsoft.com/en-us/sql/t-sql/functions/current-timezone-transact-sql
 [parts]: https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-partitions-transact-sql
 [agent]: https://learn.microsoft.com/en-us/sql/ssms/agent/sql-server-agent-fixed-database-roles
+
+## Addendum, 17 October 2026: SQL Server 2017, 2019 and 2025
+
+The same grant set was tested on SQL Server 2017 CU31 (14.0.3456.2), 2019 CU32 (15.0.4430.1) and 2025 CU9 (17.0.5005.3), in Linux containers, while [Which SQL Server versions does v1 support?](https://github.com/Bach-To-The-Future/data-migration/issues/26) was worked. 2022 CU27 was tested again alongside them.
+
+- **Behaviour matched 2022 on every version.** As the extractor's login, every module definition, column, check constraint, foreign key and dependency row was readable, and so was `msdb.dbo.sysjobs`. Reading rows, `EXEC` and `INSERT` were refused with error 229. Describing a procedure's result shape returned error 229 inside the result.
+- **Granted permissions.** 2017 and 2019 lack `VIEW SECURITY DEFINITION` and `VIEW PERFORMANCE DEFINITION`, which arrived in 2022. Otherwise the login held `CONNECT`, `VIEW DEFINITION` and the column-key definition permissions. On the server it held `CONNECT SQL` and `VIEW ANY DATABASE`.
+- **`CURRENT_TIMEZONE()`** failed with error 195 on 2017 and worked on 2019 CU32, 2022 and 2025. The documentation names 2022 only.
+- **Compatibility levels accepted:** 2017 accepts 100–140, 2019 100–150, 2022 100–160 and 2025 100–170. None accepts 80 or 90, and a `*=` join is a syntax error at level 100 on all four.
+
+SQL Server 2016 and earlier remain untested. They are part of the build's VM test plan.

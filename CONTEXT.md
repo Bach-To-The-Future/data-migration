@@ -199,8 +199,12 @@ A business invariant the original itself breaks. It is flagged beside the verdic
 _Avoid_: Bug (which could mean a conversion failure)
 
 **Remote tier**:
-A real target platform account, provided for an engagement, where reconciliation runs what the sandbox cannot. It receives synthetic data only.
+A real platform instance, source or target, provided for an engagement, where reconciliation runs what the sandbox cannot. It receives synthetic data only and is never a production system.
 _Avoid_: Cloud sandbox, production
+
+**Tester login**:
+The login the tool uses on a source-side remote tier, to create its own scratch databases and run code there. It is never the extractor's login, and the extractor's login is never used there.
+_Avoid_: Service account, admin login
 
 **Validation result**:
 The final validator's unchangeable record for one artefact: passed, failed or not validated. It is kept beside the verdict, never merged into it.

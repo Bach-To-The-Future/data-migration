@@ -26,3 +26,7 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 - **Time-derived values are compared with a tolerance**, the execution window, and the report says so every time.
 - **A remote tier needs the final validator's own, independent path on that tier too** (ADR 0013). For the Snowflake paper design, a Snowflake account is the only way anything converted to Snowflake can count as converted.
 - **The same rules bind the final validator.** It never stubs or fakes either.
+
+## Amendment, 17 October 2026
+
+The remote tier also covers sources: a dedicated test server of an old SQL Server version, guarded as [ADR 0015](0015-old-compatibility-levels-reconcile-only-on-a-guarded-test-server.md) describes.
