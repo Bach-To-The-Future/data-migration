@@ -139,6 +139,10 @@ _Avoid_: Context (which the context builder assembles), connection
 That during a run, converted code is the only writer to the tables it writes. Emulated transactions, assigned identity values and constraint enforcement are correct only while it holds.
 _Avoid_: Concurrency caveat, exclusive access
 
+**Error class**:
+A neutral kind of failure the core names, such as divide by zero or key violation. Each target maps its runtime's failures to error classes, and each source maps error classes to its own error codes.
+_Avoid_: Error number (which belongs to a source), exception type (which belongs to a target)
+
 **Support library**:
 The versioned package that converted code may import to reproduce source behaviour the target lacks.
 _Avoid_: Helper library, runtime, utils

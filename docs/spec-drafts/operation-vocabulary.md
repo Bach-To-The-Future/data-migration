@@ -10,7 +10,7 @@ This is the first list of what the intermediate representation can say: its type
 2. The vocabulary grows by addition only. A new source or target may add an entry and may never change what an existing one means.
 3. A target either handles an operation or declares it unsupported, which the report shows as manual work.
 4. Operations are typed. Where the meaning depends on operand types, there is one operation per meaning (integer_divide and decimal_divide), not one operation with hidden behaviour.
-5. Comparison of strings always names its comparison rule (case sensitivity, trailing-space handling), taken from SQL Server's collation precedence at lowering.
+5. Comparison of strings always names its comparison rule (case sensitivity, trailing-space handling), taken from the source's comparison rules at lowering (for SQL Server, its collation precedence).
 6. The query part is a logical plan in our own words: kinds of step borrowed from Spark's plan concepts, each with the source's meaning.
 
 ## Size
