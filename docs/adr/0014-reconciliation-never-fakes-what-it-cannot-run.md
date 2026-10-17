@@ -12,7 +12,7 @@ Some artefacts can't run in the sandbox as they are. They may read another datab
 
 We chose this because a stub or a fake is a guess about the client's system. A pass resting on a guess would let the report claim "Reconciled" for behaviour nobody ran.
 
-The full decision is in the resolution of [How does reconciliation generate data and compare results?](https://github.com/Bach-To-The-Future/data-migration/issues/13).
+The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/13#issuecomment-6230480398).
 
 ## Considered options
 
