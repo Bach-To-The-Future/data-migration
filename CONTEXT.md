@@ -123,7 +123,19 @@ _Avoid_: Few-shot example, sample
 ### Conversion output
 
 **Conversion report**:
-The per-artefact record stating, for each construct, whether it was converted, converted with a caveat, or left as manual work, and why.
+What a run reports: its report data and the two documents rendered from it, the sign-off document and the engineering report. For each artefact it gives a status, and for each construct whether it was converted, converted with a caveat, raised, left as manual work, failed or blocked, and why.
+
+**Report data**:
+The one deterministic record of a run's results from which both report documents are rendered, in HTML and PDF, so that they cannot disagree. It ships with them.
+_Avoid_: Report (when the data, not a document, is meant)
+
+**Sign-off document**:
+The short report for the client and their analysts, saying in plain words what is converted, what is not and why, and what the client must do, with a signature block that accepts only the converted items.
+_Avoid_: Summary, executive report
+
+**Engineering report**:
+The complete report for engineers: every item that is not clean, worst first, every register, and every artefact with all its evidence.
+_Avoid_: Technical appendix
 
 **Flagged fragment**:
 A piece of target code the report singles out for review, either because an LLM produced it or because it uses the escape hatch.

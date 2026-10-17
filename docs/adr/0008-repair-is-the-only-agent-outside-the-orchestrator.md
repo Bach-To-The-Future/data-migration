@@ -20,3 +20,7 @@ The full decision, with the level, the evidence and what would move each compone
 - **Rules come first, and their failures are not handed to a model.** If a raising rule's output fails a check, the faithful form is delivered and the rule is reported as faulty.
 - **Every AI output is checked by deterministic code before it counts**, and falls back when it runs out of attempts: to the faithful form for raising, to the flagged fallback or manual work for lowering assist, to manual work for repair.
 - **Levels can move.** A hard raising case that an LLM step gets right every time across the corpus becomes a rule; repair moves down if the benchmark says so.
+
+## Amendment, 17 October 2026: no narration of the report
+
+The fifth place where AI takes part narrows from "narrating the report, with intent summaries" to **writing intent summaries** only. Both report documents are built from fixed sentence templates filled from the report data, so no model writes report prose. An intent summary appears in the client sign-off document only if a deterministic check passes: every table it names is in the artefact's read and write set, and its action verbs match the artefact's effects. Otherwise a template line built from the generated description is shown. The count of places stays at five. Decided in [What does the conversion report look like?](https://github.com/Bach-To-The-Future/data-migration/issues/9).
