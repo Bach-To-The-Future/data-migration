@@ -42,3 +42,12 @@ The second independent review found that recovery could undo a job that was stil
 - **Taking over an expired lease** first recovers that lease's unfinished transactions and scratch tables, restoring their start versions, before any write.
 
 A crashed job's leases therefore block other writers only until they expire.
+
+## Amendment, 25 October 2026: restarts and the manual command
+
+Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), findings T2 and T3 of the final review:
+
+- **A run restarted within the expiry** after a crash waits for its earlier run's lease to expire. It fails at once with an error stating when the lease expires, and does not try to tell a crashed run from a live one sooner.
+- **The manual recovery command** by default touches only its own job's entries and entries under expired leases. Forcing recovery of a live lease requires naming the holder's run explicitly; the forced recovery is recorded in the state table and shown in the next report.
+
+The cost of the first: a restart after a crash can wait up to the expiry, 10 minutes by default.
