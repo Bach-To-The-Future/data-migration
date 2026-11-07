@@ -211,7 +211,12 @@ In v1 the **operator** is a delivery engineer. Hosting, sign-in, licensing and b
 1. **Rules first.** An LLM step only attempts constructs no rule covers. If a raising rule's output fails a check, the faithful form is delivered and the rule is reported as faulty; that failure is never handed to a model. A failure in a region produced by lowering or generation rules goes to repair, and its fix is kept as a repair patch ([section 9](#9-repair)).
 2. **When attempts run out:** lowering assist falls back to the flagged generation fallback, then manual work; raising falls back to the faithful form; repair falls back to manual work, with its evidence in the report.
 3. **Limits.** Attempt limits per step and a budget per artefact are fixed and versioned by the tool. Each escalation to a higher model tier counts as an attempt.
-4. **Levels can move.** A hard raising case an LLM step gets right every time across the corpus becomes a rule. Repair moves down to an LLM step if the build benchmark shows a single fixed-prompt call fixes as many failures.
+4. **Levels can move.** A hard raising case an LLM step gets right every time across the corpus becomes a rule. Repair moves down to an LLM step if the build benchmark shows a single fixed-prompt call fixes as many failures. **A module may move up to an agent** only under five rules ([ADR 0008][adr8], amended 7 November 2026):
+   1. it never decides a verdict, a test, a threshold, or test data that decides a verdict;
+   2. its tools are context-builder queries and checks on visible seeds only;
+   3. its full trajectory is recorded and replayed, so a re-run gives identical delivered output;
+   4. it has fixed attempt and budget limits;
+   5. it is promoted only if a benchmark arm shows it beats the LLM step it replaces.
 5. **Two placements are deliberate.** Lowering assist sits in the core, fed by source notes, because returning representation needs only source knowledge. The generation fallback is the one place pairwise knowledge is allowed, and its output is always flagged. Scopes are worked out by the source during lowering, because scoping rules differ by source; the core's checker verifies them.
 
 ### 3. Extraction and the catalog
@@ -1299,6 +1304,10 @@ What this spec commits the build to, beyond implementing the decisions above. Ea
 - **Development rule:** the agent's prompt and tools are developed on the tuning half only. The cost: a smaller, noisier benchmark.
 - **After it:** both orchestrators stay behind one switch; the winner under the ample ceiling becomes the default, recorded in a decision record; if the binding-ceiling result disagrees, the switch's documentation recommends the other orchestrator for engagements expected to hit their ceiling.
 - **Idiom reuse:** the development runs measure speed and converted share with and without idiom reuse ([ADR 0022][adr22]).
+- **Three agent arms,** each developed on the tuning half, each following the five promotion rules:
+  - **(a) An exploring test-input agent.** It proposes inputs, runs only the original, and iterates on branches still unreached. Its inputs join the visible set only.
+  - **(b) A convert-check-retry agent for hard-case raising.** The faithful form stays the fallback.
+  - **(c) An advisory code-quality agent.** It chooses among candidates that all passed every check, and flags maintainability issues in the engineering report. It never affects correctness or status.
 - **A repair arm:** 5 more cold runs under the ample ceiling, with the baseline orchestrator and repair replaced by a single fixed-prompt call given the same evidence. If it fixes as many failures, repair moves down to an LLM step ([ADR 0008][adr8], [ADR 0020][adr20], amended).
 
 **Build-phase checks and deliverables.**

@@ -28,3 +28,15 @@ The fifth place where AI takes part narrows from "narrating the report, with int
 ## Amendment, 18 October 2026: repair patches to deterministic regions
 
 When repair fixes a region produced by deterministic lowering or generation rules, its patch is kept as a flagged **repair patch**, keyed by the hash of the region's inputs and reapplied on every regeneration while those inputs are unchanged. Repair also records an open problem for the maintainers, proposing a rule fix, in the engagement's control database. It is not a lesson, because lessons of that kind are global and hold no client code; maintainers fix the rule in a release (corrected after a second review, finding S4). A changed input drops the patch, and the region is converted and checked afresh. Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding R3.
+
+## Amendment, 7 November 2026: rules for promoting a module to an agent
+
+Any module may be promoted from an LLM step to an agent only under five rules (owner input):
+
+1. **It never decides** a verdict, a test, a threshold, or test data that decides a verdict.
+2. **Its tools** are context-builder queries and checks on visible seeds only.
+3. **Its full trajectory is recorded and replayed,** so a re-run gives identical delivered output.
+4. **It has fixed attempt and budget limits,** versioned by the tool.
+5. **It is promoted only if a benchmark arm shows it beats the LLM step it replaces.**
+
+Rule 3 makes a re-run that replays the run catalog identical. A cold run without that record re-decides, as any agent does; the benchmark's stability guardrail measures how much that varies. Three candidate promotions are tested as benchmark arms in the build: the test-input step as an exploring agent, hard-case raising as a convert-check-retry agent, and an advisory code-quality agent choosing among candidates that all passed every check. Until an arm shows a gain, each stays as decided above.
