@@ -40,10 +40,19 @@ src/migrt/
 tests/                 run with sandbox/engine-tests.sh
 ```
 
-## Tests
+## Checks
 
 ```
-sh sandbox/engine-tests.sh
+sh sandbox/engine-tests.sh            # lint (pyflakes), then types (pyright), then tests (pytest)
+sh sandbox/engine-tests.sh -k layer1  # arguments go to pytest
 ```
 
-They run in the toolbox against the sandbox SQL Server and Postgres, through the engine's library interface, the PySpark target's layer-1 contract, and the control database for the immutability claim.
+All three run in the toolbox; the tests run against the sandbox SQL Server and Postgres, through the engine's library interface, the PySpark target's layer-1 contract, and the control database for the immutability claim. Imports of .NET namespaces carry a targeted `pyright: ignore`, because pythonnet provides them only at run time.
+
+A pre-commit hook lints staged engine files with pyflakes on the host, without Docker. Enable it once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+Review applies [`CODING_STANDARDS.md`](../CODING_STANDARDS.md).

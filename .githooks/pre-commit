@@ -11,5 +11,7 @@ if ! "$python" -m pyflakes --version >/dev/null 2>&1; then
     echo "pre-commit: pyflakes is not installed for $python. Install it with: $python -m pip install pyflakes==4.1.0" >&2
     exit 1
 fi
+version=$("$python" -m pyflakes --version 2>/dev/null | cut -d' ' -f1)
+[ "$version" = "4.1.0" ] || echo "pre-commit: pyflakes $version here, 4.1.0 in the toolbox; results may differ slightly" >&2
 # shellcheck disable=SC2086  # one path per word; engine paths have no spaces
 exec "$python" -m pyflakes $files

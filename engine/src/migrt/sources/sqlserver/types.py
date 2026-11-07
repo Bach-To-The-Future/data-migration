@@ -63,7 +63,7 @@ def is_money(t: VType | None) -> bool:
 
 def wider_integer(a: VType, b: VType) -> VType:
     """T-SQL data type precedence among integers: the result takes the wider one."""
-    return a if a.param("bits") >= b.param("bits") else b
+    return a if a.int_param("bits") >= b.int_param("bits") else b
 
 
 def sum_type(t: VType) -> VType | None:

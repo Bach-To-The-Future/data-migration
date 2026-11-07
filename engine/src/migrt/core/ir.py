@@ -28,6 +28,12 @@ class VType:
     def param(self, key: str):
         return dict(self.params).get(key)
 
+    def int_param(self, key: str) -> int:
+        value = self.param(key)
+        if not isinstance(value, int):
+            raise ValueError(f"{self} has no integer parameter {key!r}")
+        return value
+
     def to_json(self) -> dict:
         return {"name": self.name, **dict(self.params)}
 
@@ -75,6 +81,20 @@ class Node:
         yield self
         for child in self.children:
             yield from child.walk()
+
+    @property
+    def value_type(self) -> VType:
+        """The node's type, for a node the checker guarantees has one (every expression)."""
+        if self.type is None:
+            raise ValueError(f"{self.kind} node {self.id} has no type; the checker should have refused it")
+        return self.type
+
+    @property
+    def position(self) -> SourceSpan:
+        """The node's source position, which the checker guarantees every node has."""
+        if self.span is None:
+            raise ValueError(f"{self.kind} node {self.id} has no source position; the checker should have refused it")
+        return self.span
 
     def children_with(self, role: str) -> list["Node"]:
         return [c for c in self.children if c.role == role]

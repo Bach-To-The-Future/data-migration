@@ -3,6 +3,7 @@ compatibility level (spec sections 16 and 17)."""
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 from ...core.ir import SourceSpan
 from . import dotnet
@@ -36,7 +37,7 @@ class Comment:
 @dataclasses.dataclass
 class Parsed:
     text: str
-    tree: object                    # ScriptDom TSqlScript
+    tree: Any                       # ScriptDom TSqlScript, a .NET object
     comments: list[Comment]
 
     def span(self, fragment) -> SourceSpan:
@@ -51,8 +52,8 @@ class Parsed:
 
 def parse(identity: str, text: str, compatibility_level: int, quoted_identifier: bool) -> Parsed:
     dotnet.load()
-    import Microsoft.SqlServer.TransactSql.ScriptDom as scriptdom
-    from System.IO import StringReader
+    import Microsoft.SqlServer.TransactSql.ScriptDom as scriptdom  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
+    from System.IO import StringReader  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
 
     if compatibility_level not in PARSERS:
         raise ValueError(f"no T-SQL parser for compatibility level {compatibility_level}")

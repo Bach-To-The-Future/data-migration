@@ -52,3 +52,7 @@ ENV DOTNET_ROOT=/usr/share/dotnet \
 # The engine's own dependencies: pythonnet for ScriptDom and SqlClient, psycopg for the
 # Postgres control database, pyflakes for layer-1 lint, pytest for the engine's tests.
 RUN pip install pythonnet==3.2.1 "psycopg[binary]==3.3.8" pyflakes==4.1.0 pytest==9.0.3
+
+# Type checking for the engine (MIT); the nodejs extra bundles the Node runtime it needs,
+# fetched here so checks run offline.
+RUN pip install "pyright[nodejs]==1.1.414" && pyright --version

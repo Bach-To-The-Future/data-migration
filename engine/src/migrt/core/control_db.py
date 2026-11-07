@@ -104,7 +104,7 @@ def database_name(engagement: str) -> str:
 def _dsn_for(server_dsn: str, dbname: str) -> str:
     params = conninfo_to_dict(server_dsn)
     params["dbname"] = dbname
-    return make_conninfo(**params)
+    return make_conninfo("", **params)
 
 
 def ensure_database(server_dsn: str, engagement: str) -> str:

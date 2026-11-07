@@ -84,9 +84,9 @@ class ViewLowering:
     def attach_comments(self, body: Node) -> None:
         """A comment annotates the nearest node after it: a select item or a plan step."""
         anchors = sorted((n for n in body.walk() if n.role in ("output", "input", "left", "right", "query")),
-                         key=lambda n: n.span.offset)
+                         key=lambda n: n.position.offset)
         for comment in self.parsed.comments:
-            after = [n for n in anchors if n.span.offset >= comment.offset]
+            after = [n for n in anchors if n.position.offset >= comment.offset]
             (after[0] if after else body).comments.append(comment.text.rstrip())
 
     # ------------------------------------------------------------------ queries
@@ -245,13 +245,13 @@ class ViewLowering:
         left, right = self.expression(e.FirstExpression), self.expression(e.SecondExpression)
         args = [_as(left, "argument"), _as(right, "argument")]
         if T.is_integer(left.type) and T.is_integer(right.type):
-            result = T.wider_integer(left.type, right.type)
+            result = T.wider_integer(left.value_type, right.value_type)
             operation = {"divide": "integer_divide"}.get(op, op)
             return Node(operation, span, result, children=args)
-        money = [t for t in (left.type, right.type) if T.is_money(t)]
-        others = [t for t in (left.type, right.type) if not T.is_money(t)]
+        money = [t for t in (left.value_type, right.value_type) if T.is_money(t)]
+        others = [t for t in (left.value_type, right.value_type) if not T.is_money(t)]
         if money and all(T.is_integer(t) for t in others):
-            result = max(money, key=lambda t: t.param("precision"))
+            result = max(money, key=lambda t: t.int_param("precision"))
             operation = {"multiply": "money_multiply", "divide": "money_divide"}.get(op, op)
             if operation == "modulo":
                 raise Opaque(e, "modulo on money is not lowered yet")
@@ -275,13 +275,13 @@ class ViewLowering:
             raise Opaque(e, f"{name}(DISTINCT ...) is not lowered yet")
         if name in ("SUM", "AVG") and len(params) == 1:
             arg = self.expression(params[0])
-            result = T.sum_type(arg.type)
+            result = T.sum_type(arg.value_type)
             if result is None:
                 raise Opaque(e, f"{name} over {arg.type} is not lowered yet")
             return Node("sum" if name == "SUM" else "average", span, result, children=[_as(arg, "argument")])
         if name in ("MIN", "MAX") and len(params) == 1:
             arg = self.expression(params[0])
-            if arg.type.name == "string":
+            if arg.value_type.name == "string":
                 raise Opaque(e, f"{name} over strings needs the collation's ordering: not lowered yet")
             return Node("minimum" if name == "MIN" else "maximum", span, arg.type, children=[_as(arg, "argument")])
         if name == "ISNULL" and len(params) == 2:
@@ -326,7 +326,7 @@ def _as(node: Node, role: str) -> Node:
 
 def _walk(fragment, visit) -> None:
     """Visit a ScriptDom fragment and every fragment below it."""
-    import Microsoft.SqlServer.TransactSql.ScriptDom as scriptdom
+    import Microsoft.SqlServer.TransactSql.ScriptDom as scriptdom  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
 
     class Visitor(scriptdom.TSqlFragmentVisitor):
         __namespace__ = "migrt.lowering"

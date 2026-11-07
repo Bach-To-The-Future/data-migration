@@ -80,7 +80,7 @@ def _lint(text: str) -> Check:
             if isinstance(message, LINT_MESSAGES):
                 self.found.append(str(message))
 
-        def syntaxError(self, *args):  # noqa: N802 (pyflakes' name)
+        def syntaxError(self, filename, msg, lineno, offset, text):  # noqa: N802 (pyflakes' name)
             self.found.append("syntax error")
 
     reporter = Collect()
@@ -106,11 +106,12 @@ def _unreachable(tree: ast.AST) -> list[str]:
 def _imports(tree: ast.AST, library_module: str | None, project_package: str) -> Check:
     bad = []
     for node in ast.walk(tree):
-        names = []
         if isinstance(node, ast.Import):
             names = [a.name for a in node.names]
         elif isinstance(node, ast.ImportFrom):
             names = [("." * node.level) + (node.module or "")]
+        else:
+            continue
         for name in names:
             root = name.split(".")[0]
             allowed = (root in ("pyspark", "delta") or root in STANDARD_MODULES or root == project_package
@@ -171,7 +172,7 @@ def _positions(tree: ast.Module, text: str, links: dict[int, list[str]], node_sp
                 continue  # the docstring
             if _is_ansi_pin(stmt) or ast.unparse(stmt) == "spark = ss.spark":
                 continue  # the boilerplate every function opens with
-            for line in range(stmt.lineno, stmt.end_lineno + 1):
+            for line in range(stmt.lineno, (stmt.end_lineno or stmt.lineno) + 1):
                 code = lines[line - 1].strip()
                 if not code or code.startswith("#"):
                     continue

@@ -29,7 +29,7 @@ class SqlServerError(Exception):
 
 
 def _to_python(value):
-    import System
+    import System  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
 
     if value is None or isinstance(value, System.DBNull):
         return None
@@ -52,7 +52,7 @@ class Connection:
     def __init__(self, host: str, port: int, login: str, password: str, database: str = "master",
                  application: str = "migrt"):
         dotnet.load()
-        from Microsoft.Data.SqlClient import SqlConnection, SqlConnectionStringBuilder
+        from Microsoft.Data.SqlClient import SqlConnection, SqlConnectionStringBuilder  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
 
         builder = SqlConnectionStringBuilder()
         builder.DataSource = f"{host},{port}"
@@ -80,7 +80,7 @@ class Connection:
     def query(self, sql: str, params: dict | None = None) -> list[dict]:
         """Run one batch and return the rows of its first result set, as dicts by column name.
         Raises SqlServerError if any statement in it raised an error."""
-        from Microsoft.Data.SqlClient import SqlCommand
+        from Microsoft.Data.SqlClient import SqlCommand  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
 
         self._messages.clear()
         command = SqlCommand(sql, self._conn)

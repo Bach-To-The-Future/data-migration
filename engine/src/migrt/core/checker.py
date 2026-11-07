@@ -52,7 +52,7 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
             fail(node, f"reads {node.attrs['table']}, which is not among the dependencies")
         if node.kind == "column":
             table = aliases.get(node.attrs["relation"])
-            if table != node.attrs["table"]:
+            if table is None or table != node.attrs["table"]:
                 fail(node, f"relation {node.attrs['relation']} is not in scope as {node.attrs['table']}")
             elif node.attrs["column"] not in columns_of(table):
                 fail(node, f"{table} has no column {node.attrs['column']}")

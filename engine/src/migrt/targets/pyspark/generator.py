@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import keyword
 import re
+from collections.abc import Sequence
 
 from ...core.ir import Artefact, Node, VType
 
@@ -59,7 +60,7 @@ class GeneratedFile:
 
 def spark_type(t: VType, node: Node) -> str:
     if t.name == "integer":
-        bits = t.param("bits")
+        bits = t.int_param("bits")
         if not t.param("signed"):
             raise Unsupported(node, "tinyint values are SMALLINT in Spark with their 0 to 255 range enforced by the "
                                     "support library, which is not built yet")
@@ -103,7 +104,7 @@ class _Lines:
         self.lines: list[str] = []
         self.links: dict[int, list[str]] = {}
 
-    def emit(self, text: str, nodes: list[Node] = ()) -> None:
+    def emit(self, text: str, nodes: Sequence[Node] = ()) -> None:
         self.lines.append(text)
         ids = sorted({n.id for node in nodes for n in node.walk()}, key=lambda i: int(i[1:]))
         if ids:
@@ -177,7 +178,7 @@ class ViewGenerator:
         """A column that fails loudly on any row, typed as the output so its shape holds."""
         code = f"F.raise_error(F.lit({item.reason!r}))"
         try:
-            return f'{code}.cast("{spark_type(output.type, output)}")'
+            return f'{code}.cast("{spark_type(output.value_type, output)}")'
         except Unsupported:
             return code
 
@@ -307,21 +308,21 @@ class ViewGenerator:
         if k in ("add", "subtract", "multiply", "modulo"):
             op = {"add": "+", "subtract": "-", "multiply": "*", "modulo": "%"}[k]
             a, b = (self.expr(x, grouped) for x in args)
-            return f'({a} {op} {b}).cast("{spark_type(node.type, node)}")'
+            return f'({a} {op} {b}).cast("{spark_type(node.value_type, node)}")'
         if k == "integer_divide":
-            if node.type.param("bits") == 64:
+            if node.value_type.param("bits") == 64:
                 raise Unsupported(node, "bigint division needs an exact integer-division helper, not built yet")
             a, b = (self.expr(x, grouped) for x in args)
             # A quotient of integers within int is exact in a double, so the cast truncates
             # toward zero exactly as SQL Server does; dividing by zero raises in both.
-            return f'({a} / {b}).cast("{spark_type(node.type, node)}")'
+            return f'({a} / {b}).cast("{spark_type(node.value_type, node)}")'
         if k == "count_values":
             fn = "F.count_distinct" if node.attrs.get("distinct") else "F.count"
             return f'{fn}({self.expr(args[0], {})}).cast("int")'
         if k == "count_rows":
             return 'F.count(F.lit(1)).cast("int")'
         if k in ("sum", "average"):
-            if node.type.param("bits") != 32:
+            if node.value_type.param("bits") != 32:
                 raise Unsupported(node, f"{k} returning {node.type} is not generated yet")
             a = self.expr(args[0], {})
             self.caveats[node.id] = SUM_INT_CAVEAT
@@ -333,7 +334,7 @@ class ViewGenerator:
             return f"F.{'min' if k == 'minimum' else 'max'}({self.expr(args[0], {})})"
         if k == "null_replacement":
             a, b = (self.expr(x, grouped) for x in args)
-            return f'F.coalesce({a}, {b}.cast("{spark_type(node.type, node)}"))'
+            return f'F.coalesce({a}, {b}.cast("{spark_type(node.value_type, node)}"))'
         if k == "null_if_equal":
             a, b = (self.expr(x, grouped) for x in args)
             return f"F.nullif({a}, {b})"

@@ -33,5 +33,5 @@ def load() -> None:
         import clr
 
         for name in ASSEMBLIES:
-            clr.AddReference(str(libs / f"{name}.dll"))
+            clr.AddReference(str(libs / f"{name}.dll"))  # pyright: ignore[reportAttributeAccessIssue]  (added by pythonnet)
         _loaded = True
