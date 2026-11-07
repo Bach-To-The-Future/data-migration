@@ -13,6 +13,10 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
+## The build tickets and their blocking graph
+
+`python tools/tickets.py` lists every build ticket (sub-issues of #35) on one line each, with its open blockers, and checks the blocking graph for cycles. `--ticket N` shows what blocks one ticket and what it blocks; `--open` and `--json` filter and format. Use it instead of looping `gh issue view` over tickets, and after changing any blocking edge.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
