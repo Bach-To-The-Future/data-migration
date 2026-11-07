@@ -1320,7 +1320,7 @@ What this spec commits the build to, beyond implementing the decisions above. Ea
 - **Before and after it:** the plain pipeline is the default until the benchmark runs; both orchestrators stay behind one switch, and the benchmark's winner becomes the default, recorded in a decision record.
 - **Idiom reuse** is deferred from v1, so the benchmark does not measure it.
 - **Agent arms are post-core experiments** ([ADR 0008][adr8], amended): off by default unless they win, and not blocking the benchmark. Their success measures: (a) the exploring test-input agent, mutants killed and coverage of the original gained; (b) the convert-check-retry agent for hard raising, the share of raised forms delivered at equal converted share; (c) the advisory code-quality agent, lowest priority, choosing at the fixed picking rule's point among candidates that passed layers 1 to 4, judged on a fixed maintainability score at equal converted share and never changing a status.
-- **A repair arm:** 5 more cold runs under the ample ceiling, with the baseline orchestrator and repair replaced by a single fixed-prompt call given the same evidence. If it fixes as many failures, repair moves down to an LLM step ([ADR 0008][adr8], [ADR 0020][adr20], amended).
+- **A repair arm:** 5 more runs with the baseline orchestrator and repair replaced by a single fixed-prompt call given the same evidence. Every step except repair uses the shared result cache; repair's calls run cold in each of the 5 runs, so the arm isolates repair alone. If it fixes as many failures, repair moves down to an LLM step ([ADR 0008][adr8], [ADR 0020][adr20], amended).
 
 **Build-phase checks and deliverables.**
 

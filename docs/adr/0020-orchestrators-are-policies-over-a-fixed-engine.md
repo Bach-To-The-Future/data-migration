@@ -62,5 +62,6 @@ Decided in [Independent review of the assembled spec](https://github.com/Bach-To
 - **The benchmark runs on a shared result cache** (finding A3). The cache is populated from baseline cold runs; each orchestrator then runs 5 times against it, paying live model calls only for cache misses, which isolates orchestration. The stability guardrail is measured on 3 cold runs of each. The plain pipeline is the default until the benchmark runs; the benchmark then decides the default.
 - **Deferred from v1** (finding A15): the `allocate` action, the agentic orchestrator's reserved budget share, and the binding-ceiling condition. Their trigger is the agentic orchestrator winning the benchmark. When the ceiling is reached, new AI steps stop in run-plan order.
 - **The three agent arms** are post-core experiments and do not block the benchmark (ADR 0008).
+- **The repair arm** uses the shared result cache for every step except repair itself, whose calls run cold in each of its 5 runs, so the arm isolates repair alone (owner's decision, 7 November 2026).
 
 Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).
