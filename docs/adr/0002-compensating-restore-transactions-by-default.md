@@ -24,3 +24,9 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 ## Amendment, 18 October 2026
 
 The single-writer assumption is restated and enforced by a write lease, and delivered code recovers unfinished transactions automatically at the start of every run: see [ADR 0021](0021-delivered-jobs-hold-a-write-lease-on-every-table-they-write.md). In production, start versions are recorded in the support library's state table, not the run catalog.
+
+## Amendment, 7 November 2026: after the architecture review
+
+Before restoring, the helper reads each table's Delta commit history since the start version. If any commit was not made by this job run, identified by the job-run id the write wrapper writes into each commit, it refuses to restore, raises a named error, and marks the transaction for manual reconciliation in the state table (finding A7). A rollback can now fail loudly where it would otherwise have discarded another writer's commits silently.
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).

@@ -51,3 +51,9 @@ Decided in [Independent review of the assembled spec](https://github.com/Bach-To
 - **The manual recovery command** by default touches only its own job's entries and entries under expired leases. Forcing recovery of a live lease requires naming the holder's run explicitly; the forced recovery is recorded in the state table and shown in the next report.
 
 The cost of the first: a restart after a crash can wait up to the expiry, 10 minutes by default.
+
+## Amendment, 7 November 2026: after the architecture review
+
+**Same-job restarts wait** (finding A20, replacing the 25 October decision for the same job). A run of the same job restarted within the expiry waits, by default, for the lease to expire, polling up to a bounded timeout, instead of failing at once, because Databricks retries jobs within minutes. A different job finding a live lease still fails at once. The deployment steps state the required retry settings.
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).

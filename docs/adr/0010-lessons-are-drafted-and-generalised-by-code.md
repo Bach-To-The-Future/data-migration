@@ -35,3 +35,9 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 - **Promotion also rejects any identifier from the client's catalog** (object, column, parameter and other names), wherever it appears in the lesson, beside the checks on literals and verbatim stretches.
 
 Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding R8 and Further Note 5.
+
+## Amendment, 7 November 2026: after the architecture review
+
+**Generalisation by anti-unification is deferred from v1**; its trigger is measured repeated near-identical repairs. **Promoting a client lesson to global is deferred**; its trigger is a second client engagement. v1 keeps exact lessons, reviewer wildcards and the confirmation gate (finding A18).
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).

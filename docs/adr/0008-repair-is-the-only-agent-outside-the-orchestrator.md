@@ -40,3 +40,13 @@ Any module may be promoted from an LLM step to an agent only under five rules (o
 5. **It is promoted only if a benchmark arm shows it beats the LLM step it replaces.**
 
 Rule 3 makes a re-run that replays the run catalog identical. A cold run without that record re-decides, as any agent does; the benchmark's stability guardrail measures how much that varies. Three candidate promotions are tested as benchmark arms in the build: the test-input step as an exploring agent, hard-case raising as a convert-check-retry agent, and an advisory code-quality agent choosing among candidates that all passed every check. Until an arm shows a gain, each stays as decided above.
+
+## Amendment, 7 November 2026: after the architecture review
+
+- **Promotion rule 2 is reworded:** an agent's tools are context-builder queries and checks on visible seeds only, except that an agent proposing test inputs may also run the original in the sandbox, never converted code (finding A4).
+- **The three agent arms are post-core experiments,** off by default unless they win, and they do not block the orchestrator benchmark. Each has a success measure:
+  - **(a) the exploring test-input agent:** mutants killed and coverage of the original gained, not converted share;
+  - **(b) the convert-check-retry agent for hard raising:** the share of raised forms delivered, at equal converted share;
+  - **(c) the advisory code-quality agent,** lowest priority: it chooses at the fixed picking rule's point, among candidates that passed layers 1 to 4, and is judged on a fixed maintainability score (helper calls, code length, nesting, flagged constructs) at equal converted share. It never changes a status.
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).

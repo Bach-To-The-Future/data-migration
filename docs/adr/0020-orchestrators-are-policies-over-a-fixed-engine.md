@@ -56,3 +56,11 @@ Decided in [Independent review of the assembled spec](https://github.com/Bach-To
 - **A double tie** on converted share and speed makes the baseline the default.
 - **A repair arm.** One more arm runs 5 cold runs under the ample ceiling with the baseline orchestrator and repair replaced by a single fixed-prompt call. It decides whether repair moves down to an LLM step.
 - **The benchmark needs the whole engine built** first.
+
+## Amendment, 7 November 2026: after the architecture review
+
+- **The benchmark runs on a shared result cache** (finding A3). The cache is populated from baseline cold runs; each orchestrator then runs 5 times against it, paying live model calls only for cache misses, which isolates orchestration. The stability guardrail is measured on 3 cold runs of each. The plain pipeline is the default until the benchmark runs; the benchmark then decides the default.
+- **Deferred from v1** (finding A15): the `allocate` action, the agentic orchestrator's reserved budget share, and the binding-ceiling condition. Their trigger is the agentic orchestrator winning the benchmark. When the ceiling is reached, new AI steps stop in run-plan order.
+- **The three agent arms** are post-core experiments and do not block the benchmark (ADR 0008).
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).

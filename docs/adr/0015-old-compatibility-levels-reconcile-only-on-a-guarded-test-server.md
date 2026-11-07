@@ -37,3 +37,9 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 ## Amendment, 18 October 2026: every source-side remote tier
 
 The guard applies to every source-side remote tier, at any compatibility level. That includes a Windows SQL Server used for features a Linux container lacks (CLR, FILESTREAM, linked servers to other providers) at level 100 or above. Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding R22.
+
+## Amendment, 7 November 2026: after the architecture review
+
+**SQL Server 2000 and 2005 are an unverified preview in v1** (finding A23): extraction and faithful conversion only, with every artefact "Not reconciled". Full support, meaning the fallback clients, the guarded old-version test servers and their VM tests, stays designed and is activated when a client needs it. Databases at compatibility level 80 or 90 on SQL Server 2008 to 2012 follow the same rule until then.
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).

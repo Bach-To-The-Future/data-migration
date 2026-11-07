@@ -29,3 +29,9 @@ The full decision is in [Region-level idiom reuse](https://github.com/Bach-To-Th
 - **An idiom whose instance fails reconciliation** in some artefact is not retired automatically. The artefact fails as usual, and repair works on its region. The idiom is retired only when its conversion itself is found wrong, as worked examples are.
 - **In measurement runs,** idioms drawn from release hold-out artefacts are discarded, as lessons are.
 - **The benchmark's development runs measure the effect,** comparing speed and converted share with and without idiom reuse.
+
+## Amendment, 7 November 2026: after the architecture review
+
+**Deferred from v1** (finding A5). Reuse saves model calls only for AI-produced regions, while the house patterns it targets are mostly converted by rules, and it would skip the candidate cross-check. Its trigger: benchmark logs showing many repeated AI-produced regions. The design stays as recorded above.
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).

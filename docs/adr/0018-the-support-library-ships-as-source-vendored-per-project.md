@@ -30,3 +30,9 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 ## Amendment, 17 October 2026: a support library per target
 
 The support library implements vocabulary operations for one target, so the decision above applies to each target's library, in that target's own unit of packaging. For PySpark that is the wheel described above. For the Snowflake paper design it is a schema of SQL functions and procedures, vendored per project under a versioned schema name. The import name says which target it serves (for example `migrt_spark_v1_4_3`, not `tsqlrt_v1_4_3`). "Every converted function takes session state as its first argument" is a convention of the PySpark target, not of the core. The library holds the target half of the type and error mappings ([ADR 0019](0019-shared-mappings-are-split-by-source-and-by-target.md)). See [What must a new source or target provide?](https://github.com/Bach-To-The-Future/data-migration/issues/17).
+
+## Amendment, 7 November 2026: after the architecture review
+
+**Cache keys use per-helper versions** (finding A2). A verdict's and a validation's keys include the versions of the superset of helpers the artefact's generated code can call, found statically from the code and the API manifest, not only those observed. A library release therefore re-verifies only the artefacts that can reach a changed helper. Each helper carries its own version inside the wheel.
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).

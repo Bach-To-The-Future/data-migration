@@ -50,3 +50,11 @@ For versions mssql-jdbc can't reach, the validator falls back to jTDS (LGPL), ne
 ## Amendment, 18 October 2026: who may use the pass-or-fail bit
 
 The validator's pass or fail result, and nothing else of its, may be used by five consumers: lesson confirmation, worked-example qualification, the pilot barrier, dependency blocking, and the orchestrator's observation. Its inputs, evidence and failure details still never reach any conversion component. Decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28), finding R12.
+
+## Amendment, 7 November 2026: after the architecture review
+
+- **Triage of failures (finding A6).** A maintainer may view a disclosed failing input and classify the failure, within a service-level target, as a validator defect or a testing-module defect. Every classification is recorded. A validator defect gives "Not validated: validator defect (id)" instead of "Failed final validation". Callers of a callee that is not validated stay blocked.
+- **A time budget per input (finding A13).** Exceeding it gives "Not validated: time budget exceeded". The validator's authors may use smaller tables for row-by-row code, recorded in its own schema.
+- **Validation keys use per-helper versions** (finding A2; see ADR 0018).
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).

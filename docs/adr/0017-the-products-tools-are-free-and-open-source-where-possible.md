@@ -34,3 +34,9 @@ We chose this because a product sold to many clients shouldn't carry licence cos
 Amended on 17 October 2026: the rule binds the product, not the owner's development machine, where Docker Desktop may still be used.
 
 Amended again on 17 October 2026: Microsoft.Data.SqlClient replaces the ODBC driver, and the final validator uses mssql-jdbc.
+
+## Amendment, 7 November 2026: after the architecture review
+
+**FreeTDS and jTDS are activated only when a client needs SQL Server 2000 or 2005 support** (finding A23). Until then v1 ships SqlClient and mssql-jdbc only.
+
+Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).
