@@ -31,16 +31,31 @@ def run(cmd, **kwargs):
         sys.exit(code)
 
 
+# Secrets sandbox/.env must hold, each generated on first need. Upper case, lower case,
+# digit and symbol, as SQL Server's password policy asks.
+GENERATED_SECRETS = ("MSSQL_SA_PASSWORD", "MIGRT_EXTRACTOR_PASSWORD", "MIGRT_PG_PASSWORD")
+
+
 def ensure_env():
+    """Create sandbox/.env from the example, or add any secret an older .env lacks."""
     env = SANDBOX / ".env"
-    if env.exists():
-        return
-    text = (SANDBOX / ".env.example").read_text(encoding="utf-8")
-    # Upper case, lower case, digit and symbol, as SQL Server's password policy asks.
-    password = "Sb1!" + secrets.token_hex(12)
-    env.write_text(text.replace("MSSQL_SA_PASSWORD=change-me", f"MSSQL_SA_PASSWORD={password}"),
-                   encoding="utf-8", newline="\n")
-    print(f"Created {env.relative_to(ROOT)} with a generated sa password")
+    created = not env.exists()
+    text = (SANDBOX / ".env.example").read_text(encoding="utf-8") if created else env.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    present = {line.split("=", 1)[0] for line in lines if "=" in line and not line.startswith("#")}
+    added = []
+    for name in GENERATED_SECRETS:
+        value = "Sb1!" + secrets.token_hex(12)
+        if f"{name}=change-me" in lines:
+            lines[lines.index(f"{name}=change-me")] = f"{name}={value}"
+            added.append(name)
+        elif name not in present:
+            lines.append(f"{name}={value}")
+            added.append(name)
+    if added:
+        env.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+        verb = "Created" if created else "Updated"
+        print(f"{verb} {env.relative_to(ROOT)} with generated {', '.join(added)}")
 
 
 def sha256_of(path):
@@ -90,7 +105,7 @@ def main():
 
     if args.reset:
         run(COMPOSE + ["--profile", "tools", "down", "--volumes"])
-    run(COMPOSE + ["up", "--detach", "sqlserver"])
+    run(COMPOSE + ["up", "--detach", "sqlserver", "postgres"])
     run(COMPOSE + ["--profile", "tools", "build", "--quiet", "tools"])
 
     tool = COMPOSE + ["--profile", "tools", "run", "--rm", "tools", "python"]
@@ -98,6 +113,7 @@ def main():
                                         ("--force-restore", args.force_restore),
                                         ("--skip-smoke", args.skip_smoke)) if on]
     run(tool + ["corpus/tools/build_db.py"] + build_args)
+    run(tool + ["sandbox/grant_extractor.py"] + (["RetailSample"] if args.skip_public else []))
     if args.differences:
         run(tool + ["corpus/tools/differences.py"])
 

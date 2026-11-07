@@ -1,4 +1,5 @@
-# The sandbox: a disposable SQL Server and a Spark toolbox, both local.
+# The sandbox: a disposable SQL Server, the engine's Postgres control database
+# and a Spark toolbox, all local.
 # Settings come from sandbox/.env, which corpus/build.py creates on first run.
 name: data-migration-sandbox
 
@@ -20,8 +21,21 @@ services:
       - ../corpus/public/.cache:/var/opt/mssql/backup:ro
     mem_limit: 4g
 
-  # Python with PySpark, Delta and a SQL Server driver. Runs the build and
-  # the difference tests, so the host needs only Docker and Python.
+  # The control database server: one Postgres database per engagement (ADR 0007).
+  postgres:
+    image: postgres:${POSTGRES_IMAGE_TAG:-17.6-bookworm}
+    environment:
+      POSTGRES_USER: migrt
+      POSTGRES_PASSWORD: ${MIGRT_PG_PASSWORD:?run corpus/build.py to create sandbox/.env}
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  # Python with PySpark, Delta, .NET with ScriptDom and SqlClient, and the engine's
+  # dependencies. Runs the corpus build, the difference tests and the engine, so the
+  # host needs only Docker and Python.
   tools:
     build:
       context: .
@@ -29,13 +43,18 @@ services:
     environment:
       MSSQL_HOST: sqlserver
       MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?run corpus/build.py to create sandbox/.env}
+      MIGRT_EXTRACTOR_PASSWORD: ${MIGRT_EXTRACTOR_PASSWORD:?run corpus/build.py to create sandbox/.env}
+      MIGRT_CONTROL_DSN: postgresql://migrt:${MIGRT_PG_PASSWORD}@postgres:5432/postgres
       PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: /work/engine/src
     volumes:
       - ..:/work
     working_dir: /work
     depends_on:
       - sqlserver
+      - postgres
     profiles: ["tools"]
 
 volumes:
   sqlserver-data:
+  postgres-data:

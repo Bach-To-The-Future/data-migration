@@ -25,6 +25,8 @@ Needs Docker (running) and Python 3.9+ on the host. Nothing else is installed on
   - `RetailSample`, built from `sample/`. The sample corpus.
   - `AdventureWorks2022` and `WideWorldImporters`, restored from Microsoft's backups. The public corpus.
 - **A SQL Server Agent job**, `RetailSample - Nightly sales roll-up`, created in `msdb`.
+- **The extractor's read-only login**, `migration_extractor`, granted on the three databases and `msdb` by Annex F's grant set (`sandbox/grant_extractor.py`), with the password in `sandbox/.env`.
+- **A Postgres server**, `data-migration-sandbox-postgres-1` on `127.0.0.1:15432`, for the engine's control databases. See [`engine/`](../engine/README.md).
 - **`public/export/`**: the source of every public artefact, one file each. Not committed; rebuilt each time.
 - **`manifest.json`**: every artefact in both corpora, with its type, tier, size, hash and the constructs it uses.
 

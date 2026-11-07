@@ -1,3 +1,9 @@
+# The .NET libraries the engine loads through pythonnet (ScriptDom, Microsoft.Data.SqlClient),
+# published in a build stage so the toolbox carries only the runtime and the assemblies.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS dotnet-libs
+COPY dotnet/toolbox-libs.csproj /src/
+RUN dotnet publish /src/toolbox-libs.csproj -c Release -o /out
+
 # Pinned to Databricks Runtime 17.3 LTS: Spark 4.0.0, Delta 4.0.0, JDK 17, Python 3.12.
 FROM python:3.12-slim-bookworm
 
@@ -21,8 +27,8 @@ b = SparkSession.builder.master('local[1]') \
   .config('spark.sql.catalog.spark_catalog', 'org.apache.spark.sql.delta.catalog.DeltaCatalog'); \
 s = configure_spark_with_delta_pip(b).getOrCreate(); s.sql('select 1').collect(); s.stop()"
 
-# Microsoft's ODBC driver, the product's SQL Server driver (ADR 0017: free, not open source,
-# a recorded exception), and pyodbc. pymssql above stays for the corpus tools.
+# Microsoft's ODBC driver and pyodbc, kept only as the test record of issue 34 (spec section 18);
+# the product's SQL Server client is Microsoft.Data.SqlClient, below. pymssql stays for the corpus tools.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl gnupg ca-certificates \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
@@ -31,3 +37,18 @@ RUN apt-get update \
     && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install pyodbc==5.2.0
+
+# The .NET runtime (MIT) for pythonnet, pinned, with ICU for SqlClient's globalisation.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libicu72 \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+    && bash /tmp/dotnet-install.sh --runtime dotnet --version 10.0.12 --install-dir /usr/share/dotnet \
+    && rm /tmp/dotnet-install.sh
+COPY --from=dotnet-libs /out /opt/migrt/dotnet
+ENV DOTNET_ROOT=/usr/share/dotnet \
+    MIGRT_DOTNET_LIBS=/opt/migrt/dotnet
+
+# The engine's own dependencies: pythonnet for ScriptDom and SqlClient, psycopg for the
+# Postgres control database, pyflakes for layer-1 lint, pytest for the engine's tests.
+RUN pip install pythonnet==3.2.1 "psycopg[binary]==3.3.8" pyflakes==4.1.0 pytest==9.0.3

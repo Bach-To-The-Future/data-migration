@@ -1,0 +1,21 @@
+[project]
+name = "migrt"
+version = "0.1.0"
+description = "The script migration tool: converts SQL Server script artefacts to PySpark."
+requires-python = ">=3.12"
+# Supplied by the sandbox toolbox image (sandbox/tools.Dockerfile), which pins them.
+dependencies = ["pythonnet", "psycopg[binary]", "pyflakes"]
+
+[project.scripts]
+migrt = "migrt.cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+migrt = ["core/operation-vocabulary.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

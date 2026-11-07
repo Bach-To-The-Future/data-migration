@@ -1,0 +1,49 @@
+# Engine
+
+The script migration tool's engine, `migrt`: the core, the SQL Server source and the PySpark target, built from the [v1 architecture spec](../docs/spec/v1-architecture-spec.md). Its library interface is [`migrt.engine`](src/migrt/engine.py); the command line ([`migrt.cli`](src/migrt/cli.py)) is a thin front end over it.
+
+**State:** the skeleton of [issue #36](https://github.com/Bach-To-The-Future/data-migration/issues/36). One view runs end to end as a preview run: the extractor's permission self-check, an immutable snapshot in a per-engagement Postgres control database, lowering into a first cut of the intermediate representation, the checker, generation and layer-1 code checks, and `report-data.json`. Later tickets widen each layer.
+
+## Run it
+
+The engine runs in the sandbox toolbox, which carries .NET, ScriptDom, Microsoft.Data.SqlClient and the Python dependencies. Build the sandbox first; that also starts Postgres and grants the extractor's read-only login by Annex F's grant set:
+
+```
+python corpus/build.py
+```
+
+Then, for a preview run of one view:
+
+```
+docker compose -f sandbox/docker-compose.yml --profile tools run --rm tools \
+    python -m migrt preview --engagement retail_demo --database RetailSample \
+    --artefact RetailSample.sales.vOrderTotals --out out/retail_demo
+```
+
+It writes `out/retail_demo/converted/RetailSample/sales/views/vOrderTotals.py` and `out/retail_demo/report/report-data.json`, and prints the run's result as JSON. Every artefact in a preview run is "Not reconciled": nothing in it is converted.
+
+## Layout
+
+```
+src/migrt/
+  engine.py            the library interface
+  cli.py               the command line
+  core/                shared by every source and target; imports neither
+    catalog.py         facts with provenance, snapshots, the query interface
+    control_db.py      one Postgres database per engagement; snapshots immutable
+    ir.py              the intermediate representation
+    checker.py         verifies the representation
+    vocabulary.py      the operation vocabulary (Annex A), with its JSON copy
+    report.py          the report data
+  sources/sqlserver/   connection (SqlClient), extractor, parser (ScriptDom), names, types, lowering
+  targets/pyspark/     generator, layer1
+tests/                 run with sandbox/engine-tests.sh
+```
+
+## Tests
+
+```
+sh sandbox/engine-tests.sh
+```
+
+They run in the toolbox against the sandbox SQL Server and Postgres, through the engine's library interface, the PySpark target's layer-1 contract, and the control database for the immutability claim.
