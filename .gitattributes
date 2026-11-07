@@ -4,3 +4,6 @@ sandbox/** text eol=lf
 # The engine and docs: LF everywhere, so generated output and diffs do not depend on the checkout.
 engine/** text eol=lf
 docs/** text eol=lf
+# Shell hooks break with CRLF; the repo's tools follow the engine.
+.githooks/** text eol=lf
+tools/** text eol=lf
