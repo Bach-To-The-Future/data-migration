@@ -466,6 +466,7 @@ A scalar function that cannot be a column expression is first raised to one (`IF
 | `GROUP BY`/`DISTINCT` on those values | Normalised grouping, original spelling returned | Support library |
 | `uniqueidentifier` comparison and ordering | SQL Server's own byte order | Support library |
 | Integer division; `AVG` and `SUM` result types | `div` and explicit casts | Idiomatic |
+| `SUM` and `AVG` over `int` failing when a running total leaves `int`, which can depend on plan order (3.14) | Helper failing when a running total leaves `int`; a caveat, since SQL Server's order is not defined | Support library, with caveat |
 | `+` and `CONCAT` with `NULL`; `LEN`; `ISNULL` result type | Built-ins | Idiomatic |
 | `DATEDIFF`, `DATEPART(week/weekday)`, date rounding | Helpers | Support library |
 | `SUBSTRING`, `CHARINDEX`, `STUFF` out of range; `LIKE` with `[a-c]` | Helpers | Support library |
@@ -883,7 +884,7 @@ A table of business areas is added when a run spans several. At scale, each grou
 | Not reconcilable locally otherwise; Contains manual work; Recognised, not converted | Manual work |
 | Not reconciled (preview run) | Not reconciled: preview run, the only heading in a preview run's sign-off |
 
-**Construct statuses:** converted, or converted with a caveat; raised; manual work; failed; blocked. A construct may also be tagged as produced by a model, as using the escape hatch, or as reviewer-supplied. **Rollup:** construct, artefact, business area (the schema by default, mappable per engagement), run. Recognised artefacts count in the totals as manual work.
+**Construct statuses:** converted, or converted with a caveat; raised; manual work; failed; blocked; and, in a preview run, "Not reconciled (preview run)" for every construct that was generated, since nothing in a preview is checked (decided on [the engine skeleton][t36]). A construct may also be tagged as produced by a model, as using the escape hatch, or as reviewer-supplied. **Rollup:** construct, artefact, business area (the schema by default, mappable per engagement), run. Recognised artefacts count in the totals as manual work.
 
 **Wording.**
 
@@ -1500,6 +1501,7 @@ A second Fable review checked the commit that applied these decisions and found 
 [t27]: https://github.com/Bach-To-The-Future/data-migration/issues/27
 [t28]: https://github.com/Bach-To-The-Future/data-migration/issues/28
 [t35r]: https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287
+[t36]: https://github.com/Bach-To-The-Future/data-migration/issues/36
 [t30]: https://github.com/Bach-To-The-Future/data-migration/issues/30
 [t31]: https://github.com/Bach-To-The-Future/data-migration/issues/31
 [t32]: https://github.com/Bach-To-The-Future/data-migration/issues/32

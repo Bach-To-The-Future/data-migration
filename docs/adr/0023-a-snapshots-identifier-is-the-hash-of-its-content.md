@@ -16,5 +16,6 @@ Made while building [the engine skeleton](https://github.com/Bach-To-The-Future/
 ## Consequences
 
 - "Each extraction" in the spec is recorded as an extraction row, not as a new snapshot. A run still uses exactly one snapshot, and the report names it.
+- Provenance is part of every object's content hash, so a live extraction and a folder extraction of the same facts, whose provenance differs (read from the server, parsed from a file, assumed from a setting), never share an identifier. Accepted by the owner on that condition; `engine/tests/test_catalog.py` pins it.
 - Any change to any extracted fact, including its provenance, gives a new snapshot identifier. Cache keys are unaffected: they hash the facts a conversion read, never the identifier (spec section 3).
 - The hash covers the server's name, so the same databases on a rebuilt container with a new host name are a new snapshot.

@@ -6,7 +6,7 @@ Entries are copied unchanged from [the research catalogue](../research/tsql-spar
 
 Thirteen of this half's entries were marked "Inferred" from documentation; twelve were later confirmed on SQL Server and local Spark, and entry 8.5 was refuted (no difference). The fourteenth inferred entry, 9.14, is in Annex D only. Those results are in [Annex G](annex-g-agreements-and-tested-differences.md), not in the entries below.
 
-Entry 9.14 is in Annex D only: it concerns SQL text the target embeds in its escape hatch, not a SQL Server construct (decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28)). So this half has 82 entries and Annex D 83.
+Entry 9.14 is in Annex D only: it concerns SQL text the target embeds in its escape hatch, not a SQL Server construct (decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28)). So this half has 83 entries and Annex D 84, counting entry 3.14, added after the research catalogue was copied.
 
 The **Vocabulary** column names the operations and types in [Annex A](../spec-drafts/operation-vocabulary.md) that carry each entry's meaning. Lowering resolves the construct into them, using catalog types and collations; where meaning depends on operand types, it chooses the operation that means exactly that. A comparison rule is the case, accent and trailing-space behaviour taken from SQL Server's collation precedence.
 
@@ -58,6 +58,7 @@ The **Vocabulary** column names the operations and types in [Annex A](../spec-dr
 | 3.11 | `money` arithmetic, for example `money / money` | `money`, `money_multiply`, `money_divide` | `money` keeps four decimal places and Microsoft warns of rounding through truncation ([money][m-money]) | Inferred |
 | 3.12 | `ISNUMERIC('$')` | `is_numeric_text` | `1`; also `1` for `+` and `-` ([ISNUMERIC][m-isnumeric]) | Inferred |
 | 3.13 | `SUM(c)` or `AVG(c)` over a `float` or `real` column | `sum`, `average` on `float` | The order in which rows are added is not defined, and a parallel plan can change it from one run to the next. Floating-point addition is not associative, so the last digits can differ | Inferred. Added by the owner in [How does reconciliation generate data and compare results?](https://github.com/Bach-To-The-Future/data-migration/issues/13) |
+| 3.14 | `SUM(c)` or `AVG(c)` over an `int` column holding 2147483647, 1 and -5 | `sum`, `average` on `integer` (overflow is an error) | Arithmetic overflow error 8115, although the final total, 2147483643, fits in `int`: the running total is kept in `int` and fails as soon as it leaves the range. The order in which rows are added is not defined and a plan (parallel or not) can change it, so whether the same rows fail can depend on the plan's aggregation order | SQL Server half tested on the 2022 CU27 sandbox for the order shown; the dependence on plan order and the Spark half are inferred. Added by the owner in [Engine skeleton: one view converted end to end as a preview run](https://github.com/Bach-To-The-Future/data-migration/issues/36) |
 
 ## 4. Dates and times
 

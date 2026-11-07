@@ -16,9 +16,9 @@ PREVIEW_BANNER = ("Preview run: reconciliation was off. Nothing in this report w
 NOT_RECONCILED = "Not reconciled"
 PREVIEW_GROUP = "Not reconciled: preview run"
 
-# Construct statuses (spec section 15). In a preview run a generated construct is not
-# reconciled; one the target cannot generate is manual work.
-CONSTRUCT_NOT_RECONCILED = "not reconciled"
+# Construct statuses (spec section 15). In a preview run a generated construct is
+# "Not reconciled (preview run)"; one the target cannot generate is manual work.
+CONSTRUCT_NOT_RECONCILED = "Not reconciled (preview run)"
 CONSTRUCT_MANUAL = "manual work"
 
 

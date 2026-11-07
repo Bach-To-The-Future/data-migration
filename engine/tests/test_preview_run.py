@@ -48,6 +48,7 @@ def test_report_data_says_not_reconciled_with_the_preview_banner(engagement, ext
     assert item["status"] == "Not reconciled"
     assert item["sign_off_group"] == "Not reconciled: preview run"
     assert "converted" not in {item["status"].lower()}
+    assert {c["status"] for c in item["constructs"]} == {"Not reconciled (preview run)", "manual work"}
 
 
 def test_unsupported_operations_are_reported_as_manual_work_never_dropped(engagement, extractor_server, tmp_path):
