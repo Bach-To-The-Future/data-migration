@@ -354,6 +354,8 @@ Decided in: [What representation does the core work on?][t11], [How is each cons
 
 **Clusters.** Two artefacts form a cluster when their lowered representations are identical once every identifier is replaced by a placeholder: literals and parameter defaults must match exactly, and comments are ignored. A cluster shares one conversion. The representative is verified by tests only, every instance is tested individually, and any human acceptance is a recorded acceptance ([ADR 0006][adr6]). An instance matched alone by a client lesson leaves the cluster and gets a conversion of its own.
 
+**Idioms** ([ADR 0022][adr22]). Sub-patterns of the representation that recur across an engagement are found deterministically, with identifiers and literals as placeholders and matched by exact structure only, never by similarity. Each is converted once, and its conversion is reused, instantiated with each artefact's names, once an artefact containing it has reached "Reconciled" and passed final validation. Every artefact is still tested in full. Idiom use is recorded per artefact. An idiom whose conversion is found wrong is retired, and every artefact that used it is re-checked. Client idioms stay in the engagement; in measurement runs, idioms from release hold-out artefacts are discarded.
+
 ### 6. Converted code
 
 Decided in: [How is each construct with no PySpark equivalent converted?][t10], [Which conversion steps need judgement? Hand-convert a corpus sample][t12], [Which SQL Server versions does v1 support?][t26], [What must a new source or target provide?][t17], [How does the final independent validator work?][t32]. ADRs: [0002][adr2], [0003][adr3], [0004][adr4], [0019][adr19]. Annexes: [C](annex-c-differences-sql-server.md), [D](annex-d-differences-pyspark.md).
@@ -700,6 +702,7 @@ Lowering everything first is cheap and deterministic, and gives the plan what it
 **Choosing the pilot.** A greedy set cover over the constructs in the lowered representation: node kinds, operations, candidate raising transforms, and the features of the triggers involved.
 
 - A smaller artefact is preferred when it adds the same coverage; any remaining tie is broken by a hash of the name, so the pilot is reproducible.
+- The most frequent idioms are included in the set cover, so house patterns are learned first.
 - At most one representative per cluster. Every callee of a pilot artefact is added, so the pilot can be verified.
 - A versioned size cap, by default 15% of the artefacts. If the cap is reached first, the constructs left uncovered are listed in the plan.
 
@@ -1295,6 +1298,7 @@ What this spec commits the build to, beyond implementing the decisions above. Ea
 - **Also tested:** an interrupted run resumes by replaying; a crash between doing the work and recording it duplicates no effect.
 - **Development rule:** the agent's prompt and tools are developed on the tuning half only. The cost: a smaller, noisier benchmark.
 - **After it:** both orchestrators stay behind one switch; the winner under the ample ceiling becomes the default, recorded in a decision record; if the binding-ceiling result disagrees, the switch's documentation recommends the other orchestrator for engagements expected to hit their ceiling.
+- **Idiom reuse:** the development runs measure speed and converted share with and without idiom reuse ([ADR 0022][adr22]).
 - **A repair arm:** 5 more cold runs under the ample ceiling, with the baseline orchestrator and repair replaced by a single fixed-prompt call given the same evidence. If it fixes as many failures, repair moves down to an LLM step ([ADR 0008][adr8], [ADR 0020][adr20], amended).
 
 **Build-phase checks and deliverables.**
@@ -1482,6 +1486,7 @@ A second Fable review checked the commit that applied these decisions and found 
 [adr19]: ../adr/0019-shared-mappings-are-split-by-source-and-by-target.md
 [adr20]: ../adr/0020-orchestrators-are-policies-over-a-fixed-engine.md
 [adr21]: ../adr/0021-delivered-jobs-hold-a-write-lease-on-every-table-they-write.md
+[adr22]: ../adr/0022-recurring-idioms-are-converted-once-and-reused.md
 [vocab-json]: ../spec-drafts/operation-vocabulary.json
 [r-perm]: ../research/extractor-permissions.md
 [r-replay]: ../research/replayable-agent-loops.md

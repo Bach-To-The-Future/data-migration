@@ -116,6 +116,10 @@ _Avoid_: Description (which is generated), explanation
 The part of the core that assembles everything an AI step is shown. An AI step never gathers its own context, and no model call carries anything over from another, except within one repair run.
 _Avoid_: Prompt builder, retriever
 
+**Idiom**:
+A sub-pattern of the intermediate representation that recurs across an engagement, with identifiers and literals as placeholders and matched by exact structure only. It is converted once and its verified conversion reused, while every artefact containing it is still tested in full.
+_Avoid_: Template, snippet, cluster (which is a whole artefact)
+
 **Worked example**:
 An earlier input and its accepted output, shown to an AI step as a model of what to produce. It comes only from an artefact that reconciled, and is withdrawn if later found wrong.
 _Avoid_: Few-shot example, sample
