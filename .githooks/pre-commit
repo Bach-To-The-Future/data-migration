@@ -1,0 +1,15 @@
+#!/bin/sh
+# Lint the staged engine Python files with pyflakes before each commit. Fast, and needs no
+# Docker; the full checks run with sh sandbox/engine-tests.sh.
+# Enabled per clone with: git config core.hooksPath .githooks
+files=$(git diff --cached --name-only --diff-filter=ACMR -- 'engine/*.py')
+[ -z "$files" ] && exit 0
+
+python=python
+command -v "$python" >/dev/null 2>&1 || python=python3
+if ! "$python" -m pyflakes --version >/dev/null 2>&1; then
+    echo "pre-commit: pyflakes is not installed for $python. Install it with: $python -m pip install pyflakes==4.1.0" >&2
+    exit 1
+fi
+# shellcheck disable=SC2086  # one path per word; engine paths have no spaces
+exec "$python" -m pyflakes $files

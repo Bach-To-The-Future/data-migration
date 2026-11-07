@@ -11,3 +11,7 @@ The five canonical triage roles use their default label strings (`needs-triage`,
 ### Domain docs
 
 Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Engine
+
+The engine is in `engine/`; see `engine/README.md`. Its lint, type checks and tests run only in the sandbox toolbox: `sh sandbox/engine-tests.sh`, which needs Docker running and `python corpus/build.py` done.
