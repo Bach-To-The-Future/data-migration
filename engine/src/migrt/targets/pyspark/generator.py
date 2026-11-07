@@ -25,7 +25,7 @@ COMPARE = {"=": "==", "<>": "!=", ">": ">", "<": "<", ">=": ">=", "<=": "<="}
 MONEY_REASON = ("money arithmetic truncates to four places at every step in SQL Server; it needs the "
                 "support library's money type, which is not built yet")
 # Silent difference 3.14. The wording moves to the source half of the differences catalogue
-# when that half is built as data (recorded on issue #87).
+# when that half is built as data (issue #102).
 SUM_INT_CAVEAT = ("Silent difference 3.14: SQL Server raises an overflow error when a running total leaves int, "
                   "even if the final total fits, and whether it does can depend on the plan's aggregation order; "
                   "Spark raises only when the final total does not fit")
