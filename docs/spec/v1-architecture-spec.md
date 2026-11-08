@@ -279,8 +279,8 @@ Nothing at server level and no fixed role: the `msdb` role `SQLAgentReaderRole` 
 
 **Extraction from folders alone.**
 
-- Table shapes are built by replaying data-definition statements in a fixed order: `CREATE` before `ALTER`, file-name order within each. `CREATE INDEX` and `CREATE OR ALTER` count as `CREATE` statements. Two `CREATE` statements for the same object is an extraction error that names both files. Statements that build no fact (drops, grants, statistics) are listed with the reason.
-- Required settings: the database default collation and the time zone. Everything else a server would have supplied takes SQL Server's documented default, recorded as assumed. The SQL Server release and each database's compatibility level may be given as settings; otherwise SQL Server 2022 and level 160 are assumed. A value assumed inside a parsed fact, such as a column's collation or nullability or a constraint's generated name, is recorded in the object's `assumed_values`.
+- Table shapes are built by replaying data-definition statements in a fixed order: every `CREATE` other than `CREATE INDEX` (`CREATE OR ALTER` among them), then every `CREATE INDEX`, then every `ALTER`, each group in file-name order. Indexes come between because script exports put them in files of their own, which can sort before their tables' (decided by the owner on [extraction from folders][t40]). Two `CREATE` statements for the same object, or the same index, is an extraction error that names both files. Statements that build no fact (drops, grants, statistics) are listed with the reason.
+- Required settings: the database default collation and compatibility level, the time zone, and the SQL Server version. The level selects the parser and changes what code means; the version selects the sandbox that serves as the oracle. Everything else a server would have supplied takes SQL Server's documented default, recorded as assumed. A value assumed inside a parsed fact, such as a column's collation or nullability or a constraint's generated name, is recorded in the object's `assumed_values`.
 - Lost without a server: server and database settings, per-routine settings unless the script sets them, row counts, trigger firing order, and confirmation that an object exists.
 - The report flags every column whose collation was assumed and gives a completeness summary: how many facts were read, parsed and assumed.
 
@@ -1531,6 +1531,7 @@ A second Fable review checked the commit that applied these decisions and found 
 [adr20]: ../adr/0020-orchestrators-are-policies-over-a-fixed-engine.md
 [adr21]: ../adr/0021-delivered-jobs-hold-a-write-lease-on-every-table-they-write.md
 [adr22]: ../adr/0022-recurring-idioms-are-converted-once-and-reused.md
+[t40]: https://github.com/Bach-To-The-Future/data-migration/issues/40
 [adr25]: ../adr/0025-a-live-server-is-the-only-source-of-its-databases-objects.md
 [vocab-json]: ../spec-drafts/operation-vocabulary.json
 [r-perm]: ../research/extractor-permissions.md
