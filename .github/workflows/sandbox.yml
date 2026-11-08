@@ -13,9 +13,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request supersedes its running check; a nightly or manual run on
+# master is never cancelled by another.
 concurrency:
-  group: sandbox-${{ github.ref }}
-  cancel-in-progress: true
+  group: sandbox-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-and-check:

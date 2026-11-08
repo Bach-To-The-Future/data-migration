@@ -10,7 +10,7 @@ python corpus/build.py
 
 Needs Docker (running) and Python 3.9+ on the host. Nothing else is installed on the host: the work runs in containers. The first run downloads about 330 MB of sample database backups and builds a toolbox image with PySpark, which takes a while; later runs take about a minute.
 
-CI proves this on plain Docker Engine ([`.github/workflows/sandbox.yml`](../.github/workflows/sandbox.yml)): on every pull request to master, nightly and on demand, a fresh Linux runner builds from scratch and fails unless `manifest.json` comes out byte-identical. The engine's checks then run in the same job.
+CI proves this on plain Docker Engine ([`.github/workflows/sandbox.yml`](../.github/workflows/sandbox.yml)): on every pull request to master, nightly and on demand, a fresh Linux runner builds from scratch and fails unless `manifest.json` and `public/backups.json` come out byte-identical. The engine's checks then run in the same job.
 
 | Option | Effect |
 |---|---|
