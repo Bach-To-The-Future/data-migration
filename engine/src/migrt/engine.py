@@ -254,7 +254,7 @@ def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue,
         name=found, artefact_type="view", area=found.split(".")[1], output=generated.relative_path,
         layer1=checks.to_json(), constructs=constructs, degradations=[],
         secrets=[{"setting": name, "text": "A likely secret in the source. Generated code shows this named setting "
-                                            "in its place; nothing reads settings yet (support library, issue #45)."}
+                                            "in its place; nothing reads settings yet (the settings file, issue #44)."}
                  for name in artefact.secret_settings],
         name_adjustments=generated.name_adjustments)
     return _ConvertedView(artefact, reader, generated, checks, item)
