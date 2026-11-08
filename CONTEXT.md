@@ -109,6 +109,9 @@ _Avoid_: Translation, transpiling
 **External reference**:
 A reference from an artefact to an object outside the catalog, such as another database, a linked server or a system object.
 
+**Unresolved external reference**:
+A foreign key whose referenced table is missing from the folders an extraction read. The referencing table cannot be recreated faithfully, so artefacts that write it are "Not reconcilable locally" until the export is extended.
+
 **Opaque fragment**:
 A piece of source kept verbatim, with its position and the reason, because lowering could not express it in the intermediate representation. It is never dropped.
 _Avoid_: Flagged fragment (which is target code), unparsed block
