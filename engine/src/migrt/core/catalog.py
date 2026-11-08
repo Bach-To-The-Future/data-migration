@@ -16,6 +16,16 @@ from typing import Any, Callable, Iterable
 
 PROVENANCE_KINDS = ("server", "file", "assumed")
 SKELETON = "skeleton"
+# A fact naming cells the snapshot's identity leaves out: {"fact": name, "columns": [...]},
+# for a fact whose value is a list of rows. They are columns the source changes by itself,
+# with nobody acting, so a re-extraction differing only there is the same snapshot (ADR 0023,
+# amended). The cells are kept and checked on read like any other; nothing may read them.
+IGNORED_FOR_IDENTITY = "ignored_for_identity"
+
+
+class IgnoredCellsRead(Exception):
+    """A read of a fact holding cells the snapshot's identity ignores. What depends on them
+    would change while the snapshot does not, so no reader may use them."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -50,9 +60,30 @@ class CatalogObject:
 
     @property
     def content_hash(self) -> str:
+        """The hash of everything the object holds, checked whenever it is read back."""
+        return self._hash(self.facts)
+
+    @property
+    def identity_hash(self) -> str:
+        """The hash the snapshot's identifier is made from: the content, less the cells named by
+        an IGNORED_FOR_IDENTITY fact."""
+        if not self.has_fact(IGNORED_FOR_IDENTITY):
+            return self.content_hash
+        ignored = self.fact(IGNORED_FOR_IDENTITY).value
+        columns = set(ignored["columns"])
+        facts = tuple(dataclasses.replace(f, value=[{k: v for k, v in row.items() if k not in columns}
+                                                    for row in f.value])
+                      if f.name == ignored["fact"] and f.area == SKELETON else f for f in self.facts)
+        return self._hash(facts)
+
+    def _hash(self, facts) -> str:
         body = [self.identity, self.kind,
-                sorted([f.area, f.name, f.value, f.provenance.kind, f.provenance.detail] for f in self.facts)]
+                sorted([f.area, f.name, f.value, f.provenance.kind, f.provenance.detail] for f in facts)]
         return hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
+
+    def ignored_fact(self) -> str | None:
+        """The name of the fact holding cells the identity ignores, if any."""
+        return self.fact(IGNORED_FOR_IDENTITY).value["fact"] if self.has_fact(IGNORED_FOR_IDENTITY) else None
 
     def has_fact(self, name: str, area: str = SKELETON) -> bool:
         return any(f.name == name and f.area == area for f in self.facts)
@@ -65,7 +96,7 @@ class CatalogObject:
 
 
 def snapshot_id_for(objects: Iterable[CatalogObject]) -> str:
-    digest = hashlib.sha256(_canonical(sorted((o.identity, o.content_hash) for o in objects)).encode("utf-8"))
+    digest = hashlib.sha256(_canonical(sorted((o.identity, o.identity_hash) for o in objects)).encode("utf-8"))
     return "snap-" + digest.hexdigest()[:20]
 
 
@@ -164,7 +195,11 @@ class CatalogReader:
         return found.identity
 
     def fact(self, identity: str, name: str, area: str = SKELETON) -> Fact:
-        found = self.snapshot.get(identity).fact(name, area)
+        obj = self.snapshot.get(identity)
+        if area == SKELETON and name == obj.ignored_fact():
+            raise IgnoredCellsRead(f"{identity}: the {name!r} fact holds cells the snapshot's identity ignores; "
+                                   "read a fact built from it instead")
+        found = obj.fact(name, area)
         self._record(identity, area, name)
         return found
 

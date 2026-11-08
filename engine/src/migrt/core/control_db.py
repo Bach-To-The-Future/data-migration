@@ -44,10 +44,13 @@ CREATE TABLE IF NOT EXISTS catalog_fact (
     FOREIGN KEY (snapshot_id, identity) REFERENCES catalog_object (snapshot_id, identity)
 );
 -- Every extraction is recorded, including one that produced an existing snapshot again.
+-- differing_objects lists the objects whose content differed from the stored snapshot's
+-- only in cells its identity ignores (ADR 0023, amended): the stored values are kept.
 CREATE TABLE IF NOT EXISTS extraction (
     id            bigserial PRIMARY KEY,
     snapshot_id   text NOT NULL REFERENCES snapshot (id),
     source_description  text NOT NULL,
+    differing_objects   jsonb NOT NULL DEFAULT '[]',
     extracted_at  timestamptz NOT NULL DEFAULT now()
 );
 
@@ -156,10 +159,16 @@ def connect(dsn: str):
 
 
 def store_snapshot(dsn: str, snapshot: Snapshot, source_description: str) -> bool:
-    """Store a snapshot unless it is already stored, and record the extraction either way.
-    Returns True when the snapshot is new."""
+    """Store a snapshot unless it is already stored, and record the extraction either way,
+    with every object whose content differs from the stored one in cells the identity
+    ignores. Returns True when the snapshot is new."""
     with connect(dsn) as conn, conn.transaction():
         new = conn.execute("SELECT 1 FROM snapshot WHERE id = %s", (snapshot.id,)).fetchone() is None
+        differing: list[str] = []
+        if not new:
+            stored = dict(conn.execute("SELECT identity, content_hash FROM catalog_object WHERE snapshot_id = %s",
+                                       (snapshot.id,)).fetchall())
+            differing = sorted(o.identity for o in snapshot.objects if stored.get(o.identity) != o.content_hash)
         if new:
             conn.execute("INSERT INTO snapshot (id, source, object_count) VALUES (%s, %s, %s)",
                          (snapshot.id, snapshot.source, len(snapshot.objects)))
@@ -172,8 +181,8 @@ def store_snapshot(dsn: str, snapshot: Snapshot, source_description: str) -> boo
                     " provenance_detail) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                     [(snapshot.id, o.identity, f.area, f.name, json.dumps(f.value, default=str),
                       f.provenance.kind, f.provenance.detail) for o in snapshot.objects for f in o.facts])
-        conn.execute("INSERT INTO extraction (snapshot_id, source_description) VALUES (%s, %s)",
-                     (snapshot.id, source_description))
+        conn.execute("INSERT INTO extraction (snapshot_id, source_description, differing_objects) VALUES (%s, %s, %s)",
+                     (snapshot.id, source_description, json.dumps(differing)))
     return new
 
 

@@ -28,7 +28,7 @@ import decimal
 import json
 from typing import Any
 
-from ...core.catalog import CatalogObject, Fact, Provenance, Snapshot
+from ...core.catalog import IGNORED_FOR_IDENTITY as IGNORED_FACT, CatalogObject, Fact, Provenance, Snapshot
 from . import names, parser, references, secrets
 from .connection import Connection, SqlServerError
 
@@ -43,6 +43,17 @@ DATABASE_VIEWS = ("sys.databases", "sys.schemas", "sys.objects", "sys.tables", "
                   "sys.synonyms", "sys.sequences", "sys.table_types", "sys.partitions")
 DEPENDENCY_VIEW = "sys.sql_expression_dependencies"   # read only where SELECT on it is granted (optional)
 MSDB_VIEWS = tuple(f"dbo.{t}" for t in MSDB_TABLES)
+# Columns SQL Server changes by itself, with nobody acting: log truncation state, SQL Agent's
+# next run and its run history. The snapshot's identity leaves them out, and nothing may read
+# them (ADR 0023, amended). This list changes only by a recorded decision; a test holds it to
+# the ADR. Counters that move with the client's data (identity last_value, sequence
+# current_value, partition rows) are not here: they move only when something changed.
+IGNORED_FOR_IDENTITY = {
+    "sys.databases": ("log_reuse_wait", "log_reuse_wait_desc"),
+    "dbo.sysjobschedules": ("next_run_date", "next_run_time"),
+    "dbo.sysjobsteps": ("last_run_outcome", "last_run_duration", "last_run_retries", "last_run_date",
+                        "last_run_time"),
+}
 # Rows of these views that describe something outside the database being read are left out.
 ROW_FILTERS = {"sys.databases": " WHERE database_id = DB_ID()"}
 SERVER_PROPERTIES = ("ProductVersion", "ProductMajorVersion", "ProductLevel", "ProductUpdateLevel", "ProductBuild",
@@ -239,13 +250,30 @@ def _raw_object(scope: str, cap: Capture) -> CatalogObject:
     read = Provenance("server", cap.view)
     command = frozenset({"command"}) if cap.view == "dbo.sysjobsteps" else frozenset()
     marked = secrets.in_rows(cap.view, cap.rows, command_columns=command)
-    return CatalogObject(raw_identity(scope, cap.view), "raw_capture", (
-        Fact("skeleton", "view", cap.view, read),
-        Fact("skeleton", "columns", cap.columns, read),
-        Fact("skeleton", "rows", cap.rows, read),
-        Fact("skeleton", "secrets", [s.to_json() for s in marked], Provenance("server", f"{cap.view}, marked by the "
-                                                                                       "extractor's patterns")),
-    ))
+    facts = [Fact("skeleton", "view", cap.view, read),
+             Fact("skeleton", "columns", cap.columns, read),
+             Fact("skeleton", "rows", cap.rows, read),
+             Fact("skeleton", "secrets", [s.to_json() for s in marked], Provenance("server", f"{cap.view}, marked by "
+                                                                                            "the extractor's patterns"))]
+    ignored = [c for c in IGNORED_FOR_IDENTITY.get(cap.view, ()) if c in cap.columns]
+    if ignored:
+        facts.append(Fact("skeleton", IGNORED_FACT, {"fact": "rows", "columns": ignored},
+                          Provenance("server", "columns SQL Server changes by itself (ADR 0023, amended)")))
+    return CatalogObject(raw_identity(scope, cap.view), "raw_capture", tuple(facts))
+
+
+@dataclasses.dataclass
+class Reading:
+    """Everything one extraction read from the server, before any fact is built from it."""
+    databases: list[str]
+    properties: dict
+    server: dict[str, Capture]
+    time_zone: str | None                 # from CURRENT_TIMEZONE(), or None where it failed
+    time_zone_failure: str | None
+    database_captures: dict[str, dict[str, Capture]]
+    dependencies_granted: dict[str, bool]
+    exempted: dict[str, list[dict]]
+    msdb: dict[str, Capture]
 
 
 def extract(address: ServerAddress, databases: list[str], *, time_zone: str | None = None,
@@ -253,6 +281,12 @@ def extract(address: ServerAddress, databases: list[str], *, time_zone: str | No
     """Check the server's version and the login's permissions, then read the catalog of the
     named databases, msdb's jobs and the server into a snapshot. `time_zone` is required
     only where CURRENT_TIMEZONE() fails. Every batch sent is appended to `statements`."""
+    return build(read(address, databases, statements=statements), time_zone=time_zone)
+
+
+def read(address: ServerAddress, databases: list[str], *, statements: list[str] | None = None) -> Reading:
+    """Everything the extractor sends to the server: the version check, the self-check and
+    the wholesale reads. Nothing is built here."""
     session = _Session(address)
     if statements is not None:
         session.statements = statements
@@ -260,29 +294,38 @@ def extract(address: ServerAddress, databases: list[str], *, time_zone: str | No
         props = _server_properties(master)
         check_version(props)
     exempted = check_permissions(address, databases, session)
-    objects: list[CatalogObject] = []
     with session.open() as master:
         server_caps = {v: capture(master, v) for v in SERVER_VIEWS}
-        objects.append(_server_object(master, props, server_caps["sys.configurations"], time_zone))
-    objects += [_raw_object("server", c) for c in server_caps.values()]
-    pending: list[_Database] = []
+        try:
+            zone, failure = master.query("SELECT CURRENT_TIMEZONE() AS zone")[0]["zone"], None
+        except SqlServerError as failed:
+            zone, failure = None, str(failed)
+    caps, granted = {}, {}
     for database in databases:
         with session.open(database) as conn:
-            granted = conn.query("SELECT HAS_PERMS_BY_NAME(@view, 'OBJECT', 'SELECT') AS held",
-                                 {"view": DEPENDENCY_VIEW})[0]["held"] == 1
-            caps = {v: capture(conn, v) for v in DATABASE_VIEWS + ((DEPENDENCY_VIEW,) if granted else ())}
-        pending.append(_Database(database, caps, granted, exempted.get(database, [])))
+            granted[database] = conn.query("SELECT HAS_PERMS_BY_NAME(@view, 'OBJECT', 'SELECT') AS held",
+                                           {"view": DEPENDENCY_VIEW})[0]["held"] == 1
+            views = DATABASE_VIEWS + ((DEPENDENCY_VIEW,) if granted[database] else ())
+            caps[database] = {v: capture(conn, v) for v in views}
     with session.open("msdb") as msdb:
         msdb_caps = {v: capture(msdb, v) for v in MSDB_VIEWS}
-    objects += [_raw_object("db:msdb", c) for c in msdb_caps.values()]
-    objects += _agent_jobs(msdb_caps)
+    return Reading(list(databases), props, server_caps, zone, failure, caps, granted, exempted, msdb_caps)
 
+
+def build(reading: Reading, *, time_zone: str | None = None) -> Snapshot:
+    """The snapshot, built from what was read alone: no server is touched."""
+    objects: list[CatalogObject] = [_server_object(reading, time_zone)]
+    objects += [_raw_object("server", c) for c in reading.server.values()]
+    objects += [_raw_object("db:msdb", c) for c in reading.msdb.values()]
+    objects += _agent_jobs(reading.msdb)
+    pending = [_Database(name, reading.database_captures[name], reading.dependencies_granted[name],
+                         reading.exempted.get(name, [])) for name in reading.databases]
     for db in pending:
         objects += db.objects()
         objects += [_raw_object(f"db:{db.name}", c) for c in db.caps.values()]
     # References need every object, in every database, to resolve against.
     provisional = Snapshot.of(SOURCE, objects)
-    engagement = set(databases)
+    engagement = set(reading.databases)
     extra: dict[str, list[Fact]] = {}
     for db in pending:
         for identity, facts in db.references(provisional, engagement).items():
@@ -308,7 +351,8 @@ def check_version(props: dict) -> None:
                                 f"(spec section 16). Nothing was read.")
 
 
-def _server_object(conn: Connection, props: dict, configurations: Capture, time_zone: str | None) -> CatalogObject:
+def _server_object(reading: Reading, time_zone: str | None) -> CatalogObject:
+    props, configurations = reading.properties, reading.server["sys.configurations"]
     sp = Provenance("server", "SERVERPROPERTY")
     nested = [r for r in configurations.rows if r["name"] == "nested triggers"]
     facts = [Fact("skeleton", "version", props["ProductVersion"], sp),
@@ -320,10 +364,10 @@ def _server_object(conn: Connection, props: dict, configurations: Capture, time_
              Fact(SOURCE, "engine_edition", int(props["EngineEdition"]), sp),
              Fact(SOURCE, "nested_triggers", bool(int(nested[0]["value_in_use"])),
                   Provenance("server", "sys.configurations"))]
-    try:
-        zone = conn.query("SELECT CURRENT_TIMEZONE() AS zone")[0]["zone"]
-        facts.append(Fact("skeleton", "time_zone", zone, Provenance("server", "CURRENT_TIMEZONE()")))
-    except SqlServerError as failed:
+    if reading.time_zone is not None:
+        facts.append(Fact("skeleton", "time_zone", reading.time_zone, Provenance("server", "CURRENT_TIMEZONE()")))
+    else:
+        failed = reading.time_zone_failure
         if time_zone is None:
             raise TimeZoneRequired(f"CURRENT_TIMEZONE() failed on SQL Server {props['ProductVersion']} ({failed}); "
                                    "give the server's time zone as a setting (spec section 3).") from None

@@ -1,7 +1,9 @@
 """Full live extraction from SQL Server 2017 and later (issue #39, spec section 3), through
 the engine's library interface, on the sandbox: the scratch database (conftest) for what the
 corpus lacks, and RetailSample for the corpus."""
+import copy as copy_module
 import json
+import pathlib
 import re
 
 import pytest
@@ -306,37 +308,59 @@ def test_changing_one_table_changes_only_that_tables_hash_and_the_raw_capture(en
     assert after.id != before.id
 
 
-# Raw-capture columns SQL Server updates by itself, with no change by anyone (ADR 0024,
-# Consequences): log truncation state, SQL Agent's next run, and row-derived counters.
-SERVER_MAINTAINED = {("sys.databases", "log_reuse_wait"), ("sys.databases", "log_reuse_wait_desc"),
-                     ("dbo.sysjobschedules", "next_run_date"), ("dbo.sysjobschedules", "next_run_time"),
-                     ("sys.identity_columns", "last_value"), ("sys.sequences", "current_value"),
-                     ("sys.partitions", "rows")}
+ADR_0023 = pathlib.Path(__file__).parents[2] / "docs" / "adr" / "0023-a-snapshots-identifier-is-the-hash-of-its-content.md"
 
 
-def _changed_cells(before: dict, after: dict) -> set[tuple[str, str]]:
-    """(view, column) of every cell that differs between two captures of one view."""
-    changed = {(before["view"], "(row count)")} if len(before["rows"]) != len(after["rows"]) else set()
-    for old, new in zip(before["rows"], after["rows"]):
-        changed |= {(before["view"], c) for c in old if old.get(c) != new.get(c)}
-    return changed
+def test_the_ignored_columns_are_exactly_those_the_recorded_decision_lists():
+    """The list changes only by a recorded decision: ADR 0023's amendment holds it."""
+    rows = re.findall(r"^\| `([^`]+)` \| (.+) \|$", ADR_0023.read_text(encoding="utf-8"), re.M)
+    recorded = {view: tuple(re.findall(r"`([^`]+)`", columns)) for view, columns in rows}
+    assert recorded == extractor.IGNORED_FOR_IDENTITY
+
+
+def test_no_fact_anything_reads_comes_from_an_ignored_column(scratch_database):
+    """Every fact built from the raw capture is unchanged when every ignored cell changes;
+    only the raw capture itself differs. The control changes one cell that is not ignored."""
+    source = sandbox_server(databases=(scratch_database, "RetailSample"))
+    reading = extractor.read(extractor.ServerAddress(source.host, source.port, source.login, source.password),
+                             [scratch_database, "RetailSample"])
+
+    def perturbed(change):
+        copy = copy_module.deepcopy(reading)
+        captures = {**copy.server, **copy.msdb, **{f"{d}/{v}": c for d, caps in copy.database_captures.items()
+                                                   for v, c in caps.items()}}
+        touched = 0
+        for cap in captures.values():
+            for row in cap.rows:
+                for column in change.get(cap.view, ()):
+                    row[column] = f"changed {row[column]!r}"
+                    touched += 1
+        return extractor.build(copy), touched
+
+    base = extractor.build(reading)
+    moved, touched = perturbed(extractor.IGNORED_FOR_IDENTITY)
+    assert touched > 0
+    assert moved.id == base.id
+    built = [(o.identity, o.content_hash) for o in base.objects if o.kind != "raw_capture"]
+    assert built == [(o.identity, o.content_hash) for o in moved.objects if o.kind != "raw_capture"]
+    assert any(o.content_hash != moved.get(o.identity).content_hash for o in base.objects if o.kind == "raw_capture")
+
+    control, _ = perturbed({"sys.databases": ("is_recursive_triggers_on",)})
+    assert control.id != base.id
+    assert facts(control, "RetailSample")["recursive_triggers"] != facts(base, "RetailSample")["recursive_triggers"]
 
 
 def test_re_extracting_an_unchanged_server_invalidates_nothing(engagement, scratch):
     first = engine.extract(engagement, scratch)
     second = engine.extract(engagement, scratch)
 
-    # Every object conversion reads is unchanged, so no cache key moves.
+    assert first.id == second.id
     assert [(o.identity, o.content_hash) for o in first.objects if o.kind != "raw_capture"] == [
         (o.identity, o.content_hash) for o in second.objects if o.kind != "raw_capture"]
-    # The raw capture changes only where SQL Server changed its own metadata meanwhile; then,
-    # and only then, the snapshot identifier changes with it (ADR 0023).
-    cells = set()
+    # Raw captures differ, if at all, only where SQL Server changed its own metadata meanwhile.
     for o in first.objects:
         if o.kind == "raw_capture" and o.content_hash != second.get(o.identity).content_hash:
-            cells |= _changed_cells(facts(first, o.identity), facts(second, o.identity))
-    assert cells <= SERVER_MAINTAINED, cells - SERVER_MAINTAINED
-    assert (first.id == second.id) == (not cells)
+            assert o.identity_hash == second.get(o.identity).identity_hash, o.identity
 
 
 # ---------------------------------------------------------------- name adjustments
