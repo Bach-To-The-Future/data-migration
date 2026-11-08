@@ -7,11 +7,13 @@ its role:
 
 - **Data definition**: a .sql file holding only data-definition statements (with SET, USE
   and PRINT). For a database read from no server, its statements are replayed in a fixed
-  order to build the catalog: every CREATE before every ALTER, file-name order within each,
-  statement order within a file. CREATE INDEX runs between the two, after every other
-  CREATE, because script exports put indexes in files of their own that can sort before
-  their tables'; CREATE OR ALTER counts as CREATE. A second CREATE of the same object, or
-  of the same index, is an extraction error naming both files. Beside a live server, the server
+  order to build the catalog: every CREATE but CREATE INDEX, then every CREATE INDEX, then
+  every ALTER, each group in file-name order; CREATE OR ALTER counts as CREATE. A
+  statement that needs an object or column not there yet is set aside and tried again,
+  pass after pass in the same order, until a pass applies nothing; any still waiting is
+  an extraction error naming its file, line and what it needs. A second CREATE of the
+  same object, or of the same index, is found before the replay, and is an error naming
+  both files. Beside a live server, the server
   is the source of its databases' objects, and such files are not replayed; each statement
   is listed as superseded (ADR 0025).
 - **Query batch**: any other .sql file. It is an artefact, kept whole; its own data
@@ -132,6 +134,35 @@ class DuplicateCreate(FolderExtractionError):
     def __init__(self, identity: str, first: str, second: str):
         self.identity, self.first, self.second = identity, first, second
         super().__init__(f"{identity} is created twice, in {first} and in {second}. Remove one, then extract again.")
+
+
+class UnresolvedDependencies(FolderExtractionError):
+    """Statements that still need an object or column no statement in the folders makes."""
+
+    def __init__(self, waiting: list[tuple[str, str]]):
+        self.waiting = waiting
+        super().__init__("Data definition that needs what no statement in the folders makes; nothing was stored:\n" +
+                         "\n".join(f"  {where}: needs {needed}" for where, needed in waiting))
+
+
+class _Missing(Exception):
+    """A statement needs an object or column that is not there yet: it waits for a later pass."""
+
+    def __init__(self, needed: str):
+        self.needed = needed
+        super().__init__(needed)
+
+
+def _copy(value):
+    """A copy of replay state deep enough to restore: dicts, lists and sets copied, ScriptDom
+    fragments and statements shared."""
+    if isinstance(value, dict):
+        return {k: _copy(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_copy(v) for v in value]
+    if isinstance(value, set):
+        return set(value)
+    return value
 
 
 @dataclasses.dataclass(frozen=True)
@@ -475,28 +506,58 @@ class _Replay:
     def key(self, identity: str, database: str) -> str:
         return identity if self.databases[database].case_sensitive else identity.casefold()
 
-    def target(self, son, statement: _Statement) -> tuple[str, str, str, bool] | None:
+    def named(self, son, statement: _Statement) -> tuple[str, str, str, bool] | None:
         """database, schema, name and whether the schema was assumed; None when the name is
-        in a database this extraction does not replay, recorded."""
+        in a linked server or a database this extraction does not replay."""
         server, database, schema, name = _parts(son)
         where = _canonical_database(database or statement.database, self.databases)
         if server or where is None:
-            self.skip(statement, f"names {'a linked server' if server else 'a database this extraction does not read'}"
-                                 f" ({'.'.join(p for p in _parts(son) if p)})")
             return None
         return where, schema or "dbo", name or "", schema is None
 
+    def target(self, son, statement: _Statement) -> tuple[str, str, str, bool] | None:
+        """As named(), recording a name it does not replay."""
+        found = self.named(son, statement)
+        if found is None:
+            self.skip(statement, f"names {'a linked server' if _parts(son)[0] else 'a database this extraction does '}"
+                                 f"{'' if _parts(son)[0] else 'not read'} ({'.'.join(p for p in _parts(son) if p)})")
+        return found
+
     def find(self, son, statement: _Statement, kinds: set[str], *, types: bool = False) -> _Object | None:
+        """The object a statement changes, saved so the statement can be undone; it waits
+        when the object is not there yet."""
         found = self.target(son, statement)
         if found is None:
             return None
         database, schema, name, _ = found
         identity = (names.TYPE_PREFIX if types else "") + f"{database}.{schema}.{name}"
         obj = self.objects.get(self.key(identity, database))
-        if obj is None or obj.kind not in kinds:
-            raise FolderExtractionError(f"{statement.where}: {statement.kind} names {identity}, which no CREATE in "
-                                        f"the folders makes")
+        if obj is None:
+            raise _Missing(identity)
+        if obj.kind not in kinds:
+            raise FolderExtractionError(f"{statement.where}: {statement.kind} names {identity}, which is a {obj.kind}")
+        self.save(obj)
         return obj
+
+    # ------------------------------------------------------------ undoing a statement that waits
+
+    def begin(self) -> None:
+        self.saved: dict[str, _Object] = {}
+        self.made: list[str] = []
+        self.mark = (len(self.not_replayed), {d: set(s) for d, s in self.schemas.items()})
+
+    def save(self, obj: _Object) -> None:
+        key = self.key(obj.identity, obj.database)
+        if key not in self.saved and key not in self.made:
+            self.saved[key] = dataclasses.replace(obj, where=list(obj.where), assumed=_copy(obj.assumed),
+                                                  data=_copy(obj.data))
+
+    def rollback(self) -> None:
+        self.objects.update(self.saved)
+        for key in self.made:
+            self.objects.pop(key, None)
+        del self.not_replayed[self.mark[0]:]
+        self.schemas = self.mark[1]
 
     def skip(self, statement: _Statement, reason: str) -> None:
         self.not_replayed.append({"file": statement.file.label, "line": statement.line, "statement": statement.kind,
@@ -508,6 +569,7 @@ class _Replay:
         if key in self.objects:
             raise DuplicateCreate(identity, self.objects[key].where[0], statement.where)
         obj = _Object(identity, kind, database, schema, name, [statement.where])
+        self.made.append(key)
         if schema_assumed:
             obj.assumed.append({"fact": "name_parts", "property": "schema", "value": schema, "reason": DEFAULT_SCHEMA})
         self.objects[key] = obj
@@ -536,9 +598,10 @@ class _Replay:
     # ------------------------------------------------------------ the replay
 
     def replay(self, statements: list[_Statement]) -> None:
-        """Every CREATE statement but CREATE INDEX (CREATE OR ALTER among them), then every
-        CREATE INDEX, then every ALTER statement, each group in file-name order (spec
-        section 3)."""
+        """The dependency replay (spec section 3): every CREATE but CREATE INDEX (CREATE OR
+        ALTER among them), then every CREATE INDEX, then every ALTER, each group in file-name
+        order; a statement that needs what is not there yet is undone and set aside, and passes
+        over those repeat in the same order until one applies nothing."""
         creates, indexes, alters = [], [], []
         for s in statements:
             if s.kind in INDEXES:
@@ -557,21 +620,74 @@ class _Replay:
                 continue
             else:
                 self.skip(s, "not data definition the replay applies")
-        for s in creates + indexes:
-            if s.database not in self.databases:
-                self.skip(s, f"runs in database {s.database}, which this extraction does not read")
-            elif s.kind in INDEXES:
-                self.create_index(s)
+        pending = []
+        for s in creates + indexes + alters:
+            if s.database in self.databases:
+                pending.append(s)
             else:
-                getattr(self, "create_" + s.kind)(s)
-        for s in alters:
-            if s.database not in self.databases:
                 self.skip(s, f"runs in database {s.database}, which this extraction does not read")
+        self.duplicates(creates + indexes)
+        while pending:
+            waiting: list[tuple[_Statement, str]] = []
+            for s in pending:
+                self.begin()
+                try:
+                    self.apply(s)
+                except _Missing as missing:
+                    self.rollback()
+                    waiting.append((s, missing.needed))
+            if len(waiting) == len(pending):
+                raise UnresolvedDependencies([(s.where, needed) for s, needed in waiting])
+            pending = [s for s, _ in waiting]
+
+    def apply(self, s: _Statement) -> None:
+        if s.kind in INDEXES:
+            self.create_index(s)
+        elif s.kind in CREATES or s.kind in CREATE_OR_ALTER:
+            getattr(self, "create_" + s.kind)(s)
+        elif _procedure(s.fragment) == TRIGGER_ORDER:
+            self.trigger_order(s)
+        else:
+            getattr(self, "alter_" + s.kind)(s)
+
+    def duplicates(self, creates: list[_Statement]) -> None:
+        """A second CREATE of an object or an index, found before anything is replayed."""
+        made: dict[str, str] = {}
+
+        def once(identity: str, database: str, where: str) -> None:
+            key = self.key(identity, database)
+            if key in made:
+                raise DuplicateCreate(identity, made[key], where)
+            made[key] = where
+
+        for s in creates:
+            f, kind = s.fragment, s.kind
+            if kind == "CreateSchemaStatement":
                 continue
-            if _procedure(s.fragment) == TRIGGER_ORDER:
-                self.trigger_order(s)
-            else:
-                getattr(self, "alter_" + s.kind)(s)
+            if kind in INDEXES:
+                table = self.named(f.OnName, s)
+                if table is not None:
+                    once(f"{table[0]}.{table[1]}.{table[2]} index {_id(f.Name)}", table[0], s.where)
+                continue
+            if kind in ("CreateTriggerStatement", "CreateOrAlterTriggerStatement"):
+                if str(f.TriggerObject.TriggerScope) == "Database":
+                    once(f"{s.database}.{_parts(f.Name)[3]}", s.database, s.where)
+                    continue
+                table = self.named(f.TriggerObject.Name, s)
+                if table is not None:
+                    once(f"{table[0]}.{_parts(f.Name)[2] or table[1]}.{_parts(f.Name)[3]}", table[0], s.where)
+                continue
+            son = {"CreateProcedureStatement": lambda: f.ProcedureReference.Name,
+                   "CreateOrAlterProcedureStatement": lambda: f.ProcedureReference.Name}.get(
+                kind, lambda: getattr(f, "SchemaObjectName", None) or f.Name)()
+            found = self.named(son, s)
+            if found is None:
+                continue
+            prefix = names.TYPE_PREFIX if kind.startswith("CreateType") else ""
+            once(f"{prefix}{found[0]}.{found[1]}.{found[2]}", found[0], s.where)
+            if kind == "CreateTableStatement" and f.Definition is not None:
+                for index in (f.Definition.Indexes or []):
+                    once(f"{found[0]}.{found[1]}.{found[2]} index {_id(index.Name)}", found[0], s.where)
 
     # ------------------------------------------------------------ tables and table types
 
@@ -628,6 +744,7 @@ class _Replay:
                           clustered=False)
 
     def add_elements(self, table: _Object, definition, s: _Statement, *, trusted: bool = True) -> None:
+        before = len(table.data["foreign_keys"])
         for cd in definition.ColumnDefinitions:
             self.add_column(table, cd, s)
         for c in definition.TableConstraints:
@@ -644,6 +761,7 @@ class _Replay:
                                                      "filter": (_text(s.text, index.FilterPredicate)
                                                                 if index.FilterPredicate is not None else None),
                                                      "index_type": clustered, "enabled": True})
+        self.check_foreign_keys(table, table.data["foreign_keys"][before:], s)
         table.touched(s)
 
     def column_name(self, table: _Object, name: str | None) -> str:
@@ -652,7 +770,7 @@ class _Replay:
         for c in table.data["columns"]:
             if fold(c["name"]) == fold(name or ""):
                 return c["name"]
-        raise FolderExtractionError(f"{table.identity}: no column {name} (in {table.where[-1]})")
+        raise _Missing(f"column {name} of {table.identity}")
 
     def sorted_column(self, table: _Object, column_with_order, s: _Statement) -> dict:
         ids = column_with_order.Column.MultiPartIdentifier.Identifiers
@@ -669,6 +787,7 @@ class _Replay:
             identity = (_int(s.text, o.IdentitySeed) if o.IdentitySeed is not None else 1,
                         _int(s.text, o.IdentityIncrement) if o.IdentityIncrement is not None else 1)
         explicit = None
+        self.require_type(cd.DataType, table.database)
         column = {"name": name, "type": cd.DataType, "text": s.text, "collation": _id(cd.Collation),
                   "identity": identity, "computed": (_text(s.text, cd.ComputedColumnExpression)
                                                      if cd.ComputedColumnExpression is not None else None),
@@ -684,6 +803,46 @@ class _Replay:
             else:
                 self.add_constraint(table, c, s, name, True)
         column["nullable"] = explicit
+
+    def require_type(self, data_type, database: str) -> None:
+        """A user-defined type a column is declared with must be created first."""
+        if data_type is None or _kind(data_type) != "UserDataTypeReference":
+            return
+        parts = _parts(data_type.Name)
+        if parts[2] is None and (parts[3] or "").casefold() in {**ALIAS_TYPES, **CLR_SYSTEM_TYPES}:
+            return
+        if self.user_type(database)(parts) is None:
+            raise _Missing(f"the type {'.'.join(p for p in parts if p)}")
+
+    def check_foreign_keys(self, table: _Object, added: list[dict], s: _Statement) -> None:
+        """Each new foreign key's table must exist, and a primary key, unique constraint or
+        unique index there must cover its columns, as SQL Server requires."""
+        for fk in added:
+            son, _ = fk["target"]
+            found = self.target(son, s)
+            if found is None:
+                fk["references"] = None
+                continue
+            database, schema, name, _ = found
+            identity = f"{database}.{schema}.{name}"
+            target = table if self.key(identity, database) == self.key(table.identity, table.database) else \
+                self.objects.get(self.key(identity, database))
+            if target is None or target.kind != "table":
+                raise _Missing(identity)
+            fk["references"] = target.identity
+            d = target.data
+            if not fk["referenced_columns"]:
+                if d["primary_key"] is None:
+                    raise _Missing(f"a primary key on {target.identity}")
+                fk["referenced_columns"] = [c["name"] for c in d["primary_key"]["columns"]]
+            fk["referenced_columns"] = [self.column_name(target, c) for c in fk["referenced_columns"]]
+            keys = ([d["primary_key"]] if d["primary_key"] else []) + d["unique"] + [
+                i for i in d["unique_indexes"] if i["filter"] is None]
+            fold = (lambda x: x) if self.databases[target.database].case_sensitive else str.casefold
+            wanted = {fold(c) for c in fk["referenced_columns"]}
+            if not any({fold(c["name"]) for c in k["columns"]} == wanted for k in keys):
+                raise _Missing(f"a primary key, unique constraint or unique index on {target.identity} "
+                               f"({', '.join(fk['referenced_columns'])})")
 
     def add_constraint(self, table: _Object, c, s: _Statement, column: str | None, trusted: bool) -> None:
         kind, name = _kind(c), _id(getattr(c, "ConstraintIdentifier", None))
@@ -831,7 +990,7 @@ class _Replay:
                 if not self.drop_constraint(table, name):
                     if element.IsIfExists:
                         continue
-                    raise FolderExtractionError(f"{s.where}: {table.identity} has no constraint {name} to drop")
+                    raise _Missing(f"constraint {name} of {table.identity}")
             else:
                 self.skip(s, f"dropping a {kind}, which the replay does not apply")
         table.touched(s)
@@ -864,8 +1023,7 @@ class _Replay:
         constraints = table.data["checks"] + table.data["foreign_keys"]
         missing = wanted - {(c["name"] or "").casefold() for c in constraints}
         if missing and not f.All:
-            raise FolderExtractionError(f"{s.where}: {table.identity} has no check or foreign key named "
-                                        f"{', '.join(sorted(missing))}")
+            raise _Missing(f"check or foreign key {', '.join(sorted(missing))} of {table.identity}")
         for c in constraints:
             if f.All or (c["name"] or "").casefold() in wanted:
                 c["enabled"] = enforce
@@ -898,10 +1056,10 @@ class _Replay:
     def set_enabled(self, pool: list[_Object], every: bool, named: set[str], enabled: bool, s: _Statement) -> None:
         missing = named - {o.name.casefold() for o in pool}
         if missing and not every:
-            raise FolderExtractionError(f"{s.where}: no CREATE TRIGGER in the folders makes "
-                                        f"{', '.join(sorted(missing))} there")
+            raise _Missing(f"trigger {', '.join(sorted(missing))}")
         for t in pool:
             if every or t.name.casefold() in named:
+                self.save(t)
                 t.data["enabled"] = (enabled, s.where)
                 t.touched(s)
 
@@ -918,10 +1076,13 @@ class _Replay:
         candidates = [o for o in self.objects.values() if o.kind == "trigger" and o.database == s.database
                       and o.name.casefold() == parts[-1].casefold()
                       and (len(parts) < 2 or (o.schema or "").casefold() == parts[-2].casefold())]
-        if len(candidates) != 1:
-            raise FolderExtractionError(f"{s.where}: sp_settriggerorder names {args['triggername']}, which no CREATE "
-                                        "TRIGGER in the folders makes")
+        if len(candidates) > 1:
+            raise FolderExtractionError(f"{s.where}: sp_settriggerorder names {args['triggername']}, which is "
+                                        "ambiguous")
+        if not candidates:
+            raise _Missing(f"trigger {args['triggername']}")
         trigger = candidates[0]
+        self.save(trigger)
         trigger.data["firing_order"][args["stmttype"].upper()] = (args["order"].casefold(), s.where)
         trigger.touched(s)
 
@@ -973,10 +1134,11 @@ class _Replay:
         key = self.key(identity, database)
         if replace and key in self.objects:
             obj = self.objects[key]
+            self.save(obj)
             obj.where.append(s.where)
             obj.kind = kind
         elif replace:
-            raise FolderExtractionError(f"{s.where}: {s.kind} of {identity}, which no CREATE in the folders makes")
+            raise _Missing(identity)
         else:
             obj = self.create(identity, kind, database, schema, name, s, assumed)
         obj.data.update(statement=s, code=code, source=s.source())
@@ -1006,6 +1168,8 @@ class _Replay:
         if table_target is None:
             return
         database, table_schema, table_name, table_assumed = table_target
+        if self.key(f"{database}.{table_schema}.{table_name}", database) not in self.objects:
+            raise _Missing(f"{database}.{table_schema}.{table_name}")
         own = _parts(f.Name)
         schema = own[2] or table_schema     # a trigger is created in its table's schema
         obj = self.module(s, None, "clr_trigger" if clr else "trigger", "TA" if clr else "TR", replace=replace,
@@ -1133,26 +1297,8 @@ class _Replay:
     def constraint_facts(self, obj: _Object, p: Provenance) -> list[Fact]:
         d = obj.data
         by_name = lambda c: (c["name"] is None, c["name"] or "")  # noqa: E731
-        fks = []
-        for fk in sorted(d["foreign_keys"], key=by_name):
-            son, statement = fk["target"]
-            target = self.target(son, statement)
-            references, referenced = None, fk["referenced_columns"]
-            if target is not None:
-                database, schema, name, _ = target
-                references = f"{database}.{schema}.{name}"
-                found = self.objects.get(self.key(references, database))
-                if found is None:
-                    obj.assumed.append({"fact": "foreign_keys", "property": "references", "value": references,
-                                        "reason": "the referenced table is not created in the folders"})
-                else:
-                    references = found.identity
-                    if not referenced:
-                        key = found.data.get("primary_key")
-                        referenced = [c["name"] for c in key["columns"]] if key else []
-            fks.append({"name": fk["name"], "columns": fk["columns"], "references": references,
-                        "referenced_columns": referenced, "on_delete": fk["on_delete"], "on_update": fk["on_update"],
-                        "enabled": fk["enabled"], "trusted": fk["trusted"]})
+        fks = [{k: fk[k] for k in ("name", "columns", "references", "referenced_columns", "on_delete", "on_update",
+                                   "enabled", "trusted")} for fk in sorted(d["foreign_keys"], key=by_name)]
         return [Fact("skeleton", "primary_key", d["primary_key"], p),
                 Fact("skeleton", "unique_constraints", sorted(d["unique"], key=by_name), p),
                 Fact("skeleton", "check_constraints", sorted(d["checks"], key=by_name), p),

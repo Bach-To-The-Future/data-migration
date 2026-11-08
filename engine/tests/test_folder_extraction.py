@@ -167,6 +167,65 @@ def test_create_index_runs_after_the_other_creates_so_an_index_file_may_sort_fir
     assert [i["name"] for i in facts(snapshot, "Db.dbo.T")["unique_indexes"]] == ["UX", "UX2"]
 
 
+def write(folder, files: dict[str, str]):
+    for name, text in files.items():
+        (folder / name).write_text(text, encoding="utf-8")
+
+
+def test_an_index_on_a_column_an_alter_adds_waits_for_the_alter(engagement, tmp_path):
+    """The dependency replay: a statement that needs an object or column not there yet is set
+    aside and tried again after the others (spec section 3)."""
+    write(tmp_path, {"a.sql": "CREATE TABLE dbo.T (A int NOT NULL);",
+                     "b.sql": "ALTER TABLE dbo.T ADD B int NULL;",
+                     "c.sql": "CREATE UNIQUE INDEX UX_B ON dbo.T (B);"})
+
+    snapshot = engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
+
+    [index] = facts(snapshot, "Db.dbo.T")["unique_indexes"]
+    assert (index["name"], index["columns"]) == ("UX_B", [{"name": "B", "descending": False}])
+
+
+def test_a_foreign_key_waits_for_the_unique_index_it_needs(engagement, tmp_path):
+    """SQL Server refuses a foreign key whose columns no primary key, unique constraint or
+    unique index covers; the statement waits until one exists."""
+    write(tmp_path, {"a.sql": "CREATE TABLE dbo.P (Code int NOT NULL);",
+                     "b.sql": "CREATE TABLE dbo.C (Id int NOT NULL, Code int NULL CONSTRAINT FK_C_P "
+                              "REFERENCES dbo.P (Code));",
+                     "c.sql": "CREATE UNIQUE INDEX UX_P_Code ON dbo.P (Code);"})
+
+    snapshot = engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
+
+    [fk] = facts(snapshot, "Db.dbo.C")["foreign_keys"]
+    assert (fk["name"], fk["references"], fk["referenced_columns"]) == ("FK_C_P", "Db.dbo.P", ["Code"])
+    assert [c["name"] for c in facts(snapshot, "Db.dbo.C")["columns"]] == ["Id", "Code"]   # added once
+
+    (tmp_path / "c.sql").unlink()
+    with pytest.raises(engine.FolderExtractionError, match="Db/b.sql line 1.*unique index on Db.dbo.P \\(Code\\)"):
+        engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
+
+
+def test_a_statement_whose_dependency_never_appears_is_an_error_naming_it(engagement, tmp_path):
+    write(tmp_path, {"a.sql": "CREATE TABLE dbo.T (A int NOT NULL);",
+                     "b.sql": "-- the column is never added\nCREATE UNIQUE INDEX UX ON dbo.T (Missing);",
+                     "c.sql": "CREATE TABLE dbo.C (P int REFERENCES dbo.Nowhere (Id));"})
+
+    with pytest.raises(engine.FolderExtractionError) as raised:
+        engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
+
+    message = str(raised.value)
+    assert "Db/b.sql line 2" in message and "column Missing of Db.dbo.T" in message
+    assert "Db/c.sql line 1" in message and "Db.dbo.Nowhere" in message
+
+
+def test_duplicates_are_found_before_the_replay(engagement, tmp_path):
+    """A duplicate is reported as one even when one of its CREATEs would wait for a dependency."""
+    write(tmp_path, {"a.sql": "CREATE TABLE dbo.T (A int REFERENCES dbo.Nowhere (Id));",
+                     "b.sql": "CREATE TABLE dbo.T (A int);"})
+
+    with pytest.raises(engine.DuplicateCreate, match="Db/a.sql line 1.*Db/b.sql line 1"):
+        engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
+
+
 def test_a_duplicate_create_index_is_an_error_too(engagement, tmp_path):
     (tmp_path / "a.sql").write_text("CREATE TABLE dbo.T (A int NOT NULL);\nCREATE UNIQUE INDEX UX ON dbo.T (A);",
                                     encoding="utf-8")
