@@ -5,6 +5,8 @@ The owner's standing workflow rules for this repo. They override any skill's def
 1. **Commit and push to `master` as soon as made, with no branch first:** task and research output, `CONTEXT.md`, ADRs, `CLAUDE.md`, `CODING_STANDARDS.md` and `docs/agents/`. List each such change in the reply, so the owner can object after the fact.
 2. **Write an ADR whenever a decision meets the bar:** hard to reverse, surprising without context, and the result of a real trade-off. All three, without asking first.
 3. **Close an implemented ticket** once its acceptance criteria are met and its commits are pushed, with a summary comment: the commits, what was built, and anything deferred, naming the ticket that takes it. An implemented ticket left open blocks everything behind it in `tools/tickets.py`.
+4. **Design check before finishing a ticket:** check the change against the spec sections it implements, every ADR it touches, and `CODING_STANDARDS.md`. List any knock-on changes to other tickets, the spec or ADRs, and record each where it belongs. If a ticket conflicts with the spec or an ADR, stop and ask. Background history: [the map's Notes, issue #1](https://github.com/Bach-To-The-Future/data-migration/issues/1).
+5. **Docker:** Docker Desktop may be used for local tests on the owner's machine. Change Docker Desktop or WSL settings, or install or uninstall a container runtime, only when asked. The product itself never depends on Docker Desktop ([ADR 0017](docs/adr/0017-the-products-tools-are-free-and-open-source-where-possible.md)); CI proves it runs on Docker Engine.
 
 The no-shortcuts rules for code (nothing degrades silently, "converted" means Reconciled and passed final validation, free and open-source tools) are in `CODING_STANDARDS.md`.
 
