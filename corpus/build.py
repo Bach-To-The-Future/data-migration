@@ -9,12 +9,15 @@ the sandbox tools container (see sandbox/docker-compose.yml).
 """
 import argparse
 import hashlib
+import http.client
 import json
 import pathlib
 import secrets
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -66,6 +69,29 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
+# Waits before each retry of a failed download: a server error or a dropped connection
+# from GitHub's release storage is usually brief. A client error (404, 403) is not retried.
+DOWNLOAD_RETRY_WAITS = (15, 60, 180, 420)
+
+
+def download(url, target):
+    """Download url to target, retrying server errors and dropped connections with backoff."""
+    partial = target.with_suffix(".part")
+    for attempt, wait in enumerate((*DOWNLOAD_RETRY_WAITS, None), start=1):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, partial.open("wb") as out:
+                shutil.copyfileobj(response, out, length=1 << 20)
+            partial.replace(target)
+            return
+        except (OSError, http.client.HTTPException) as error:
+            partial.unlink(missing_ok=True)
+            retryable = not isinstance(error, urllib.error.HTTPError) or error.code >= 500 or error.code == 429
+            if wait is None or not retryable:
+                raise
+            print(f"Download attempt {attempt} failed ({error}); retrying in {wait} s", flush=True)
+            time.sleep(wait)
+
+
 def fetch_backups():
     """Download the public sample backups once and check them against backups.json."""
     spec = json.loads(BACKUPS.read_text(encoding="utf-8"))
@@ -75,10 +101,7 @@ def fetch_backups():
         target = CACHE / backup["file"]
         if not target.exists():
             print(f"Downloading {backup['file']}", flush=True)
-            partial = target.with_suffix(".part")
-            with urllib.request.urlopen(backup["url"]) as response, partial.open("wb") as out:
-                shutil.copyfileobj(response, out, length=1 << 20)
-            partial.replace(target)
+            download(backup["url"], target)
         actual = sha256_of(target)
         if backup["sha256"] is None:
             backup["sha256"] = actual

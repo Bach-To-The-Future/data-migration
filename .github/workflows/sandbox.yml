@@ -45,12 +45,30 @@ jobs:
           docker compose version
           python3 --version
 
-      # From scratch: a fresh runner has no data volumes, no sandbox/.env and no cached
-      # backups, so this generates secrets, downloads and checks the backups, builds the
+      # The sample backups (about 330 MB) are downloaded only when backups.json changes;
+      # build.py checks each one against its sha256 on every use, cached or not.
+      - name: Restore the sample backups
+        id: backups
+        uses: actions/cache/restore@v4
+        with:
+          path: corpus/public/.cache
+          key: sample-backups-${{ hashFiles('corpus/public/backups.json') }}
+
+      # From scratch otherwise: a fresh runner has no data volumes and no sandbox/.env, so
+      # this generates secrets, downloads any backup not cached and checks them all, builds the
       # toolbox image (with the .NET libraries and pyright), restores and exports the public
       # corpus, builds the sample, runs it, and rewrites the manifest.
       - name: Build the sandbox and both corpora
+        id: build
         run: python3 corpus/build.py
+
+      # Saved as soon as the build has downloaded and checked both, even if a later step fails.
+      - name: Save the sample backups
+        if: always() && steps.backups.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: corpus/public/.cache
+          key: ${{ steps.backups.outputs.cache-primary-key }}
 
       - name: The manifest is byte-identical
         run: |
