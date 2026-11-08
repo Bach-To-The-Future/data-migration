@@ -16,16 +16,18 @@ from typing import Any, Callable, Iterable
 
 PROVENANCE_KINDS = ("server", "file", "assumed")
 SKELETON = "skeleton"
-# A fact naming cells the snapshot's identity leaves out: {"fact": name, "columns": [...]},
-# for a fact whose value is a list of rows. They are columns the source changes by itself,
-# with nobody acting, so a re-extraction differing only there is the same snapshot (ADR 0023,
-# amended). The cells are kept and checked on read like any other; nothing may read them.
+# A fact naming what the snapshot's identity leaves out (ADR 0023, amended), as a list of
+# entries: {"fact": name, "columns": [...]} for cells of a fact whose value is a list of rows,
+# columns the source changes by itself; or {"fact": name} for a whole fact that is volatile
+# and informational, such as a table's row count. They are kept and checked on read like
+# anything else. No conversion, test or validation may read them; the report alone reads the
+# informational facts, through report_value.
 IGNORED_FOR_IDENTITY = "ignored_for_identity"
 
 
 class IgnoredCellsRead(Exception):
-    """A read of a fact holding cells the snapshot's identity ignores. What depends on them
-    would change while the snapshot does not, so no reader may use them."""
+    """A read of a fact the snapshot's identity leaves out, or that holds cells it leaves out.
+    What depends on them would change while the snapshot and cache keys do not."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,25 +67,29 @@ class CatalogObject:
 
     @property
     def identity_hash(self) -> str:
-        """The hash the snapshot's identifier is made from: the content, less the cells named by
-        an IGNORED_FOR_IDENTITY fact."""
+        """The hash the snapshot's identifier is made from: the content, less what an
+        IGNORED_FOR_IDENTITY fact names."""
         if not self.has_fact(IGNORED_FOR_IDENTITY):
             return self.content_hash
-        ignored = self.fact(IGNORED_FOR_IDENTITY).value
-        columns = set(ignored["columns"])
-        facts = tuple(dataclasses.replace(f, value=[{k: v for k, v in row.items() if k not in columns}
-                                                    for row in f.value])
-                      if f.name == ignored["fact"] and f.area == SKELETON else f for f in self.facts)
-        return self._hash(facts)
+        facts = []
+        for f in self.facts:
+            entry = next((e for e in self.fact(IGNORED_FOR_IDENTITY).value if e["fact"] == f.name), None)
+            if entry is None or f.area != SKELETON:
+                facts.append(f)
+            elif "columns" in entry:
+                columns = set(entry["columns"])
+                facts.append(dataclasses.replace(f, value=[{k: v for k, v in row.items() if k not in columns}
+                                                           for row in f.value]))
+        return self._hash(tuple(facts))
 
     def _hash(self, facts) -> str:
         body = [self.identity, self.kind,
                 sorted([f.area, f.name, f.value, f.provenance.kind, f.provenance.detail] for f in facts)]
         return hashlib.sha256(_canonical(body).encode("utf-8")).hexdigest()
 
-    def ignored_fact(self) -> str | None:
-        """The name of the fact holding cells the identity ignores, if any."""
-        return self.fact(IGNORED_FOR_IDENTITY).value["fact"] if self.has_fact(IGNORED_FOR_IDENTITY) else None
+    def ignored_facts(self) -> set[str]:
+        """The facts the identity leaves out, or leaves cells of out."""
+        return {e["fact"] for e in self.fact(IGNORED_FOR_IDENTITY).value} if self.has_fact(IGNORED_FOR_IDENTITY) else set()
 
     def has_fact(self, name: str, area: str = SKELETON) -> bool:
         return any(f.name == name and f.area == area for f in self.facts)
@@ -93,6 +99,17 @@ class CatalogObject:
             if f.name == name and f.area == area:
                 return f
         raise KeyError(f"{self.identity} has no {area} fact {name!r}")
+
+
+def report_value(obj: CatalogObject, name: str) -> Any:
+    """A volatile informational fact, such as a table's row count, for the report alone (for
+    example its warning on row-by-row code over a large table). It is outside the snapshot's
+    identity and outside every cache key, so nothing else may read it; a structure test holds
+    callers to the report."""
+    if not any(e["fact"] == name and "columns" not in e
+               for e in (obj.fact(IGNORED_FOR_IDENTITY).value if obj.has_fact(IGNORED_FOR_IDENTITY) else [])):
+        raise ValueError(f"{obj.identity}: {name!r} is not an informational fact; read it through the query interface")
+    return obj.fact(name).value
 
 
 def snapshot_id_for(objects: Iterable[CatalogObject]) -> str:
@@ -196,9 +213,9 @@ class CatalogReader:
 
     def fact(self, identity: str, name: str, area: str = SKELETON) -> Fact:
         obj = self.snapshot.get(identity)
-        if area == SKELETON and name == obj.ignored_fact():
-            raise IgnoredCellsRead(f"{identity}: the {name!r} fact holds cells the snapshot's identity ignores; "
-                                   "read a fact built from it instead")
+        if area == SKELETON and name in obj.ignored_facts():
+            raise IgnoredCellsRead(f"{identity}: the {name!r} fact is left out of the snapshot's identity, or "
+                                   "holds cells that are; no conversion, test or validation may read it")
         found = obj.fact(name, area)
         self._record(identity, area, name)
         return found

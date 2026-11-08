@@ -43,17 +43,21 @@ DATABASE_VIEWS = ("sys.databases", "sys.schemas", "sys.objects", "sys.tables", "
                   "sys.synonyms", "sys.sequences", "sys.table_types", "sys.partitions")
 DEPENDENCY_VIEW = "sys.sql_expression_dependencies"   # read only where SELECT on it is granted (optional)
 MSDB_VIEWS = tuple(f"dbo.{t}" for t in MSDB_TABLES)
-# Columns SQL Server changes by itself, with nobody acting: log truncation state, SQL Agent's
-# next run and its run history. The snapshot's identity leaves them out, and nothing may read
-# them (ADR 0023, amended). This list changes only by a recorded decision; a test holds it to
-# the ADR. Counters that move with the client's data (identity last_value, sequence
-# current_value, partition rows) are not here: they move only when something changed.
+# What the snapshot's identity leaves out (ADR 0023, amended), and nothing but the report may
+# read. Raw-capture columns that change with nobody acting on the client's objects: log
+# truncation state, SQL Agent's next run and run history, and partition row counts (which
+# Query Store's internal tables move by themselves, and from which a table's row count is
+# built). And volatile informational facts: a table's row count. These lists change only by
+# a recorded decision; a test holds them to the ADR. Identity last_value and sequence
+# current_value are not here: they stay in the identity (ADR 0024).
 IGNORED_FOR_IDENTITY = {
     "sys.databases": ("log_reuse_wait", "log_reuse_wait_desc"),
     "dbo.sysjobschedules": ("next_run_date", "next_run_time"),
     "dbo.sysjobsteps": ("last_run_outcome", "last_run_duration", "last_run_retries", "last_run_date",
                         "last_run_time"),
+    "sys.partitions": ("rows",),
 }
+INFORMATIONAL_FACTS = {"table": ("row_count",)}
 # Rows of these views that describe something outside the database being read are left out.
 ROW_FILTERS = {"sys.databases": " WHERE database_id = DB_ID()"}
 SERVER_PROPERTIES = ("ProductVersion", "ProductMajorVersion", "ProductLevel", "ProductUpdateLevel", "ProductBuild",
@@ -257,8 +261,8 @@ def _raw_object(scope: str, cap: Capture) -> CatalogObject:
                                                                                             "the extractor's patterns"))]
     ignored = [c for c in IGNORED_FOR_IDENTITY.get(cap.view, ()) if c in cap.columns]
     if ignored:
-        facts.append(Fact("skeleton", IGNORED_FACT, {"fact": "rows", "columns": ignored},
-                          Provenance("server", "columns SQL Server changes by itself (ADR 0023, amended)")))
+        facts.append(Fact("skeleton", IGNORED_FACT, [{"fact": "rows", "columns": ignored}],
+                          Provenance("server", "columns that change with nobody acting (ADR 0023, amended)")))
     return CatalogObject(raw_identity(scope, cap.view), "raw_capture", tuple(facts))
 
 
@@ -528,6 +532,9 @@ class _Database:
                               Provenance("server", "sys.columns")))
             count = sum(int(p["rows"]) for p in rows["sys.partitions"] if p["object_id"] == oid and p["index_id"] in (0, 1))
             facts.append(Fact("skeleton", "row_count", count, Provenance("server", "sys.partitions (metadata, no scan)")))
+            facts.append(Fact("skeleton", IGNORED_FACT, [{"fact": f} for f in INFORMATIONAL_FACTS["table"]],
+                              Provenance("server", "volatile informational facts, for the report alone "
+                                                   "(ADR 0023, amended)")))
             facts += self.constraint_facts(oid)
             facts.append(self.secrets_in_expressions(columns, oid))
         else:

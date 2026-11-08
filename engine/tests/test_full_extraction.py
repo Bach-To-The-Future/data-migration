@@ -311,43 +311,64 @@ def test_changing_one_table_changes_only_that_tables_hash_and_the_raw_capture(en
 ADR_0023 = pathlib.Path(__file__).parents[2] / "docs" / "adr" / "0023-a-snapshots-identifier-is-the-hash-of-its-content.md"
 
 
-def test_the_ignored_columns_are_exactly_those_the_recorded_decision_lists():
-    """The list changes only by a recorded decision: ADR 0023's amendment holds it."""
-    rows = re.findall(r"^\| `([^`]+)` \| (.+) \|$", ADR_0023.read_text(encoding="utf-8"), re.M)
-    recorded = {view: tuple(re.findall(r"`([^`]+)`", columns)) for view, columns in rows}
-    assert recorded == extractor.IGNORED_FOR_IDENTITY
+def _adr_table(header: str) -> dict[str, tuple[str, ...]]:
+    """The rows of the ADR 0023 amendment's table whose header row starts with `header`."""
+    text = ADR_0023.read_text(encoding="utf-8")
+    table = text[text.index(f"| {header} |"):].split("\n\n")[0]
+    rows = re.findall(r"^\| `([^`]+)` \| (.+) \|$", table, re.M)
+    return {key: tuple(re.findall(r"`([^`]+)`", cells)) for key, cells in rows}
 
 
-def test_no_fact_anything_reads_comes_from_an_ignored_column(scratch_database):
-    """Every fact built from the raw capture is unchanged when every ignored cell changes;
-    only the raw capture itself differs. The control changes one cell that is not ignored."""
+def test_what_the_identity_leaves_out_is_exactly_what_the_recorded_decision_lists():
+    """These lists change only by a recorded decision: ADR 0023's amendment holds them."""
+    assert _adr_table("View") == extractor.IGNORED_FOR_IDENTITY
+    assert _adr_table("Object kind") == extractor.INFORMATIONAL_FACTS
+
+
+def test_nothing_read_by_conversion_tests_or_validation_comes_from_what_the_identity_leaves_out(scratch_database):
+    """Every fact outside the ignored list is unchanged when every ignored raw cell changes,
+    and so is the snapshot; the informational row counts built from them do change. The
+    control changes one cell that is not ignored."""
     source = sandbox_server(databases=(scratch_database, "RetailSample"))
     reading = extractor.read(extractor.ServerAddress(source.host, source.port, source.login, source.password),
                              [scratch_database, "RetailSample"])
 
     def perturbed(change):
         copy = copy_module.deepcopy(reading)
-        captures = {**copy.server, **copy.msdb, **{f"{d}/{v}": c for d, caps in copy.database_captures.items()
-                                                   for v, c in caps.items()}}
+        captures = [*copy.server.values(), *copy.msdb.values(),
+                    *(c for caps in copy.database_captures.values() for c in caps.values())]
         touched = 0
-        for cap in captures.values():
+        for cap in captures:
             for row in cap.rows:
                 for column in change.get(cap.view, ()):
-                    row[column] = f"changed {row[column]!r}"
+                    row[column] = 10 ** 9 + touched if isinstance(row[column], int) else f"changed {row[column]!r}"
                     touched += 1
         return extractor.build(copy), touched
+
+    def readable(snapshot):
+        """Every fact of every object, less what its identity leaves out."""
+        return {o.identity: {(f.area, f.name): f.value for f in o.facts if f.name not in o.ignored_facts()}
+                for o in snapshot.objects}
 
     base = extractor.build(reading)
     moved, touched = perturbed(extractor.IGNORED_FOR_IDENTITY)
     assert touched > 0
     assert moved.id == base.id
-    built = [(o.identity, o.content_hash) for o in base.objects if o.kind != "raw_capture"]
-    assert built == [(o.identity, o.content_hash) for o in moved.objects if o.kind != "raw_capture"]
-    assert any(o.content_hash != moved.get(o.identity).content_hash for o in base.objects if o.kind == "raw_capture")
+    assert readable(moved) == readable(base)
+    assert facts(moved, "RetailSample.sales.Order")["row_count"] != facts(base, "RetailSample.sales.Order")["row_count"]
+    assert "row_count" in moved.get("RetailSample.sales.Order").ignored_facts()
 
     control, _ = perturbed({"sys.databases": ("is_recursive_triggers_on",)})
     assert control.id != base.id
-    assert facts(control, "RetailSample")["recursive_triggers"] != facts(base, "RetailSample")["recursive_triggers"]
+    assert readable(control) != readable(base)
+
+
+def test_only_the_report_reads_informational_facts():
+    """catalog.report_value is the one way to read a fact the identity leaves out."""
+    package = pathlib.Path(extractor.__file__).parents[2]
+    callers = {p.relative_to(package).as_posix() for p in package.rglob("*.py")
+               if "report_value(" in p.read_text(encoding="utf-8")}
+    assert callers <= {"core/catalog.py", "core/report.py"}
 
 
 def test_re_extracting_an_unchanged_server_invalidates_nothing(engagement, scratch):

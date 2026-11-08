@@ -17,7 +17,7 @@ Made while building [full live extraction](https://github.com/Bach-To-The-Future
 
 - A fact's provenance names the views it was built from, never a query.
 - A new fact means either reading a listed view differently or adding a view to the list. Adding one is a change to what the extractor reads, and Annex F's grant set must still cover it.
-- The raw capture holds columns SQL Server changes by itself, such as `sys.databases.log_reuse_wait` and job run history in `msdb`. The snapshot's identifier leaves them out, and nothing may read them ([ADR 0023](0023-a-snapshots-identifier-is-the-hash-of-its-content.md), amended). Counters that move with the client's data, such as an identity's `last_value` and a sequence's `current_value`, give a new snapshot identifier when they change, but invalidate no conversion. Each read now hashes the one fact it read, not the whole object, so a table's row count moving with its data does not invalidate a view that read only its columns.
+- The raw capture holds columns that change with nobody acting on the client's objects, such as `sys.databases.log_reuse_wait`, job run history in `msdb` and partition row counts. The snapshot's identifier leaves them out, and with them a table's row count, which only the report reads ([ADR 0023](0023-a-snapshots-identifier-is-the-hash-of-its-content.md), amended). An identity's `last_value` and a sequence's `current_value` give a new snapshot identifier when they change, but invalidate no conversion, because nothing reads them. Each read hashes the one fact it read, not the whole object.
 
 ## Decided with it by the owner
 

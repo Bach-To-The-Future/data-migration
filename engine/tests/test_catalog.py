@@ -3,7 +3,7 @@ is part of the content, so extractions that differ only in provenance never shar
 import pytest
 
 from migrt.core.catalog import (IGNORED_FOR_IDENTITY, CatalogObject, CatalogReader, Fact,
-                               IgnoredCellsRead, Provenance, Resolution, Snapshot)
+                               IgnoredCellsRead, Provenance, Resolution, Snapshot, report_value)
 
 COLUMNS = [{"name": "OrderId", "system_type": "int", "nullable": False}]
 
@@ -37,7 +37,7 @@ def raw(log_wait, compatibility=160):
     return Snapshot.of("sqlserver", [CatalogObject("raw:db:Shop/sys.databases", "raw_capture", (
         Fact("skeleton", "rows", [{"name": "Shop", "log_reuse_wait": log_wait, "compatibility_level": compatibility}],
              read),
-        Fact("skeleton", IGNORED_FOR_IDENTITY, {"fact": "rows", "columns": ["log_reuse_wait"]}, read),
+        Fact("skeleton", IGNORED_FOR_IDENTITY, [{"fact": "rows", "columns": ["log_reuse_wait"]}], read),
     ))])
 
 
@@ -54,3 +54,23 @@ def test_no_reader_can_read_a_fact_holding_ignored_cells():
     with pytest.raises(IgnoredCellsRead):
         reader.value("raw:db:Shop/sys.databases", "rows")
     assert reader.reads == []
+
+
+def table(rows):
+    read = Provenance("server", "sys.partitions")
+    return Snapshot.of("sqlserver", [CatalogObject("Shop.dbo.Order", "table", (
+        Fact("skeleton", "columns", [{"name": "Id"}], read),
+        Fact("skeleton", "row_count", rows, read),
+        Fact("skeleton", IGNORED_FOR_IDENTITY, [{"fact": "row_count"}], read),
+    ))])
+
+
+def test_a_row_count_is_informational_outside_the_identity_and_read_only_by_the_report():
+    assert table(10).id == table(99).id
+    reader = CatalogReader(table(10), lambda snapshot, parts, context: Resolution(None))
+    with pytest.raises(IgnoredCellsRead):
+        reader.value("Shop.dbo.Order", "row_count")
+    assert reader.value("Shop.dbo.Order", "columns") == [{"name": "Id"}]
+    assert report_value(table(10).objects[0], "row_count") == 10
+    with pytest.raises(ValueError):
+        report_value(table(10).objects[0], "columns")

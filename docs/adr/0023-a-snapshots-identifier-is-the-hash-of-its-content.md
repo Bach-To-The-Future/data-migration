@@ -20,18 +20,24 @@ Made while building [the engine skeleton](https://github.com/Bach-To-The-Future/
 - Any change to any extracted fact, including its provenance, gives a new snapshot identifier. Cache keys are unaffected: they hash the facts a conversion read, never the identifier (spec section 3).
 - The hash covers the server's name, so the same databases on a rebuilt container with a new host name are a new snapshot.
 
-## Amended 8 November 2026: columns the server changes by itself
+## Amended 8 November 2026: what the server changes by itself, and row counts
 
-The raw capture ([ADR 0024](0024-the-extractor-reads-metadata-views-only-whole.md)) holds columns SQL Server changes with nobody acting. On CI's freshly started server, one of them moved between two preview runs, which gave a new snapshot identifier and so report data that was not byte-identical outside its run-specific section. Decided by the owner on [issue #39](https://github.com/Bach-To-The-Future/data-migration/issues/39): the identifier is derived from each object's content less the cells listed below.
+The raw capture ([ADR 0024](0024-the-extractor-reads-metadata-views-only-whole.md)) holds columns that change with nobody acting on the client's objects. On CI's freshly started server, some moved between two preview runs: Query Store, on by default in SQL Server 2022, records the extractor's own queries in internal tables, whose row counts are in `sys.partitions`. That gave a new snapshot identifier, and so report data that was not byte-identical outside its run-specific section. Decided by the owner on [issue #39](https://github.com/Bach-To-The-Future/data-migration/issues/39): the identifier is derived from each object's content less the cells and facts listed below.
 
-- Every cell is still kept, and each object's full content hash is still checked when it is read back.
-- A re-extraction that differs only in these cells is the same snapshot, so the stored values are kept. Its `extraction` row lists the objects that differed (`differing_objects`), so nothing is lost silently.
-- Nothing may read these cells. The core's query interface refuses the fact that holds them, and a test checks that no fact built from the raw capture changes when they do. The final validator, which shares no code with the core (ADR 0013), checks the same in its own tests.
-- Counters that move with the client's data are not listed: an identity's `last_value`, a sequence's `current_value` and partition row counts move only when something changed.
-- The list changes only by a recorded decision, here. `engine/tests/test_full_extraction.py` holds the extractor's list to this table.
+- Everything is still kept, and each object's full content hash is still checked when it is read back.
+- A re-extraction that differs only there is the same snapshot, so the stored values are kept. Its `extraction` row lists the objects that differed (`differing_objects`), so nothing is lost silently.
+- A table's row count is a volatile informational fact. It is kept in the snapshot, left out of the identity, and read only by the report, for example for its warning on row-by-row code over a large table. Conversion, the testing module and the final validator never read it, so it never affects a cache key. The raw `sys.partitions.rows` it is built from is left out with it.
+- Nothing but the report may read anything listed here. The core's query interface refuses it, and only report code may call `catalog.report_value`, which a structure test checks. A test rebuilds the catalog with all of it changed and requires every other fact to be identical. The final validator, which shares no code with the core (ADR 0013), checks the same in its own tests.
+- An identity's `last_value` and a sequence's `current_value` are not listed. They stay in the identity ([ADR 0024](0024-the-extractor-reads-metadata-views-only-whole.md)).
+- These lists change only by a recorded decision, here. `engine/tests/test_full_extraction.py` holds the extractor's lists to these tables.
 
-| View | Columns the identifier leaves out |
+| View | Raw-capture columns the identifier leaves out |
 |---|---|
 | `sys.databases` | `log_reuse_wait`, `log_reuse_wait_desc` |
 | `dbo.sysjobschedules` | `next_run_date`, `next_run_time` |
 | `dbo.sysjobsteps` | `last_run_outcome`, `last_run_duration`, `last_run_retries`, `last_run_date`, `last_run_time` |
+| `sys.partitions` | `rows` |
+
+| Object kind | Informational facts the identifier leaves out, read only by the report |
+|---|---|
+| `table` | `row_count` |
