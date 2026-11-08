@@ -2,10 +2,11 @@
 from here, with structured results. Front ends, such as the command line, hold no
 conversion logic and call only this module.
 
-First cut: a preview run (reconciliation off) of views from one SQL Server, through every
-layer: the extractor's self-check and full extraction, an immutable snapshot in the
-engagement's control database with the name adjustments it extends, lowering, the checker,
-generation, layer-1 checks and the report data.
+First cut: a preview run (reconciliation off) of views, through every layer: extraction
+from one SQL Server (its self-check first), folders of files, or both; an immutable
+snapshot in the engagement's control database with the name adjustments it extends;
+lowering, the checker, generation, layer-1 checks and the report data, which lists every
+SSIS package and SQL Agent job as manual work.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ import hashlib
 import json
 import pathlib
 import uuid
+from typing import Sequence
 
 from .core import checker, control_db, report, secrets
 from .core.differences import Catalogue
@@ -22,13 +24,18 @@ from .core.catalog import CatalogReader, Snapshot
 from .core.ir import FORMAT_VERSION, Artefact
 from .core import vocabulary
 from .sources.sqlserver import differences as source_differences, extractor, lowering, names, parser
-from .sources.sqlserver.extractor import ExtractorPermissionError, TimeZoneRequired, UnsupportedServer
+from .sources.sqlserver import folders as folder_source
+from .sources.sqlserver.extractor import (ExtractorPermissionError, SettingsRequired, TimeZoneRequired,
+                                          UnsupportedServer)
+from .sources.sqlserver.folders import DuplicateCreate, FolderExtractionError
 from .targets.pyspark import differences as target_differences, generator, layer1
 from .targets.pyspark import names as target_names
 
-__all__ = ["Engagement", "SqlServerSource", "ArtefactResult", "RunResult", "ExtractorPermissionError",
-           "UnsupportedServer", "TimeZoneRequired", "extract", "read_snapshot", "name_adjustments",
-           "extraction_findings", "preview_run", "delete_engagement_data", "TOOL_VERSION"]
+__all__ = ["Engagement", "SqlServerSource", "Folder", "FolderSettings", "ArtefactResult", "RunResult",
+           "ExtractorPermissionError", "UnsupportedServer", "TimeZoneRequired", "SettingsRequired",
+           "FolderExtractionError", "DuplicateCreate", "EXTRACTION_ERRORS", "extract", "read_snapshot",
+           "name_adjustments", "extraction_findings", "recognised_artefacts", "preview_run",
+           "delete_engagement_data", "TOOL_VERSION"]
 
 TOOL_VERSION = "0.1.0"
 TARGET = {"platform": "PySpark on Databricks", "runtime": "17.3 LTS"}
@@ -63,6 +70,30 @@ class SqlServerSource:
 
 
 @dataclasses.dataclass(frozen=True)
+class Folder:
+    """A folder of exported files (query batches, SSIS packages, job scripts, data
+    definition), and the database its files belong to."""
+    path: pathlib.Path
+    database: str
+
+
+@dataclasses.dataclass(frozen=True)
+class FolderSettings:
+    """What a server would have supplied, for databases extracted from folders alone: each
+    database's default collation and the time zone (both required), and optionally the SQL
+    Server release and each database's compatibility level."""
+    collations: dict[str, str] = dataclasses.field(default_factory=dict)
+    time_zone: str | None = None
+    version: str | None = None
+    compatibility_levels: dict[str, int] = dataclasses.field(default_factory=dict)
+
+
+# Every error an extraction raises before storing anything, for front ends to report.
+EXTRACTION_ERRORS = (ExtractorPermissionError, UnsupportedServer, TimeZoneRequired, SettingsRequired,
+                     FolderExtractionError)
+
+
+@dataclasses.dataclass(frozen=True)
 class ArtefactResult:
     identity: str
     status: str
@@ -93,18 +124,36 @@ def _control(engagement: Engagement) -> str:
     return control_db.ensure_database(engagement.control_server_dsn, engagement.name)
 
 
-def extract(engagement: Engagement, source: SqlServerSource) -> Snapshot:
-    """Check the server and the extractor's permissions, extract, store the snapshot
-    immutably, and extend the name adjustments for any name not recorded yet. Raises
-    UnsupportedServer or ExtractorPermissionError, before reading anything, for a server
-    v1 does not extract from or a grant that is missing or more than read-only."""
-    address = extractor.ServerAddress(source.host, source.port, source.login, source.password)
-    snapshot = extractor.extract(address, source.databases, time_zone=source.time_zone)
+def extract(engagement: Engagement, source: SqlServerSource | None, folders: Sequence[Folder] = (),
+            settings: FolderSettings | None = None) -> Snapshot:
+    """Extract from a live server, folders of files, or both; store the snapshot immutably,
+    and extend the name adjustments for any name not recorded yet. Raises UnsupportedServer
+    or ExtractorPermissionError, before reading anything, for a server v1 does not extract
+    from or a grant that is missing or more than read-only; SettingsRequired without a
+    server when a setting is missing; FolderExtractionError (DuplicateCreate among them)
+    for folders that cannot be read as given."""
+    settings = settings or FolderSettings()
+    inputs = tuple(_folder_inputs(folders))
+    if source is not None and settings != FolderSettings():
+        raise FolderExtractionError("folder settings apply only without a server, which supplies them itself: "
+                                    "remove them, or extract without the server")
+    if source is not None:
+        address = extractor.ServerAddress(source.host, source.port, source.login, source.password)
+        snapshot = extractor.extract(address, source.databases, time_zone=source.time_zone, folder_inputs=inputs)
+    else:
+        options = extractor.Settings(settings.collations, settings.version, settings.compatibility_levels)
+        snapshot = extractor.extract(None, [], time_zone=settings.time_zone, folder_inputs=inputs, settings=options)
+    described = [source.describe()] if source is not None else []
+    described += [f"folder {f.path} for {f.database}" for f in folders]
     dsn = _control(engagement)
-    control_db.store_snapshot(dsn, snapshot, source.describe())
+    control_db.store_snapshot(dsn, snapshot, "; ".join(described))
     control_db.extend_name_adjustments(dsn, snapshot.id, target_names.scopes(list(_name_parts(snapshot).values())),
                                        target_names.RULES)
     return snapshot
+
+
+def _folder_inputs(given: Sequence[Folder]) -> list[folder_source.FolderInput]:
+    return [folder_source.FolderInput(pathlib.Path(f.path), f.database) for f in given]
 
 
 def _name_parts(snapshot: Snapshot) -> dict[str, tuple[str, str, str, str]]:
@@ -126,6 +175,12 @@ def extraction_findings(snapshot: Snapshot) -> dict:
     return found
 
 
+def recognised_artefacts(snapshot: Snapshot) -> list[dict]:
+    """Every SSIS package and SQL Agent job, as the report lists it: manual work, with its
+    inventory (marked secrets masked), references and entry points."""
+    return [report.recognised_artefact(**r) for r in extractor.recognised(snapshot)]
+
+
 def read_snapshot(engagement: Engagement, snapshot_id: str) -> Snapshot:
     return control_db.load_snapshot(_control(engagement), snapshot_id)
 
@@ -143,15 +198,16 @@ def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list[str],
-                out_dir: pathlib.Path) -> RunResult:
-    """Convert the named artefacts (database.schema.name) with reconciliation off.
-    Writes converted/<Database>/<schema>/<kind>/<Name>.py and report/report-data.json
-    under out_dir. Every artefact is "Not reconciled": nothing in a preview is converted."""
+def preview_run(engagement: Engagement, source: SqlServerSource | None, artefacts: list[str],
+                out_dir: pathlib.Path, folders: Sequence[Folder] = (), settings: FolderSettings | None = None) -> RunResult:
+    """Convert the named artefacts (database.schema.name) with reconciliation off, extracting
+    from a live server, folders of files, or both. Writes
+    converted/<Database>/<schema>/<kind>/<Name>.py and report/report-data.json under out_dir.
+    Every artefact is "Not reconciled": nothing in a preview is converted."""
     started = _now()
     run_id = f"run-{started:%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"
     dsn = _control(engagement)
-    snapshot = extract(engagement, source)
+    snapshot = extract(engagement, source, folders, settings)
     snapshot = control_db.load_snapshot(dsn, snapshot.id)   # convert from what was stored
     out_dir = pathlib.Path(out_dir)
     differences = _differences()
@@ -184,16 +240,19 @@ def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list
                      "text": f"Dependency cross-check skipped: {check['reason']}."}
                     for name, check in sorted(findings["dependency_cross_check"]["databases"].items())
                     if check["status"] == "skipped"]
+    degradations += _extraction_degradations(findings)
     finished = _now()
     data = report.preview_report(
         engagement=engagement.name,
         snapshot=snapshot.id,
         source={"platform": "SQL Server", "version": server.fact("version").value,
-                "edition": server.fact("edition").value, "collation": server.fact("collation").value},
+                "edition": server.fact("edition").value, "collation": server.fact("collation").value,
+                "assumed": sorted(f.name for f in server.facts if f.provenance.kind == "assumed")},
         target=TARGET,
         versions={"tool": TOOL_VERSION, "ir_format": FORMAT_VERSION, "vocabulary": vocabulary.version(),
                   **differences.versions(), "report_data": report.SCHEMA_VERSION},
         artefacts=report_items,
+        recognised=recognised_artefacts(snapshot),
         extraction=findings,
         degradations=degradations + [{"kind": "skipped check", "where": "every artefact",
                        "text": "Preview run: layers 2 to 6 of the testing module and final validation did not run."},
@@ -210,6 +269,40 @@ def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list
     control_db.record_run(dsn, {"id": run_id, "snapshot_id": snapshot.id, "preview": True, "started_at": started,
                                 "finished_at": finished, "report_data_sha256": _sha256(text)}, run_rows)
     return RunResult(run_id, snapshot.id, True, results, report_path)
+
+
+def _extraction_degradations(findings: dict) -> list[dict]:
+    """What the extraction could not do, or assumed, as degradations the report shows."""
+    out = []
+    skipped = findings["dependency_cross_check"]["skipped"]
+    if skipped:
+        out.append({"kind": "skipped check", "where": f"{len(skipped)} objects parsed from files",
+                    "text": "Dependency cross-check skipped: SQL Server's dependency metadata covers only objects read "
+                            "from a server."})
+    completeness = findings["completeness"]
+    if completeness["facts"]["assumed"] or completeness["assumed_values"]:
+        out.append({"kind": "assumption", "where": "the catalog",
+                    "text": f"{completeness['facts']['assumed']} facts, and {completeness['assumed_values']} values "
+                            "inside parsed facts, were assumed from settings or SQL Server's documented defaults, not "
+                            "read from a server."})
+    folder = findings.get("folders")
+    if folder:
+        for role in (folder_source.NOT_READ, folder_source.DID_NOT_PARSE):
+            files = [f["file"] for f in folder["files"] if f["role"] == role]
+            if files:
+                out.append({"kind": "reduced coverage", "where": ", ".join(files),
+                            "text": f"Files {role}: nothing in them is in the catalog."})
+        if folder["superseded"]:
+            out.append({"kind": "reduced coverage", "where": f"{len(folder['superseded'])} statements and files",
+                        "text": "Superseded by the live server, the only source of its databases' objects (ADR "
+                                "0025): not replayed, each listed with its reason."})
+        if folder["not_replayed"]:
+            out.append({"kind": "reduced coverage", "where": f"{len(folder['not_replayed'])} statements",
+                        "text": "Data-definition statements not replayed, each listed with its reason."})
+        if folder["lost_without_a_server"]:
+            out.append({"kind": "reduced coverage", "where": "every database read from folders alone",
+                        "text": "Lost without a server: " + "; ".join(folder["lost_without_a_server"]) + "."})
+    return out
 
 
 def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue,

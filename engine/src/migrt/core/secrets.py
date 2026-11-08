@@ -57,6 +57,29 @@ def placeholder(setting: str) -> str:
     return f"[secret: setting {setting}]"
 
 
+def mask_cell(text: str | None, marked: list[dict], *, prefix: str, fact: str, row: int | None = None,
+              column: str | None = None) -> tuple[str | None, list[str]]:
+    """Mask the spans of one cell of an object's fact, such as one job step's command.
+    `marked` is the object's whole `secrets` fact, in its stored order, which numbers the
+    settings, so a secret has the same setting wherever its cell is shown."""
+    if text is None:
+        return None, []
+    cell = sorted(((index, SecretSpan.from_json(entry)) for index, entry in enumerate(marked)
+                   if entry.get("fact") == fact and entry.get("row") == row and entry.get("column") == column),
+                  key=lambda pair: pair[1].start)
+    pieces, settings, at = [], [], 0
+    for index, span in cell:
+        start, end = max(span.start, at), min(span.end, len(text))
+        if start >= end:
+            continue
+        name = setting_name(prefix, index)
+        pieces += [text[at:start], placeholder(name)]
+        settings.append(name)
+        at = end
+    pieces.append(text[at:])
+    return "".join(pieces), settings
+
+
 def mask(text: str, spans: Iterable[SecretSpan], *, prefix: str, offset: int = 0) -> tuple[str, list[str]]:
     """Mask every marked span that falls in `text`, which starts at `offset` in the text the
     spans were marked in. A span is numbered by its place among all the spans given, so the

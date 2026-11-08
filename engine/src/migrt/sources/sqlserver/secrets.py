@@ -71,6 +71,30 @@ def in_text(text: str, *, command_line: bool = False) -> list[SecretSpan]:
     return merged(spans)
 
 
+# An SSIS package's XML: a connection manager's connection string, as an attribute or as an
+# element, and the value of every property the package marks sensitive, such as a password.
+_PACKAGE_CONNECTION = re.compile(r"\b(?:\w+:)?ConnectionString=\"([^\"]*)\"")
+_PACKAGE_CONNECTION_ELEMENT = re.compile(r"<(?:\w+:)?Property\s[^>]*?(?:\w+:)?Name=\"ConnectionString\"[^>]*>([^<]*)<",
+                                         re.I)
+_PACKAGE_SENSITIVE = re.compile(r"<[\w:]+\s[^>]*?(?:\w+:)?Sensitive=\"1\"[^>]*>([^<]*)<", re.I)
+_PACKAGE_PASSWORD = re.compile(r"<(?:\w+:)?Property\s[^>]*?(?:\w+:)?Name=\"Password\"[^>]*>([^<]*)<", re.I)
+
+
+def whole(value: str | None, pattern: str) -> list[SecretSpan]:
+    """A value that is a likely secret through and through, such as a connection string."""
+    return [SecretSpan(0, len(value), pattern)] if value else []
+
+
+def in_package(text: str) -> list[SecretSpan]:
+    """Mark likely secrets in an SSIS package's XML, as the file holds it: connection strings
+    whole, every sensitive property's value, and the T-SQL patterns over the whole text."""
+    spans = (_groups(_PACKAGE_CONNECTION, text, "connection string") +
+             _groups(_PACKAGE_CONNECTION_ELEMENT, text, "connection string") +
+             _groups(_PACKAGE_SENSITIVE, text, "sensitive property") +
+             _groups(_PACKAGE_PASSWORD, text, "sensitive property"))
+    return merged(spans + in_text(text))
+
+
 def in_rows(view: str, rows: list[dict], *, command_columns: frozenset[str] = frozenset()) -> list[SecretSpan]:
     """Mark likely secrets in the raw rows of one metadata view: every string cell is scanned
     with the text patterns, and connection-detail columns are marked whole."""

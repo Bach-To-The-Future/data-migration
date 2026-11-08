@@ -18,18 +18,25 @@ recorded by its type); SQL Agent jobs from msdb; references worked out by the pa
 SQL Server's dependency metadata as a cross-check; and likely secrets, marked.
 
 Not here, and reported where they matter: procedure result shapes, which need EXECUTE and
-are described in the sandbox (issue #41); extraction from folders, and inventories of SSIS
-packages and job steps (issue #40); servers before 2017 (issue #74).
+are described in the sandbox (issue #41); servers before 2017 (issue #74).
+
+Folders of files are read beside the server or without one (folders.py): query batches,
+SSIS packages and SQL Agent job scripts, and, for a database read from no server, the data
+definition that builds its catalog. Every job's references are worked out from its steps
+(jobs.py), whichever input it came from.
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import decimal
 import json
-from typing import Any
+from typing import Any, Sequence
 
+from ...core import secrets as core_secrets
 from ...core.catalog import IGNORED_FOR_IDENTITY as IGNORED_FACT, CatalogObject, Fact, Provenance, Snapshot
-from . import names, parser, references, secrets
+from . import folders, jobs, names, parser, references, resolution, secrets
+from .names import split_name
 from .connection import Connection, SqlServerError
 
 SOURCE = "sqlserver"
@@ -103,7 +110,6 @@ MODULE_KINDS = {"view", "procedure", "scalar_function", "inline_function", "tabl
                 "database_trigger"}
 CLR_KINDS = {"clr_procedure", "clr_scalar_function", "clr_table_function", "clr_aggregate", "clr_trigger"}
 SHAPED_KINDS = {"view", "inline_function", "table_function", "clr_table_function"}
-COMMAND_SUBSYSTEMS = {"CmdExec", "PowerShell", "SSIS"}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -282,12 +288,59 @@ class Reading:
     msdb: dict[str, Capture]
 
 
-def extract(address: ServerAddress, databases: list[str], *, time_zone: str | None = None,
-            statements: list[str] | None = None) -> Snapshot:
-    """Check the server's version and the login's permissions, then read the catalog of the
-    named databases, msdb's jobs and the server into a snapshot. `time_zone` is required
-    only where CURRENT_TIMEZONE() fails. Every batch sent is appended to `statements`."""
-    return build(read(address, databases, statements=statements), time_zone=time_zone)
+@dataclasses.dataclass(frozen=True)
+class Settings:
+    """What a server would have supplied, given by the operator for databases read from
+    folders alone (spec section 3). The time zone is passed as `time_zone`."""
+    collations: dict[str, str] = dataclasses.field(default_factory=dict)   # required: each database's default
+    version: str | None = None                                             # a release, such as "2019"
+    compatibility_levels: dict[str, int] = dataclasses.field(default_factory=dict)
+
+
+class SettingsRequired(Exception):
+    """A setting a server would have supplied is missing, for an extraction without one."""
+
+    def __init__(self, missing: list[str]):
+        self.missing = missing
+        super().__init__("Extraction from folders alone needs settings a server would have supplied (spec section 3); "
+                         "nothing was read:\n" + "\n".join(f"  missing: {m}" for m in missing))
+
+
+def extract(address: ServerAddress | None, databases: list[str], *, time_zone: str | None = None,
+            statements: list[str] | None = None, folder_inputs: tuple[folders.FolderInput, ...] = (),
+            settings: Settings = Settings()) -> Snapshot:
+    """Read a live server, folders of files, or both into a snapshot. With a server: check
+    its version and the login's permissions, then read the catalog of the named databases,
+    msdb's jobs and the server; `time_zone` is required only where CURRENT_TIMEZONE() fails,
+    and every batch sent is appended to `statements`. Without one, `databases` is empty, and
+    the folders' databases need the settings and `time_zone`."""
+    if address is None:
+        _require(folder_inputs, settings, time_zone)
+    files = folders.read_files(list(folder_inputs))
+    reading = read(address, databases, statements=statements) if address is not None else None
+    return build(reading, time_zone=time_zone, files=files, folder_inputs=folder_inputs, settings=settings)
+
+
+def _require(folder_inputs, settings: Settings, time_zone: str | None) -> None:
+    missing = [] if time_zone else ["the time zone, which a server would have supplied"]
+    missing += [f"the default collation of database {d}" for d in _folder_databases(folder_inputs)
+                if not _setting(settings.collations, d)]
+    if not folder_inputs:
+        missing.append("a folder of files, or a live server")
+    if missing:
+        raise SettingsRequired(missing)
+
+
+def _folder_databases(folder_inputs) -> list[str]:
+    out: list[str] = []
+    for f in folder_inputs:
+        if f.database.casefold() not in {d.casefold() for d in out}:
+            out.append(f.database)
+    return out
+
+
+def _setting(values: dict, database: str):
+    return next((v for k, v in values.items() if k.casefold() == database.casefold()), None)
 
 
 def read(address: ServerAddress, databases: list[str], *, statements: list[str] | None = None) -> Reading:
@@ -318,26 +371,135 @@ def read(address: ServerAddress, databases: list[str], *, statements: list[str] 
     return Reading(list(databases), props, server_caps, zone, failure, caps, granted, exempted, msdb_caps)
 
 
-def build(reading: Reading, *, time_zone: str | None = None) -> Snapshot:
+def build(reading: Reading | None, *, time_zone: str | None = None, files: Sequence[folders.SourceFile] = (),
+          folder_inputs: tuple[folders.FolderInput, ...] = (), settings: Settings = Settings()) -> Snapshot:
     """The snapshot, built from what was read alone: no server is touched."""
-    objects: list[CatalogObject] = [_server_object(reading, time_zone)]
-    objects += [_raw_object("server", c) for c in reading.server.values()]
-    objects += [_raw_object("db:msdb", c) for c in reading.msdb.values()]
-    objects += _agent_jobs(reading.msdb)
-    pending = [_Database(name, reading.database_captures[name], reading.dependencies_granted[name],
-                         reading.exempted.get(name, [])) for name in reading.databases]
-    for db in pending:
-        objects += db.objects()
-        objects += [_raw_object(f"db:{db.name}", c) for c in db.caps.values()]
+    objects: list[CatalogObject] = []
+    pending: list[_Database] = []
+    contexts: dict[str, folders.DatabaseContext] = {}
+    if reading is not None:
+        objects += [_server_object(reading, time_zone)]
+        objects += [_raw_object("server", c) for c in reading.server.values()]
+        objects += [_raw_object("db:msdb", c) for c in reading.msdb.values()]
+        objects += _agent_jobs(reading.msdb)
+        pending = [_Database(name, reading.database_captures[name], reading.dependencies_granted[name],
+                             reading.exempted.get(name, [])) for name in reading.databases]
+        for db in pending:
+            objects += db.objects()
+            objects += [_raw_object(f"db:{db.name}", c) for c in db.caps.values()]
+            contexts[db.name] = folders.DatabaseContext(db.name, db.collation, db.compatibility_level, True,
+                                                        frozenset(db.system_types()), frozenset(db.schemas.values()))
+        major = str(reading.properties["ProductMajorVersion"])
+        outside = [d for d in _folder_databases(folder_inputs) if _setting({c: c for c in contexts}, d) is None]
+        if outside:
+            raise folders.FolderExtractionError(
+                f"folders are given for {', '.join(outside)}, which this extraction does not read from the live "
+                "server: extract those databases from the server too, or from folders alone in an extraction of "
+                "their own")
+    else:
+        major = _folder_version(settings)
+        server, database_objects = _folder_server(settings, time_zone, major, _folder_databases(folder_inputs))
+        objects += [server, *database_objects]
+        for db in database_objects:
+            contexts[db.identity] = folders.DatabaseContext(db.identity, db.fact("collation").value,
+                                                            db.fact("compatibility_level", SOURCE).value, False)
+    found = folders.extract(list(files), contexts, live=reading is not None) if files else None
+    if found is not None:
+        objects += found.objects
+        for name, schemas in folders.schemas_of(found.objects, found.schemas).items():
+            if name in contexts and not contexts[name].live:
+                contexts[name] = dataclasses.replace(contexts[name], schemas=schemas)
     # References need every object, in every database, to resolve against.
     provisional = Snapshot.of(SOURCE, objects)
-    engagement = set(reading.databases)
+    engagement = set(contexts)
     extra: dict[str, list[Fact]] = {}
     for db in pending:
         for identity, facts in db.references(provisional, engagement).items():
             extra.setdefault(identity, []).extend(facts)
+    for identity, resolve in (found.pending if found is not None else []):
+        extra.setdefault(identity, []).extend(resolve(provisional))
+    for identity, facts in _job_references(provisional, contexts, folders.LEVELS[major]).items():
+        extra.setdefault(identity, []).extend(facts)
     objects = [dataclasses.replace(o, facts=o.facts + tuple(extra.get(o.identity, ()))) for o in objects]
     return Snapshot.of(SOURCE, objects)
+
+
+def _job_references(snapshot: Snapshot, contexts: dict[str, folders.DatabaseContext],
+                    default_level: int) -> dict[str, list[Fact]]:
+    """Each SQL Agent job's references, from its steps."""
+    packages: dict[str, list[str]] = {}
+    for o in snapshot.objects:
+        if o.kind == "ssis_package":
+            packages.setdefault(jobs.package_stem(o.fact("file").value), []).append(o.identity)
+    steps = {name: c.step() for name, c in contexts.items()}
+    out = {}
+    for o in snapshot.objects:
+        if o.kind != "agent_job":
+            continue
+        found, unavailable = jobs.step_references(o.fact("steps").value, snapshot, steps, default_level=default_level,
+                                                  system_types=folders.SYSTEM_TYPE_NAMES, packages=packages,
+                                                  engagement=set(contexts), job=o.identity)
+        source = o.fact("steps").provenance
+        p = Provenance(source.kind, f"{source.detail}: the steps' commands, parsed by ScriptDom")
+        out[o.identity] = [Fact("skeleton", "references", found, p),
+                           Fact("skeleton", "references_unavailable", unavailable, p)]
+    return out
+
+
+def _folder_version(settings: Settings) -> str:
+    if settings.version is None:
+        return folders.VERSION_DEFAULT
+    major = next((m for m, release in folders.RELEASES.items() if settings.version in (m, release)), None)
+    if major is None:
+        raise UnsupportedServer(f"SQL Server {settings.version}: extraction from folders takes a release of "
+                                f"{', '.join(folders.RELEASES.values())} (spec section 16)")
+    return major
+
+
+def _folder_server(settings: Settings, time_zone: str | None, major: str,
+                   databases: list[str]) -> tuple[CatalogObject, list[CatalogObject]]:
+    """The server and database objects of an extraction without a server: every fact is a
+    setting or SQL Server's documented default, so every one is assumed."""
+    release = folders.RELEASES[major]
+    version = Provenance("assumed", f"the version setting: SQL Server {release}" if settings.version else
+                         f"no version given: SQL Server {release}, the release the sandbox runs")
+    unknown = Provenance("assumed", "no server: not known")
+    first = min(databases, key=str.casefold)   # whatever order the folders were given in
+    server = CatalogObject(folders.NO_SERVER, "server", (
+        Fact("skeleton", "version", f"{major}.0", version),
+        Fact("skeleton", "edition", None, unknown),
+        Fact("skeleton", "collation", _setting(settings.collations, first),
+             Provenance("assumed", f"no server: the default collation of database {first}, a setting")),
+        Fact(SOURCE, "build", {"level": None, "update_level": None, "build": None, "release": release}, version),
+        Fact(SOURCE, "engine_edition", None, unknown),
+        Fact(SOURCE, "nested_triggers", True, Provenance("assumed", "SQL Server's default: nested triggers on")),
+        Fact("skeleton", "time_zone", time_zone, Provenance("assumed", "the time zone setting")),
+    ))
+    out = []
+    for name in databases:
+        given = _setting(settings.compatibility_levels, name)
+        level = int(given or folders.LEVELS[major])
+        if level not in parser.PARSERS:
+            raise UnsupportedServer(f"compatibility level {level} for database {name} is not one SQL Server has")
+        default = Provenance("assumed", "SQL Server's default for a new database")
+        ansi = dict.fromkeys(("ansi_nulls", "ansi_padding", "ansi_warnings", "arithabort", "concat_null_yields_null",
+                              "numeric_roundabort", "quoted_identifier", "ansi_null_default"), False)
+        out.append(CatalogObject(name, "database", (
+            Fact("skeleton", "collation", _setting(settings.collations, name),
+                 Provenance("assumed", "the database default collation setting")),
+            Fact(SOURCE, "compatibility_level", level, Provenance(
+                "assumed", "the compatibility level setting" if given else
+                f"no level given: {level}, the default for a database created on SQL Server {release}")),
+            Fact(SOURCE, "ansi_nulls_default", False, default),
+            Fact(SOURCE, "quoted_identifier_default", False, default),
+            Fact(SOURCE, "ansi_defaults", ansi, default),
+            Fact(SOURCE, "recursive_triggers", False, default),
+            Fact(SOURCE, "dependency_cross_check", {"status": "skipped", "reason": "no live server: SQL Server's "
+                                                                                  "dependency metadata is not available"},
+                 Provenance("assumed", "no live server")),
+            Fact(SOURCE, "permission_exemptions", [], Provenance("assumed", "no live server: no self-check ran")),
+        )))
+    return server, out
 
 
 def _server_properties(conn: Connection) -> dict:
@@ -752,39 +914,23 @@ class _Database:
 
     # ------------------------------------------------------------------ references
 
-    def context(self, referrer: str | None, kinds=None) -> dict:
+    def context(self, referrer: str | None) -> dict:
         """Where a name written in `referrer` is looked for: its schema, then dbo. A referrer
         that is not a schema object (a database trigger, or none) looks in dbo only."""
         schema = referrer.split(".")[1] if referrer and referrer.count(".") == 2 else "dbo"
-        return {"database": self.name, "schemas": [schema, "dbo"] if schema != "dbo" else ["dbo"],
-                "case_sensitive": names.identifiers_case_sensitive(self.collation), "kinds": kinds}
+        return resolution.context(self.name, schema, names.identifiers_case_sensitive(self.collation))
 
     def resolve(self, snapshot: Snapshot, referrer: str | None, parts: tuple[str, ...],
                 namespace: str) -> tuple[str | None, str | None, str | None]:
-        """What a name denotes, the synonym it was named through if any, and, when it denotes
-        nothing because it is ambiguous, why: an ambiguous name is never taken for a missing one."""
-        kinds = names.TYPE_KINDS if namespace == "type" else None
-        try:
-            found = names.resolve(snapshot, parts, self.context(referrer, kinds))
-        except names.AmbiguousName as ambiguous:
-            return None, None, str(ambiguous)
-        via = next((identity for identity, fact in found.consulted if fact == "base_object"), None)
-        return found.identity, via, None
+        return resolution.resolve(snapshot, parts, namespace, self.context(referrer))
 
-    def external(self, parts: tuple[str, ...], engagement: set[str]) -> str:
-        if len(parts) == 4:
-            return "linked server"
-        if len(parts) == 3 and parts[0].casefold() not in {d.casefold() for d in engagement}:
-            return "another database"
-        if (len(parts) >= 2 and parts[-2].casefold() in ("sys", "information_schema")) or (
-                len(parts) == 1 and parts[0].casefold().startswith(("sp_", "xp_", "fn_"))):
-            return "system object"
-        return "not in the catalog"
+    def system_types(self) -> set[str]:
+        return {str(t["name"]).casefold() for t in self.rows["sys.types"] if not t["is_user_defined"]}
 
     def references(self, snapshot: Snapshot, engagement: set[str]) -> dict[str, list[Fact]]:
         """Each module's references, worked out by the parser and resolved against the whole
         catalog, and the cross-check against sys.sql_expression_dependencies."""
-        system_types = {str(t["name"]).casefold() for t in self.rows["sys.types"] if not t["is_user_defined"]}
+        system_types = self.system_types()
         schemas = {s.casefold() for s in self.schemas.values()}
         server = self.server_dependencies(snapshot)
         out: dict[str, list[Fact]] = {}
@@ -797,14 +943,8 @@ class _Database:
                 facts.append(Fact("skeleton", "references_unavailable", reason, p))
                 check = {"status": "not run", "reason": reason}
             else:
-                found = []
-                for ref in references.find(parsed, system_types, schemas):
-                    resolved, via, ambiguous = ((None, None, None) if ref.external else
-                                                self.resolve(snapshot, identity, ref.parts, ref.namespace))
-                    external = ref.external or (None if resolved else
-                                                f"ambiguous: {ambiguous}" if ambiguous else
-                                                self.external(ref.parts, engagement))
-                    found.append({**ref.to_json(), "resolved": resolved, "via": via, "external": external})
+                found = resolution.work_out(parsed, snapshot, self.context(identity), system_types=system_types,
+                                            schemas=schemas, engagement=engagement)
                 facts.append(Fact("skeleton", "references", found, p))
                 check = (self.cross_check(found, server.get(oid, [])) if self.dependencies_granted else
                          {"status": "skipped", "reason": f"the login holds no SELECT on {DEPENDENCY_VIEW}"})
@@ -897,16 +1037,33 @@ class _Database:
         return result
 
 
+PROVENANCE_COUNTS = {"server": "read", "file": "parsed", "assumed": "assumed"}
+# Objects that hold what was read rather than facts about the client's objects.
+NOT_COUNTED = {"raw_capture", "folder_extraction"}
+
+
 def findings(snapshot: Snapshot) -> dict:
     """What an extraction found that the report must show: the dependency cross-check, by
-    database and by object where it disagrees or did not run; the marked secrets; every
-    permission the self-check saw but did not count as excess; every fact assumed rather
-    than read; and dependencies SQL Server records from no catalog object."""
-    databases, disagreements, not_run, marked, exempted, assumed, unattributed = {}, [], [], [], {}, [], {}
+    database and by object where it disagrees, did not run or was skipped; the marked
+    secrets; every permission the self-check saw but did not count as excess; every fact
+    assumed rather than read; dependencies SQL Server records from no catalog object; the
+    completeness summary (facts read, parsed and assumed, and values assumed inside parsed
+    facts); every column whose collation was assumed; and what the folders held."""
+    databases, disagreements, not_run, skipped, marked, exempted, assumed, unattributed = {}, [], [], [], [], {}, [], {}
+    counts = {"read": 0, "parsed": 0, "assumed": 0}
+    assumed_values, collations = 0, []
     for o in snapshot.objects:
         facts = {f.name: f.value for f in o.facts}
         assumed += [{"object": o.identity, "fact": f.name, "assumed": f.provenance.detail}
                     for f in o.facts if f.provenance.kind == "assumed"]
+        if o.kind not in NOT_COUNTED:
+            for f in o.facts:
+                counts[PROVENANCE_COUNTS[f.provenance.kind]] += 1
+            for value in facts.get("assumed_values", []):
+                assumed_values += 1
+                if value["property"] == "collation":
+                    collations.append({"object": o.identity, "fact": value["fact"], "column": value.get("column"),
+                                       "collation": value["value"], "reason": value["reason"]})
         if o.kind == "database":
             databases[o.identity] = facts["dependency_cross_check"]
             if facts["permission_exemptions"]:
@@ -920,38 +1077,67 @@ def findings(snapshot: Snapshot) -> dict:
                                   "server_only": check["server_only"]})
         elif check and check["status"] == "not run":
             not_run.append({"object": o.identity, "reason": check["reason"]})
+        elif check and check["status"] == "skipped":
+            skipped.append({"object": o.identity, "reason": check["reason"]})
         if facts.get("secrets"):
             marked.append({"object": o.identity, "spans": len(facts["secrets"])})
-    return {"dependency_cross_check": {"databases": databases, "disagreements": disagreements, "not_run": not_run,
-                                       "unattributed": unattributed},
-            "secrets": {"marked": marked},
-            "permission_exemptions": exempted,
-            "assumed": assumed}
+    found = {"dependency_cross_check": {"databases": databases, "disagreements": disagreements, "not_run": not_run,
+                                        "skipped": skipped, "unattributed": unattributed},
+             "secrets": {"marked": marked},
+             "permission_exemptions": exempted,
+             "assumed": assumed,
+             "completeness": {"facts": counts, "assumed_values": assumed_values},
+             "assumed_collations": collations}
+    if snapshot.has(folders.FOLDERS_IDENTITY):
+        found["folders"] = {f.name: f.value for f in snapshot.get(folders.FOLDERS_IDENTITY).facts}
+    return found
 
 
-def split_name(text: str) -> tuple[str, ...]:
-    """A multi-part name as SQL Server stores it, such as [db].[sch].[name], into its parts."""
-    parts, current, i, quoted = [], "", 0, False
-    while i < len(text):
-        ch = text[i]
-        if quoted:
-            if ch == "]" and text[i + 1:i + 2] == "]":
-                current, i = current + "]", i + 2
+# ---------------------------------------------------------------------------- recognised artefacts
+
+RECOGNISED = {"agent_job": "SQL Agent job", "ssis_package": "SSIS package"}
+INVENTORY = {"agent_job": ("enabled", "description", "category", "start_step", "steps", "schedules",
+                           "not_interpreted"),
+             "ssis_package": ("file", "package_name", "protection_level", "format_version", "inventoried",
+                              "not_inventoried_reason", "connections", "variables", "parameters", "tasks",
+                              "components", "precedence_constraints", "sensitive_properties")}
+# The cells of an inventory that may hold a marked secret, masked wherever the inventory is shown.
+MASKED = {"agent_job": {"steps": ("command",)},
+          "ssis_package": {"connections": ("connection_string", "expression"), "tasks": ("sql",),
+                           "components": ("sql",), "variables": ("value",), "parameters": ("value",),
+                           "sensitive_properties": ("value",)}}
+
+
+def recognised(snapshot: Snapshot) -> list[dict]:
+    """Every SSIS package and SQL Agent job in the snapshot, a recognised artefact type: its
+    inventory with every marked secret masked by its named setting, its references to
+    catalog objects, the objects they reach (its entry points), and what was not read."""
+    out = []
+    for o in snapshot.objects:
+        if o.kind not in RECOGNISED:
+            continue
+        marked = o.fact("secrets").value if o.has_fact("secrets") else []
+        settings: list[str] = []
+        inventory = {}
+        for name in INVENTORY[o.kind]:
+            if not o.has_fact(name):
                 continue
-            if ch == "]":
-                quoted = False
-            else:
-                current += ch
-        elif ch == "[":
-            quoted = True
-        elif ch == ".":
-            parts.append(current)
-            current = ""
-        else:
-            current += ch
-        i += 1
-    parts.append(current)
-    return tuple(p.strip() if not p.startswith(" ") else p for p in parts)
+            value = copy.deepcopy(o.fact(name).value)
+            for column in MASKED[o.kind].get(name, ()):
+                for row, entry in enumerate(value):
+                    entry[column], used = core_secrets.mask_cell(entry[column], marked, prefix=o.identity, fact=name,
+                                                                 row=row, column=column)
+                    settings += [s for s in used if s not in settings]
+            inventory[name] = value
+        references = o.fact("references").value if o.has_fact("references") else []
+        out.append({"name": o.identity, "type": RECOGNISED[o.kind], "inventory": inventory,
+                    "references": references,
+                    "references_unavailable": (o.fact("references_unavailable").value
+                                               if o.has_fact("references_unavailable") else []),
+                    "entry_points": sorted({r["resolved"] for r in references if r["resolved"]}),
+                    "secrets": settings,
+                    "assumed_values": o.fact("assumed_values").value if o.has_fact("assumed_values") else []})
+    return out
 
 
 # ---------------------------------------------------------------------------- msdb
@@ -971,15 +1157,8 @@ def _agent_jobs(caps: dict[str, Capture]) -> list[CatalogObject]:
                  for s in sorted((s for s in rows["dbo.sysjobsteps"] if s["job_id"] == job["job_id"]),
                                  key=lambda s: s["step_id"])]
         attached = [schedules[a["schedule_id"]] for a in rows["dbo.sysjobschedules"] if a["job_id"] == job["job_id"]]
-        timing = ("enabled", "freq_type", "freq_interval", "freq_subday_type", "freq_subday_interval",
-                  "freq_relative_interval", "freq_recurrence_factor", "active_start_date", "active_end_date",
-                  "active_start_time", "active_end_time")
-        job_schedules = sorted(({"name": s["name"], **{k: s[k] for k in timing}} for s in attached),
+        job_schedules = sorted(({"name": s["name"], **{k: s[k] for k in jobs.TIMING}} for s in attached),
                                key=_canonical)
-        marked = []
-        for index, s in enumerate(steps):
-            spans = secrets.in_text(s["command"] or "", command_line=s["subsystem"] in COMMAND_SUBSYSTEMS)
-            marked += _marked("steps", spans, index, "command")
         out.append(CatalogObject(f"agent_job:{job['name']}", "agent_job", (
             Fact("skeleton", "job_id", job["job_id"], p),
             Fact("skeleton", "enabled", bool(job["enabled"]), p),
@@ -988,7 +1167,7 @@ def _agent_jobs(caps: dict[str, Capture]) -> list[CatalogObject]:
             Fact("skeleton", "start_step", job["start_step_id"], p),
             Fact("skeleton", "steps", steps, p),
             Fact("skeleton", "schedules", job_schedules, p),
-            Fact("skeleton", "secrets", marked, Provenance("server", "msdb: dbo.sysjobsteps, marked by the "
-                                                                     "extractor's patterns")),
+            Fact("skeleton", "secrets", jobs.marked_steps(steps), Provenance("server", "msdb: dbo.sysjobsteps, marked "
+                                                                                      "by the extractor's patterns")),
         )))
     return out

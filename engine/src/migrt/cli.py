@@ -2,6 +2,8 @@
 interface and prints the structured result as JSON. It holds no conversion logic.
 
     python -m migrt preview --engagement NAME --database DB --artefact DB.schema.name --out DIR
+    python -m migrt preview ... --folder DB=PATH            (folders beside the server)
+    python -m migrt preview --no-server --folder DB=PATH --collation DB=COLLATION --time-zone ZONE ...
 
 Connection settings come from options or the environment: the extractor's password only
 from the environment variable named by --password-env, never from the command line.
@@ -30,11 +32,30 @@ def _parser() -> argparse.ArgumentParser:
     preview.add_argument("--login", default="migration_extractor", help="the extractor's read-only login")
     preview.add_argument("--password-env", default="MIGRT_EXTRACTOR_PASSWORD",
                          help="environment variable holding the login's password")
-    preview.add_argument("--database", action="append", required=True, help="a database to extract; repeatable")
-    preview.add_argument("--time-zone", help="the server's time zone; needed only where CURRENT_TIMEZONE() fails")
+    preview.add_argument("--database", action="append", default=[], help="a database to extract; repeatable")
+    preview.add_argument("--time-zone", help="the server's time zone; needed where CURRENT_TIMEZONE() fails, and "
+                                             "without a server")
+    preview.add_argument("--folder", action="append", default=[], metavar="DB=PATH",
+                         help="a folder of exported files for database DB; repeatable")
+    preview.add_argument("--no-server", action="store_true", help="extract from the folders alone")
+    preview.add_argument("--collation", action="append", default=[], metavar="DB=COLLATION",
+                         help="without a server: database DB's default collation (required); repeatable")
+    preview.add_argument("--compatibility-level", action="append", default=[], metavar="DB=LEVEL",
+                         help="without a server: database DB's compatibility level; repeatable")
+    preview.add_argument("--sql-server-version", help="without a server: the SQL Server release, such as 2019")
     preview.add_argument("--artefact", action="append", required=True, help="database.schema.name; repeatable")
     preview.add_argument("--out", required=True, type=pathlib.Path, help="where the delivered project is written")
     return p
+
+
+def _pairs(values: list[str], option: str) -> list[tuple[str, str]]:
+    out = []
+    for value in values:
+        key, sep, rest = value.partition("=")
+        if not sep or not key or not rest:
+            raise ValueError(f"{option} takes DB=VALUE, not {value!r}")
+        out.append((key, rest))
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -42,15 +63,38 @@ def main(argv: list[str] | None = None) -> int:
     if not args.control_dsn:
         print("migrt: no control database server: pass --control-dsn or set MIGRT_CONTROL_DSN", file=sys.stderr)
         return 2
-    password = os.environ.get(args.password_env)
-    if password is None:
-        print(f"migrt: the login's password is not in ${args.password_env}", file=sys.stderr)
+    try:
+        folders = [engine.Folder(pathlib.Path(path), db) for db, path in _pairs(args.folder, "--folder")]
+        settings = engine.FolderSettings(dict(_pairs(args.collation, "--collation")), args.time_zone,
+                                         args.sql_server_version,
+                                         {k: int(v) for k, v in _pairs(args.compatibility_level,
+                                                                      "--compatibility-level")})
+    except ValueError as exc:
+        print(f"migrt: {exc}", file=sys.stderr)
         return 2
     engagement = engine.Engagement(args.engagement, args.control_dsn)
-    source = engine.SqlServerSource(args.server, args.port, args.login, password, args.database, args.time_zone)
+    source = None
+    if args.no_server and args.database:
+        print("migrt: --database names a database on the server; without one, name it in --folder DB=PATH",
+              file=sys.stderr)
+        return 2
+    if not args.no_server and (args.collation or args.compatibility_level or args.sql_server_version):
+        print("migrt: --collation, --compatibility-level and --sql-server-version apply only with --no-server",
+              file=sys.stderr)
+        return 2
+    if not args.no_server:
+        if not args.database:
+            print("migrt: name a database to extract with --database, or pass --no-server", file=sys.stderr)
+            return 2
+        password = os.environ.get(args.password_env)
+        if password is None:
+            print(f"migrt: the login's password is not in ${args.password_env}", file=sys.stderr)
+            return 2
+        source = engine.SqlServerSource(args.server, args.port, args.login, password, args.database, args.time_zone)
     try:
-        result = engine.preview_run(engagement, source, args.artefact, args.out)
-    except (engine.ExtractorPermissionError, engine.UnsupportedServer, engine.TimeZoneRequired) as exc:
+        result = engine.preview_run(engagement, source, args.artefact, args.out, folders,
+                                    settings if source is None else None)
+    except engine.EXTRACTION_ERRORS as exc:
         print(str(exc), file=sys.stderr)
         return 3
     summary = {

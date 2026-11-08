@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import json
 
-SCHEMA_VERSION = "report-data/0.3"   # 0.3: the extraction section; secrets and name adjustments per artefact
+# 0.3: the extraction section; secrets and name adjustments per artefact. 0.4: recognised
+# artefacts as manual work; the extraction section's completeness summary, assumed
+# collations, skipped cross-checks and folders.
+SCHEMA_VERSION = "report-data/0.4"
 PREVIEW_BANNER = ("Preview run: reconciliation was off. Nothing in this report was checked against the "
                   "original, and nothing in it is converted.")
 NOT_RECONCILED = "Not reconciled"
@@ -20,6 +23,33 @@ PREVIEW_GROUP = "Not reconciled: preview run"
 # "Not reconciled (preview run)"; one the target cannot generate is manual work.
 CONSTRUCT_NOT_RECONCILED = "Not reconciled (preview run)"
 CONSTRUCT_MANUAL = "manual work"
+
+# A recognised artefact type (spec section 15): never converted, so never reconciled or
+# validated, and always manual work, in a preview run as in any other.
+RECOGNISED_STATUS = "Recognised, not converted"
+MANUAL_GROUP = "Manual work"
+RECOGNISED_REASON = "A recognised artefact type: the tool inventories it and lists it as manual work, with no target code."
+
+
+def recognised_artefact(*, name: str, type: str, inventory: dict, references: list[dict],
+                        references_unavailable: list[dict], entry_points: list[str], secrets: list[str],
+                        assumed_values: list[dict]) -> dict:
+    return {
+        "name": name,
+        "type": type,
+        "verdict": NOT_RECONCILED,
+        "validation": "Not run",
+        "status": RECOGNISED_STATUS,
+        "sign_off_group": MANUAL_GROUP,
+        "reason": RECOGNISED_REASON,
+        "inventory": inventory,
+        "references": references,
+        "references_unavailable": references_unavailable,
+        "entry_points": entry_points,
+        "secrets": [{"setting": s, "text": "A likely secret in the artefact, shown as this named setting."}
+                    for s in secrets],
+        "assumed_values": assumed_values,
+    }
 
 
 def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, layer1: dict,
@@ -44,8 +74,11 @@ def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, l
 
 
 def preview_report(*, engagement: str, snapshot: str, source: dict, target: dict, versions: dict,
-                   artefacts: list[dict], extraction: dict, degradations: list[dict],
+                   artefacts: list[dict], recognised: list[dict], extraction: dict, degradations: list[dict],
                    run_specific: dict) -> dict:
+    groups = {PREVIEW_GROUP: [a["name"] for a in artefacts]}
+    if recognised:
+        groups[MANUAL_GROUP] = sorted(r["name"] for r in recognised)
     return {
         "schema_version": SCHEMA_VERSION,
         "run": {
@@ -57,8 +90,9 @@ def preview_report(*, engagement: str, snapshot: str, source: dict, target: dict
             "target": target,
             "versions": versions,
         },
-        "sign_off": {"groups": {PREVIEW_GROUP: [a["name"] for a in artefacts]}, "signature_block": False},
+        "sign_off": {"groups": groups, "signature_block": False},
         "artefacts": sorted(artefacts, key=lambda a: a["name"]),
+        "recognised_artefacts": sorted(recognised, key=lambda a: a["name"]),
         "extraction": extraction,
         "degradations": degradations,
         "run_specific": run_specific,

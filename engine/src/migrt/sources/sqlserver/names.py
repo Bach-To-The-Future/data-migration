@@ -87,3 +87,28 @@ class AmbiguousName(Exception):
     def __init__(self, name: str, matches: list[str]):
         self.matches = matches
         super().__init__(f"{name} is ambiguous: it matches {', '.join(matches)}")
+
+
+def split_name(text: str) -> tuple[str, ...]:
+    """A multi-part name as SQL Server stores it, such as [db].[sch].[name], into its parts."""
+    parts, current, i, quoted = [], "", 0, False
+    while i < len(text):
+        ch = text[i]
+        if quoted:
+            if ch == "]" and text[i + 1:i + 2] == "]":
+                current, i = current + "]", i + 2
+                continue
+            if ch == "]":
+                quoted = False
+            else:
+                current += ch
+        elif ch == "[":
+            quoted = True
+        elif ch == ".":
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+        i += 1
+    parts.append(current)
+    return tuple(p.strip() if not p.startswith(" ") else p for p in parts)
