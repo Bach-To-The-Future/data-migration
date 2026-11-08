@@ -64,6 +64,18 @@ _Avoid_: Metadata store, repository
 The catalog as one extraction left it. A snapshot never changes, and a run uses exactly one.
 _Avoid_: Version, extract
 
+**Raw capture**:
+Every row of every metadata view the extractor reads, with every column, kept in the snapshot. Every other fact is built from it, and the final validator rebuilds the original's database from it.
+_Avoid_: Dump, raw metadata
+
+**Name adjustment**:
+The name the target uses for a source name, by the target's rules, recorded once in the control database. Most names pass unchanged, and are recorded too, so a later name can never take theirs. Later extractions only add to the record, so adding an object never renames an existing one.
+_Avoid_: Rename, sanitised name
+
+**Marked secret**:
+A span of source text, a job step or a raw row that the extractor's fixed patterns take for a credential or connection detail. It stays in the client's own catalog and is replaced by a named setting wherever text leaves it.
+_Avoid_: Masked value (which is what replaces it)
+
 **Control database**:
 Where the tool keeps everything it persists for one engagement: catalog snapshots, the run catalog, observations and verdicts, that client's lessons and business-rules file, and the final validator's own evidence. There is one per engagement, and deleting a client's data means deleting it.
 _Avoid_: Metadata database, repository
