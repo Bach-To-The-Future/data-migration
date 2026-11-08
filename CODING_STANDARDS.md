@@ -27,7 +27,7 @@ Rules a tool can check are checks, not rules here: lint, types and tests run wit
 
 ## Sources, targets and tools
 
-- **Each half speaks only of its own side.** The target half speaks only of target behaviour, and the source half only of source behaviour ([ADR 0019](docs/adr/0019-shared-mappings-are-split-by-source-and-by-target.md)).
+- **Each half speaks only of its own side.** The target half speaks only of target behaviour, and the source half only of source behaviour ([ADR 0019](docs/adr/0019-shared-mappings-are-split-by-source-and-by-target.md)). The rule covers the behaviour, meanings and wording the engine produces. Catalogue cells copied verbatim from Annexes C and D are research record and may mention the other side, but no code may depend on such mentions.
 - **New tools must be free, and open source wherever possible.** Record any exception ([ADR 0017](docs/adr/0017-the-products-tools-are-free-and-open-source-where-possible.md)).
 
 ## Conflicts

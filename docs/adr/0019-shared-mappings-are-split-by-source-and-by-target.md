@@ -33,3 +33,7 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 - **The catalogue and the mappings are restructured** when the spec is assembled. No entry's content changes.
 - **The support library holds the target half only.** Its version still identifies the mappings it ships ([ADR 0018](0018-the-support-library-ships-as-source-vendored-per-project.md)), and its name says which target it serves.
 - **Meanings that are explicitly SQL Server's stay.** Examples are decimal scale rules and counting string length in UTF-16 units. A source whose rules differ adds its own types and operations.
+
+## Amendment, 8 November 2026: verbatim annex cells
+
+The rule that each half speaks only of its own side covers the behaviour, meanings and wording the engine produces: lowering's meanings, the support library's behaviour, and every caveat and reason in the report, which take the source's wording from the source half and the target's from the target half. Catalogue cells copied verbatim from Annexes C and D are research record and stay unchanged, as this decision requires, even where they mention the other side: for example, the target half's 3.14 treatment says the helper "reproduces SQL Server", and the source half's 4.5 example names Spark `TIMESTAMP`. No code may depend on such mentions. Decided by the owner on [The silent-differences catalogue as versioned data](https://github.com/Bach-To-The-Future/data-migration/issues/102).
