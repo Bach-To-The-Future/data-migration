@@ -279,7 +279,11 @@ Nothing at server level and no fixed role: the `msdb` role `SQLAgentReaderRole` 
 
 **Extraction from folders alone.**
 
-- Table shapes are built by replaying data-definition statements in a fixed order: every `CREATE` other than `CREATE INDEX` (`CREATE OR ALTER` among them), then every `CREATE INDEX`, then every `ALTER`, each group in file-name order. Indexes come between because script exports put them in files of their own, which can sort before their tables' (decided by the owner on [extraction from folders][t40]). Two `CREATE` statements for the same object, or the same index, is an extraction error that names both files. Statements that build no fact (drops, grants, statistics) are listed with the reason.
+- Table shapes are built by replaying data-definition statements deterministically, by their dependencies (decided by the owner on [extraction from folders][t40]):
+  - Statements are taken in a fixed order: every `CREATE` other than `CREATE INDEX` (`CREATE OR ALTER` among them), then every `CREATE INDEX`, then every `ALTER`, each group in file-name order.
+  - A statement that fails only because an object or column it needs does not exist yet is set aside, with nothing of it applied. That includes a foreign key whose referenced columns no primary key, unique constraint or unique index covers yet.
+  - Passes over the set-aside statements repeat in the same order until a pass applies nothing. Any statement still left is an extraction error naming its file, line and the missing dependency.
+  - Two `CREATE` statements for the same object, or the same index, is an extraction error that names both files, found before the replay. Statements that build no fact (drops, grants, statistics) are listed with the reason.
 - Required settings: the database default collation and compatibility level, the time zone, and the SQL Server version. The level selects the parser and changes what code means; the version selects the sandbox that serves as the oracle. Everything else a server would have supplied takes SQL Server's documented default, recorded as assumed. A value assumed inside a parsed fact, such as a column's collation or nullability or a constraint's generated name, is recorded in the object's `assumed_values`.
 - Lost without a server: server and database settings, per-routine settings unless the script sets them, row counts, trigger firing order, and confirmation that an object exists.
 - The report flags every column whose collation was assumed and gives a completeness summary: how many facts were read, parsed and assumed.
