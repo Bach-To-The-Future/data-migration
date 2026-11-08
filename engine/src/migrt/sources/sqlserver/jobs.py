@@ -294,7 +294,7 @@ def step_references(steps: list[dict], snapshot: Snapshot, databases: dict[str, 
             line = command.count("\n", 0, offset) + 1
             column = offset - (command.rfind("\n", 0, offset) + 1) + 1
             found.append({"step_id": sid, "name": [path], "namespace": "ssis_package", "line": line,
-                          "column": column, "resolved": matches[0] if len(matches) == 1 else None, "via": None,
+                          "column": column, "write": False, "resolved": matches[0] if len(matches) == 1 else None, "via": None,
                           "external": (None if len(matches) == 1 else
                                        f"ambiguous: {path} matches {', '.join(matches)}" if matches else
                                        "a package not in the extraction's folders")})

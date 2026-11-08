@@ -1087,9 +1087,30 @@ def findings(snapshot: Snapshot) -> dict:
              "assumed": assumed,
              "completeness": {"facts": counts, "assumed_values": assumed_values},
              "assumed_collations": collations}
+    found["unresolved_external_references"] = unresolved_external_references(snapshot)
     if snapshot.has(folders.FOLDERS_IDENTITY):
         found["folders"] = {f.name: f.value for f in snapshot.get(folders.FOLDERS_IDENTITY).facts}
     return found
+
+
+def unresolved_external_references(snapshot: Snapshot) -> list[dict]:
+    """Each table a foreign key references that the extraction does not hold, with the tables
+    that reference it, which cannot be recreated faithfully, and the artefacts that write
+    those tables, which it blocks: they are "Not reconcilable locally" until the export is
+    extended (decided by the owner on issue #40)."""
+    missing: dict[str, list[dict]] = {}
+    for o in snapshot.objects:
+        if o.has_fact("unresolved_references"):
+            for ref in o.fact("unresolved_references").value:
+                missing.setdefault(ref["references"], []).append({"table": o.identity, "constraint": ref["constraint"]})
+    out = []
+    for table, referenced_by in sorted(missing.items()):
+        blocked = {r["table"] for r in referenced_by}
+        writers = sorted(o.identity for o in snapshot.objects if o.has_fact("references") and any(
+            r.get("write") and ({r.get("resolved"), r.get("via")} & blocked) for r in o.fact("references").value))
+        out.append({"table": table, "referenced_by": referenced_by, "blocked_artefacts": len(writers),
+                    "artefacts": writers})
+    return out
 
 
 # ---------------------------------------------------------------------------- recognised artefacts

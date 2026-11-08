@@ -285,6 +285,12 @@ def _extraction_degradations(findings: dict) -> list[dict]:
                     "text": f"{completeness['facts']['assumed']} facts, and {completeness['assumed_values']} values "
                             "inside parsed facts, were assumed from settings or SQL Server's documented defaults, not "
                             "read from a server."})
+    for missing in findings["unresolved_external_references"]:
+        tables = ", ".join(r["table"] for r in missing["referenced_by"])
+        out.append({"kind": "reduced coverage", "where": missing["table"],
+                    "text": f"Referenced by a foreign key of {tables} but not in the extraction: those tables cannot be "
+                            f"recreated faithfully, and the {missing['blocked_artefacts']} artefacts that write them "
+                            "are not reconcilable locally. Extend the export to include it."})
     folder = findings.get("folders")
     if folder:
         for role in (folder_source.NOT_READ, folder_source.DID_NOT_PARSE):

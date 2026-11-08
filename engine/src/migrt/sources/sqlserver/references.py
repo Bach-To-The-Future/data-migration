@@ -10,6 +10,9 @@ module's own name, a trigger's table (held as the trigger's `table` fact), names
 creates (SELECT INTO, CREATE TABLE), temp tables, table variables, common table expressions,
 aliases, a trigger's `inserted` and `deleted`, system data types, and methods called on a
 column, such as XML's nodes().
+
+A reference is marked `write` where the name is what an INSERT, UPDATE, DELETE, MERGE or
+TRUNCATE changes, written directly or through an alias in the statement's FROM clause.
 """
 from __future__ import annotations
 
@@ -34,9 +37,11 @@ class Found:
     line: int
     column: int
     external: str | None = None  # set when the syntax itself says the target is outside the catalog
+    write: bool = False          # the name is what a data-modification statement changes
 
     def to_json(self) -> dict:
-        return {"name": list(self.parts), "namespace": self.namespace, "line": self.line, "column": self.column}
+        return {"name": list(self.parts), "namespace": self.namespace, "line": self.line, "column": self.column,
+                "write": self.write}
 
 
 def _name(fragment) -> str:
@@ -70,6 +75,8 @@ def find(parsed: Parsed, system_types: set[str], schemas: set[str]) -> list[Foun
     in_from: set[tuple[int, int]] = set()     # names of table-valued function calls in FROM
     external: list[Found] = []
     in_trigger = False
+    targets: list = []                        # what each data-modification statement changes, as written
+    aliased: dict[str, tuple[int, int]] = {}  # alias, folded -> the table name it stands for
 
     def visit(f) -> None:
         nonlocal in_trigger
@@ -100,6 +107,13 @@ def find(parsed: Parsed, system_types: set[str], schemas: set[str]) -> list[Foun
             alias = getattr(f, "Alias", None)
             if alias is not None:
                 local.add(str(alias.Value).casefold())
+                if kind == "NamedTableReference" and f.SchemaObject is not None:
+                    aliased[str(alias.Value).casefold()] = _key(f.SchemaObject)
+        if kind in ("InsertSpecification", "UpdateSpecification", "DeleteSpecification", "MergeSpecification"):
+            if f.Target is not None and _name(f.Target) == "NamedTableReference":
+                targets.append(f.Target.SchemaObject)
+        if kind == "TruncateTableStatement" and f.TableName is not None:
+            targets.append(f.TableName)
         if kind == "FunctionCall" and f.CallTarget is not None and _name(f.CallTarget) == "MultiPartIdentifierCallTarget":
             calls.append(f)
         if kind == "OpenQueryTableReference":
@@ -111,6 +125,12 @@ def find(parsed: Parsed, system_types: set[str], schemas: set[str]) -> list[Foun
                                   "ad hoc connection (OPENROWSET or OPENDATASOURCE)"))
 
     walk(parsed.tree, visit)
+    writes = set()
+    for target in targets:
+        if target.SchemaIdentifier is None and str(target.BaseIdentifier.Value).casefold() in aliased:
+            writes.add(aliased[str(target.BaseIdentifier.Value).casefold()])
+        else:
+            writes.add(_key(target))
 
     found: list[Found] = []
     for f in names:
@@ -131,7 +151,7 @@ def find(parsed: Parsed, system_types: set[str], schemas: set[str]) -> list[Foun
         schema = parts[-2] if len(parts) >= 2 else "sys"
         if namespace == "type" and schema.casefold() == "sys" and base.casefold() in system_types:
             continue
-        found.append(Found(parts, namespace, int(f.StartLine), int(f.StartColumn)))
+        found.append(Found(parts, namespace, int(f.StartLine), int(f.StartColumn), write=key in writes))
     for call in calls:
         target = [str(i.Value) for i in call.CallTarget.MultiPartIdentifier.Identifiers]
         if len(target) == 1 and (target[0].casefold() in local or target[0].casefold() not in schemas):

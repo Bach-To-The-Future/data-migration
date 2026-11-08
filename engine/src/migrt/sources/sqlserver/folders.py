@@ -10,8 +10,11 @@ its role:
   order to build the catalog: every CREATE but CREATE INDEX, then every CREATE INDEX, then
   every ALTER, each group in file-name order; CREATE OR ALTER counts as CREATE. A
   statement that needs an object or column not there yet is set aside and tried again,
-  pass after pass in the same order, until a pass applies nothing; any still waiting is
-  an extraction error naming its file, line and what it needs. A second CREATE of the
+  pass after pass in the same order, until a pass applies nothing. A foreign key to a table
+  no statement in the folders creates is then an unresolved external reference: it is
+  recorded on its table, which cannot be recreated faithfully, and the replay goes on.
+  Any statement still waiting for anything else is an extraction error naming its file,
+  line and what it needs. A second CREATE of the
   same object, or of the same index, is found before the replay, and is an error naming
   both files. Beside a live server, the server
   is the source of its databases' objects, and such files are not replayed; each statement
@@ -146,11 +149,15 @@ class UnresolvedDependencies(FolderExtractionError):
 
 
 class _Missing(Exception):
-    """A statement needs an object or column that is not there yet: it waits for a later pass."""
+    """A statement needs an object or column that is not there yet: it waits for a later pass.
+    `table` is set when what it needs is a foreign key's referenced table."""
 
-    def __init__(self, needed: str):
-        self.needed = needed
+    def __init__(self, needed: str, table: str | None = None):
+        self.needed, self.table = needed, table
         super().__init__(needed)
+
+
+UNRESOLVED_REASON = "the referenced table is not in the folders"
 
 
 def _copy(value):
@@ -500,6 +507,8 @@ class _Replay:
         self.objects: dict[str, _Object] = {}      # by folded identity
         self.schemas: dict[str, set[str]] = {d: {"dbo"} for d in databases}
         self.not_replayed: list[dict] = []
+        self.planned: set[str] = set()     # every object a CREATE in the folders makes, by key
+        self.external: set[str] = set()    # foreign keys' tables no statement makes, by key
 
     # ------------------------------------------------------------ names
 
@@ -628,16 +637,21 @@ class _Replay:
                 self.skip(s, f"runs in database {s.database}, which this extraction does not read")
         self.duplicates(creates + indexes)
         while pending:
-            waiting: list[tuple[_Statement, str]] = []
+            waiting: list[tuple[_Statement, _Missing]] = []
             for s in pending:
                 self.begin()
                 try:
                     self.apply(s)
                 except _Missing as missing:
                     self.rollback()
-                    waiting.append((s, missing.needed))
+                    waiting.append((s, missing))
             if len(waiting) == len(pending):
-                raise UnresolvedDependencies([(s.where, needed) for s, needed in waiting])
+                # Decided by the owner on #40: a foreign key's table that no statement makes is
+                # an unresolved external reference, not an error. Anything else is.
+                tables = {self.key(m.table, m.table.split(".")[0]) for _, m in waiting if m.table} - self.planned
+                if not tables - self.external:
+                    raise UnresolvedDependencies([(s.where, m.needed) for s, m in waiting])
+                self.external |= tables
             pending = [s for s, _ in waiting]
 
     def apply(self, s: _Statement) -> None:
@@ -659,6 +673,7 @@ class _Replay:
             if key in made:
                 raise DuplicateCreate(identity, made[key], where)
             made[key] = where
+            self.planned.add(key)
 
         for s in creates:
             f, kind = s.fragment, s.kind
@@ -827,8 +842,14 @@ class _Replay:
             identity = f"{database}.{schema}.{name}"
             target = table if self.key(identity, database) == self.key(table.identity, table.database) else \
                 self.objects.get(self.key(identity, database))
+            if target is None and self.key(identity, database) in self.external:
+                fk["references"] = identity
+                table.data.setdefault("unresolved", []).append({
+                    "kind": "foreign key", "constraint": fk["name"], "references": identity,
+                    "reason": UNRESOLVED_REASON})
+                continue
             if target is None or target.kind != "table":
-                raise _Missing(identity)
+                raise _Missing(identity, table=identity if target is None else None)
             fk["references"] = target.identity
             d = target.data
             if not fk["referenced_columns"]:
@@ -1321,6 +1342,11 @@ class _Replay:
                  Fact("skeleton", "columns", columns, p),
                  Fact("skeleton", "not_null", [c["name"] for c in columns if not c["nullable"]], p),
                  *constraints, Fact("skeleton", "secrets", marked, p)]
+        if obj.data.get("unresolved"):
+            # The table cannot be recreated as the client has it: artefacts that write it are
+            # "Not reconcilable locally" downstream (decided by the owner on #40).
+            facts += [Fact("skeleton", "unresolved_references", obj.data["unresolved"], p),
+                      Fact("skeleton", "recreatable", False, p)]
         return CatalogObject(obj.identity, "table", tuple(facts + self.assumed_fact(obj, assumed)))
 
     def table_type_object(self, obj: _Object) -> CatalogObject:
@@ -1726,7 +1752,8 @@ def _package(file: SourceFile, database: str,
             resolved, via, ambiguous = resolution.resolve(snapshot, parts, "object", resolution.context(
                 db, "dbo", databases[db].case_sensitive))
             refs.append(outside({"task": entry["task"], "component": entry["component"], "name": list(parts),
-                                 "namespace": "object", "line": None, "column": None, "resolved": resolved,
+                                 "namespace": "object", "line": None, "column": None, "write": entry["write"],
+                                 "resolved": resolved,
                                  "via": via, "external": None if resolved else f"ambiguous: {ambiguous}" if ambiguous
                                  else resolution.external(parts, engagement)}, elsewhere))
         return [Fact("skeleton", "references", refs, detail),

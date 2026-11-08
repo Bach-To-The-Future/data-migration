@@ -207,14 +207,54 @@ def test_a_foreign_key_waits_for_the_unique_index_it_needs(engagement, tmp_path)
 def test_a_statement_whose_dependency_never_appears_is_an_error_naming_it(engagement, tmp_path):
     write(tmp_path, {"a.sql": "CREATE TABLE dbo.T (A int NOT NULL);",
                      "b.sql": "-- the column is never added\nCREATE UNIQUE INDEX UX ON dbo.T (Missing);",
-                     "c.sql": "CREATE TABLE dbo.C (P int REFERENCES dbo.Nowhere (Id));"})
+                     "c.sql": "ALTER TABLE dbo.Gone ADD B int NULL;"})
 
     with pytest.raises(engine.FolderExtractionError) as raised:
         engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
 
     message = str(raised.value)
     assert "Db/b.sql line 2" in message and "column Missing of Db.dbo.T" in message
-    assert "Db/c.sql line 1" in message and "Db.dbo.Nowhere" in message
+    assert "Db/c.sql line 1" in message and "Db.dbo.Gone" in message
+
+
+def test_a_foreign_key_to_a_table_missing_from_the_folders_is_an_unresolved_external_reference(engagement, tmp_path):
+    """Decided by the owner on #40: the extraction goes on; the referencing table cannot be
+    recreated faithfully, and the report counts the artefacts that write it."""
+    write(tmp_path, {"a.sql": "CREATE TABLE dbo.C (Id int NOT NULL, P int CONSTRAINT FK_C_Nowhere "
+                              "REFERENCES dbo.Nowhere (Id));",
+                     "b.sql": "CREATE PROCEDURE dbo.uspAdd AS INSERT INTO dbo.C (Id) VALUES (1);",
+                     "c.sql": "CREATE PROCEDURE dbo.uspRead AS SELECT Id FROM dbo.C;",
+                     "d.sql": "UPDATE c SET P = 1 FROM dbo.C AS c WHERE c.Id = 2;",
+                     "e.sql": "CREATE UNIQUE INDEX UX_C ON dbo.C (Id);"})
+
+    snapshot = engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
+
+    c = facts(snapshot, "Db.dbo.C")
+    assert c["recreatable"] is False
+    assert c["unresolved_references"] == [{"kind": "foreign key", "constraint": "FK_C_Nowhere",
+                                          "references": "Db.dbo.Nowhere",
+                                          "reason": "the referenced table is not in the folders"}]
+    [fk] = c["foreign_keys"]
+    assert (fk["references"], fk["referenced_columns"]) == ("Db.dbo.Nowhere", ["Id"])
+    assert [i["name"] for i in c["unique_indexes"]] == ["UX_C"]   # what waited on the table still applies
+    found = engine.extraction_findings(snapshot)["unresolved_external_references"]
+    assert found == [{"table": "Db.dbo.Nowhere", "referenced_by": [{"table": "Db.dbo.C",
+                                                                    "constraint": "FK_C_Nowhere"}],
+                      "blocked_artefacts": 2, "artefacts": ["Db.dbo.uspAdd", "batch:Db/d.sql"]}]
+
+
+def test_the_parser_marks_the_tables_an_artefact_writes(engagement, tmp_path):
+    write(tmp_path, {"a.sql": "CREATE TABLE dbo.T (A int);\nCREATE TABLE dbo.U (A int);",
+                     "b.sql": "UPDATE t SET A = u.A FROM dbo.T AS t JOIN dbo.U AS u ON u.A = t.A;\n"
+                              "TRUNCATE TABLE dbo.U;\nMERGE dbo.T AS t USING dbo.U AS u ON t.A = u.A "
+                              "WHEN NOT MATCHED THEN INSERT (A) VALUES (u.A);"})
+
+    snapshot = engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
+
+    references = facts(snapshot, "batch:Db/b.sql")["references"]
+    assert {(r["line"], r["resolved"], r["write"]) for r in references} == {
+        (1, "Db.dbo.T", True), (1, "Db.dbo.U", False), (2, "Db.dbo.U", True), (3, "Db.dbo.T", True),
+        (3, "Db.dbo.U", False)}
 
 
 def test_duplicates_are_found_before_the_replay(engagement, tmp_path):

@@ -221,7 +221,8 @@ def inventory(text: str) -> Inventory:
         if c["sql"]:
             sql.append({**where, "text": c["sql"], "fact": "components", "row": row})
         if c["table"]:
-            tables.append({**where, "name": c["table"]})
+            # A destination writes its table; a source or lookup reads it.
+            tables.append({**where, "name": c["table"], "write": "destination" in (c["class"] or "").casefold()})
     return Inventory(facts, sql, tables, marked)
 
 
