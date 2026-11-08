@@ -64,3 +64,28 @@ def parse(identity: str, text: str, compatibility_level: int, quoted_identifier:
     comment_types = {scriptdom.TSqlTokenType.SingleLineComment, scriptdom.TSqlTokenType.MultilineComment}
     comments = [Comment(str(t.Text), int(t.Offset)) for t in tree.ScriptTokenStream if t.TokenType in comment_types]
     return Parsed(text, tree, comments)
+
+
+_visitor_class = None
+_visits: list = []   # the callbacks of the walks in progress, innermost last
+
+
+def walk(fragment, visit) -> None:
+    """Visit a ScriptDom fragment and every fragment below it. The .NET subclass is defined
+    once: pythonnet refuses a second type of the same name."""
+    global _visitor_class
+    if _visitor_class is None:
+        import Microsoft.SqlServer.TransactSql.ScriptDom as scriptdom  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
+
+        class Visitor(scriptdom.TSqlFragmentVisitor):
+            __namespace__ = "migrt.parser"
+
+            def Visit(self, node):  # noqa: N802 (ScriptDom's name)
+                _visits[-1](node)
+
+        _visitor_class = Visitor
+    _visits.append(visit)
+    try:
+        fragment.Accept(_visitor_class())
+    finally:
+        _visits.pop()

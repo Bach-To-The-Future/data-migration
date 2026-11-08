@@ -67,6 +67,7 @@ class Connection:
         self._conn = SqlConnection(builder.ConnectionString)
         self._conn.FireInfoMessageEventOnUserErrors = True
         self._messages: list[ServerMessage] = []
+        self.statements: list[str] = []          # every batch sent, in order
         self._conn.InfoMessage += self._on_message
         try:
             self._conn.Open()
@@ -80,14 +81,21 @@ class Connection:
     def query(self, sql: str, params: dict | None = None) -> list[dict]:
         """Run one batch and return the rows of its first result set, as dicts by column name.
         Raises SqlServerError if any statement in it raised an error."""
+        return self.capture(sql, params)[1]
+
+    def capture(self, sql: str, params: dict | None = None) -> tuple[list[str], list[dict]]:
+        """As query, and also the first result set's column names in order, which a result
+        with no rows still has."""
         from Microsoft.Data.SqlClient import SqlCommand  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
 
+        self.statements.append(sql)
         self._messages.clear()
         command = SqlCommand(sql, self._conn)
         command.CommandTimeout = 120
         for name, value in (params or {}).items():
             command.Parameters.AddWithValue("@" + name, value)
         rows: list[dict] = []
+        names: list[str] = []
         try:
             reader = command.ExecuteReader()
         except Exception as exc:
@@ -96,7 +104,7 @@ class Connection:
             first = True
             while True:
                 if first and reader.FieldCount:
-                    names = [reader.GetName(i) for i in range(reader.FieldCount)]
+                    names = [str(reader.GetName(i)) for i in range(reader.FieldCount)]
                     while reader.Read():
                         rows.append({n: _to_python(reader.GetValue(i)) for i, n in enumerate(names)})
                     first = False
@@ -107,7 +115,7 @@ class Connection:
         errors = self._errors()
         if errors:
             raise SqlServerError(errors)
-        return rows
+        return names, rows
 
     def _errors(self) -> list[ServerMessage]:
         return [m for m in self._messages if m.severity > 10]

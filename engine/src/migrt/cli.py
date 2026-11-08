@@ -31,6 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     preview.add_argument("--password-env", default="MIGRT_EXTRACTOR_PASSWORD",
                          help="environment variable holding the login's password")
     preview.add_argument("--database", action="append", required=True, help="a database to extract; repeatable")
+    preview.add_argument("--time-zone", help="the server's time zone; needed only where CURRENT_TIMEZONE() fails")
     preview.add_argument("--artefact", action="append", required=True, help="database.schema.name; repeatable")
     preview.add_argument("--out", required=True, type=pathlib.Path, help="where the delivered project is written")
     return p
@@ -46,10 +47,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"migrt: the login's password is not in ${args.password_env}", file=sys.stderr)
         return 2
     engagement = engine.Engagement(args.engagement, args.control_dsn)
-    source = engine.SqlServerSource(args.server, args.port, args.login, password, args.database)
+    source = engine.SqlServerSource(args.server, args.port, args.login, password, args.database, args.time_zone)
     try:
         result = engine.preview_run(engagement, source, args.artefact, args.out)
-    except engine.ExtractorPermissionError as exc:
+    except (engine.ExtractorPermissionError, engine.UnsupportedServer, engine.TimeZoneRequired) as exc:
         print(str(exc), file=sys.stderr)
         return 3
     summary = {

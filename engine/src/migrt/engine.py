@@ -3,8 +3,9 @@ from here, with structured results. Front ends, such as the command line, hold n
 conversion logic and call only this module.
 
 First cut: a preview run (reconciliation off) of views from one SQL Server, through every
-layer: the extractor's self-check, an immutable snapshot in the engagement's control
-database, lowering, the checker, generation, layer-1 checks and the report data.
+layer: the extractor's self-check and full extraction, an immutable snapshot in the
+engagement's control database with the name adjustments it extends, lowering, the checker,
+generation, layer-1 checks and the report data.
 """
 from __future__ import annotations
 
@@ -15,17 +16,19 @@ import json
 import pathlib
 import uuid
 
-from .core import checker, control_db, report
+from .core import checker, control_db, report, secrets
 from .core.differences import Catalogue
 from .core.catalog import CatalogReader, Snapshot
 from .core.ir import FORMAT_VERSION, Artefact
 from .core import vocabulary
 from .sources.sqlserver import differences as source_differences, extractor, lowering, names, parser
-from .sources.sqlserver.extractor import ExtractorPermissionError
+from .sources.sqlserver.extractor import ExtractorPermissionError, TimeZoneRequired, UnsupportedServer
 from .targets.pyspark import differences as target_differences, generator, layer1
+from .targets.pyspark import names as target_names
 
 __all__ = ["Engagement", "SqlServerSource", "ArtefactResult", "RunResult", "ExtractorPermissionError",
-           "extract", "read_snapshot", "preview_run", "delete_engagement_data", "TOOL_VERSION"]
+           "UnsupportedServer", "TimeZoneRequired", "extract", "read_snapshot", "name_adjustments",
+           "extraction_findings", "preview_run", "delete_engagement_data", "TOOL_VERSION"]
 
 TOOL_VERSION = "0.1.0"
 TARGET = {"platform": "PySpark on Databricks", "runtime": "17.3 LTS"}
@@ -52,6 +55,8 @@ class SqlServerSource:
     login: str
     password: str
     databases: list[str]
+    # The server's time zone, required only where CURRENT_TIMEZONE() fails (SQL Server 2017).
+    time_zone: str | None = None
 
     def describe(self) -> str:
         return f"SQL Server {self.host},{self.port} as {self.login}: {', '.join(self.databases)}"
@@ -89,12 +94,36 @@ def _control(engagement: Engagement) -> str:
 
 
 def extract(engagement: Engagement, source: SqlServerSource) -> Snapshot:
-    """Check the extractor's permissions, extract, and store the snapshot immutably.
-    Raises ExtractorPermissionError, before reading anything, if a grant is missing."""
+    """Check the server and the extractor's permissions, extract, store the snapshot
+    immutably, and extend the name adjustments for any name not recorded yet. Raises
+    UnsupportedServer or ExtractorPermissionError, before reading anything, for a server
+    v1 does not extract from or a grant that is missing or more than read-only."""
     address = extractor.ServerAddress(source.host, source.port, source.login, source.password)
-    snapshot = extractor.extract(address, source.databases)
-    control_db.store_snapshot(_control(engagement), snapshot, source.describe())
+    snapshot = extractor.extract(address, source.databases, time_zone=source.time_zone)
+    dsn = _control(engagement)
+    control_db.store_snapshot(dsn, snapshot, source.describe())
+    control_db.extend_name_adjustments(dsn, snapshot.id, target_names.scopes(list(_name_parts(snapshot).values())),
+                                       target_names.RULES)
     return snapshot
+
+
+def _name_parts(snapshot: Snapshot) -> dict[str, tuple[str, str, str, str]]:
+    """identity -> (database, schema, name, kind), for every object named in a schema."""
+    return {o.identity: (*o.fact("name_parts").value, o.kind) for o in snapshot.objects if o.has_fact("name_parts")}
+
+
+def name_adjustments(engagement: Engagement) -> dict[tuple[str, str], dict[str, str]]:
+    """The recorded name adjustments: {(rule, scope): {source name: target name}}. They
+    outlive snapshots: a later extraction only adds to them."""
+    return control_db.name_adjustments(_control(engagement))
+
+
+def extraction_findings(snapshot: Snapshot) -> dict:
+    """What an extraction found that the report must show (extractor.findings), with the
+    warning that pattern matching misses some secrets."""
+    found = extractor.findings(snapshot)
+    found["secrets"]["note"] = secrets.MISSES_SOME
+    return found
 
 
 def read_snapshot(engagement: Engagement, snapshot_id: str) -> Snapshot:
@@ -126,10 +155,12 @@ def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list
     snapshot = control_db.load_snapshot(dsn, snapshot.id)   # convert from what was stored
     out_dir = pathlib.Path(out_dir)
     differences = _differences()
+    adjusted = control_db.name_adjustments(dsn)
+    parts = {identity: value[:3] for identity, value in _name_parts(snapshot).items()}
 
     results, report_items, run_rows = [], [], []
     for identity in artefacts:
-        converted = _convert_view(snapshot, identity, differences)
+        converted = _convert_view(snapshot, identity, differences, target_names.Names(adjusted, parts))
         path = out_dir / converted.file.relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(converted.file.text, encoding="utf-8", newline="\n")
@@ -148,6 +179,11 @@ def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list
         })
 
     server = next(o for o in snapshot.objects if o.kind == "server")
+    findings = extraction_findings(snapshot)
+    degradations = [{"kind": "skipped check", "where": f"database {name}",
+                     "text": f"Dependency cross-check skipped: {check['reason']}."}
+                    for name, check in sorted(findings["dependency_cross_check"]["databases"].items())
+                    if check["status"] == "skipped"]
     finished = _now()
     data = report.preview_report(
         engagement=engagement.name,
@@ -158,7 +194,8 @@ def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list
         versions={"tool": TOOL_VERSION, "ir_format": FORMAT_VERSION, "vocabulary": vocabulary.version(),
                   **differences.versions(), "report_data": report.SCHEMA_VERSION},
         artefacts=report_items,
-        degradations=[{"kind": "skipped check", "where": "every artefact",
+        extraction=findings,
+        degradations=degradations + [{"kind": "skipped check", "where": "every artefact",
                        "text": "Preview run: layers 2 to 6 of the testing module and final validation did not run."},
                       {"kind": "skipped check", "where": "every artefact",
                        "text": "The preview packaging check (install the project in a fresh sandbox, import every "
@@ -175,7 +212,8 @@ def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list
     return RunResult(run_id, snapshot.id, True, results, report_path)
 
 
-def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue) -> _ConvertedView:
+def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue,
+                  adjusted_names: target_names.Names) -> _ConvertedView:
     """Lower, check, generate and run layer 1 for one view."""
     reader = CatalogReader(snapshot, names.resolve)
     database = identity.split(".", 1)[0]
@@ -192,7 +230,7 @@ def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue) -> 
                           reader.value(found, "quoted_identifier", extractor.SOURCE))
     artefact = lowering.lower_view(reader, found, parsed)
     checker.require(artefact, lambda table: {c["name"] for c in reader.value(table, "columns")})
-    generated = generator.generate(artefact, snapshot.id, TOOL_VERSION, differences)
+    generated = generator.generate(artefact, snapshot.id, TOOL_VERSION, differences, adjusted_names)
     spans = {n.id: (str(n.span) if n.span else None) for n in artefact.nodes()}
     checks = layer1.run(generated.text, links=generated.links, node_spans=spans,
                         manual_items=[m.id for m in generated.manual_items],
@@ -214,7 +252,11 @@ def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue) -> 
         constructs.append(entry)
     item = report.preview_artefact(
         name=found, artefact_type="view", area=found.split(".")[1], output=generated.relative_path,
-        layer1=checks.to_json(), constructs=constructs, degradations=[])
+        layer1=checks.to_json(), constructs=constructs, degradations=[],
+        secrets=[{"setting": name, "text": "A likely secret in the source. Generated code shows this named setting "
+                                            "in its place; nothing reads settings yet (support library, issue #45)."}
+                 for name in artefact.secret_settings],
+        name_adjustments=generated.name_adjustments)
     return _ConvertedView(artefact, reader, generated, checks, item)
 
 

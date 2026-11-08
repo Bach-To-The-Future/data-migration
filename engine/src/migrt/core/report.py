@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-SCHEMA_VERSION = "report-data/0.2"   # 0.2: differences versions, and each caveat's entry ID
+SCHEMA_VERSION = "report-data/0.3"   # 0.3: the extraction section; secrets and name adjustments per artefact
 PREVIEW_BANNER = ("Preview run: reconciliation was off. Nothing in this report was checked against the "
                   "original, and nothing in it is converted.")
 NOT_RECONCILED = "Not reconciled"
@@ -23,7 +23,8 @@ CONSTRUCT_MANUAL = "manual work"
 
 
 def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, layer1: dict,
-                     constructs: list[dict], degradations: list[dict]) -> dict:
+                     constructs: list[dict], degradations: list[dict], secrets: list[dict],
+                     name_adjustments: dict[str, dict[str, str]]) -> dict:
     return {
         "name": name,
         "type": artefact_type,
@@ -37,11 +38,14 @@ def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, l
         "layer1": layer1,
         "constructs": constructs,
         "degradations": degradations,
+        "secrets": secrets,
+        "name_adjustments": name_adjustments,
     }
 
 
 def preview_report(*, engagement: str, snapshot: str, source: dict, target: dict, versions: dict,
-                   artefacts: list[dict], degradations: list[dict], run_specific: dict) -> dict:
+                   artefacts: list[dict], extraction: dict, degradations: list[dict],
+                   run_specific: dict) -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
         "run": {
@@ -55,6 +59,7 @@ def preview_report(*, engagement: str, snapshot: str, source: dict, target: dict
         },
         "sign_off": {"groups": {PREVIEW_GROUP: [a["name"] for a in artefacts]}, "signature_block": False},
         "artefacts": sorted(artefacts, key=lambda a: a["name"]),
+        "extraction": extraction,
         "degradations": degradations,
         "run_specific": run_specific,
     }

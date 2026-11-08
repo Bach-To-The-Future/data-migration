@@ -1,4 +1,4 @@
-"""The extractor's self-check and the snapshot, through the engine's library interface."""
+"""The extractor's self-check, through the engine's library interface."""
 import os
 import uuid
 
@@ -89,7 +89,7 @@ def test_every_fact_in_a_snapshot_carries_provenance(engagement, extractor_serve
     assert facts and all(f.provenance.kind == "server" and f.provenance.detail for f in facts)
     view = stored.get(VIEW)
     assert "CREATE VIEW sales.vOrderTotals" in view.fact("source_text").value
-    assert view.fact("source_text").provenance.detail == "sys.views, sys.sql_modules"
+    assert view.fact("source_text").provenance.detail == "sys.sql_modules"
     order = stored.get("RetailSample.sales.Order")
     assert [c["name"] for c in order.fact("columns").value] == [
         "OrderId", "CustomerId", "OrderDate", "ShippedAt", "Status", "Note", "TotalAmount"]

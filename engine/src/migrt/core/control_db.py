@@ -16,6 +16,7 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from .catalog import CatalogObject, Fact, Provenance, Snapshot
+from .name_adjustments import Rule, extend
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshot (
@@ -63,6 +64,26 @@ BEGIN
         EXECUTE format('CREATE OR REPLACE TRIGGER %I BEFORE TRUNCATE ON %I
                         FOR EACH STATEMENT EXECUTE FUNCTION refuse_snapshot_change()', t || '_no_truncate', t);
     END LOOP;
+END $$;
+
+-- Name adjustments outlive snapshots (spec section 3): recorded once, only ever extended.
+CREATE TABLE IF NOT EXISTS name_adjustment (
+    rule           text NOT NULL,
+    scope          text NOT NULL,
+    source_name    text NOT NULL,
+    adjusted_name  text NOT NULL,
+    folded_name    text NOT NULL,
+    first_snapshot text NOT NULL REFERENCES snapshot (id),
+    recorded_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (rule, scope, source_name),
+    UNIQUE (rule, scope, folded_name)
+);
+DO $$
+BEGIN
+    CREATE OR REPLACE TRIGGER name_adjustment_immutable BEFORE UPDATE OR DELETE ON name_adjustment
+        FOR EACH ROW EXECUTE FUNCTION refuse_snapshot_change();
+    CREATE OR REPLACE TRIGGER name_adjustment_no_truncate BEFORE TRUNCATE ON name_adjustment
+        FOR EACH STATEMENT EXECUTE FUNCTION refuse_snapshot_change();
 END $$;
 
 -- The run catalog, first cut: one row per run and per artefact in it, append-only.
@@ -196,3 +217,37 @@ def record_run(dsn: str, run: dict, artefacts: list[dict]) -> None:
                 " %(catalog_reads_sha256)s, %(generated_path)s, %(generated_sha256)s, %(links)s, %(layer1)s,"
                 " %(status)s)",
                 artefacts)
+
+
+def _recorded(conn) -> dict[tuple[str, str], dict[str, str]]:
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    for rule, scope, source, adjusted in conn.execute(
+            "SELECT rule, scope, source_name, adjusted_name FROM name_adjustment"):
+        out.setdefault((rule, scope), {})[source] = adjusted
+    return out
+
+
+def name_adjustments(dsn: str) -> dict[tuple[str, str], dict[str, str]]:
+    """Every recorded name: {(rule, scope): {source name: target name}}."""
+    with connect(dsn) as conn:
+        return _recorded(conn)
+
+
+def extend_name_adjustments(dsn: str, snapshot_id: str, wanted: dict[tuple[str, str], set[str]],
+                            rules: dict[str, Rule]) -> dict[tuple[str, str], dict[str, str]]:
+    """Record adjustments for every name not recorded yet, keeping every recorded one, and
+    return the whole record. One transaction, with the table locked, so two extractions
+    never record the same name twice."""
+    with connect(dsn) as conn, conn.transaction():
+        conn.execute("LOCK TABLE name_adjustment IN EXCLUSIVE MODE")
+        recorded = _recorded(conn)
+        rows = []
+        for (rule_name, scope), names in sorted(wanted.items()):
+            rule = rules[rule_name]
+            new = extend(rule, names, recorded.get((rule_name, scope), {}))
+            recorded.setdefault((rule_name, scope), {}).update(new)
+            rows += [(rule_name, scope, source, target, rule.fold(target), snapshot_id) for source, target in new.items()]
+        with conn.cursor() as cur:
+            cur.executemany("INSERT INTO name_adjustment (rule, scope, source_name, adjusted_name, folded_name,"
+                            " first_snapshot) VALUES (%s, %s, %s, %s, %s, %s)", rows)
+    return recorded

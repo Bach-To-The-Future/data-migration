@@ -13,11 +13,12 @@ comparisons need their comparison rule from collation precedence: later work).
 from __future__ import annotations
 
 from ...core.catalog import CatalogReader
+from ...core import secrets
 from ...core.ir import UNKNOWN, Artefact, Node, VType
 from ...core import vocabulary
 from . import names
 from . import types as T
-from .parser import Parsed
+from .parser import Parsed, walk
 
 AGGREGATES = {"COUNT", "SUM", "AVG", "MIN", "MAX"}
 BINARY = {"Add": "add", "Subtract": "subtract", "Multiply": "multiply", "Divide": "divide", "Modulo": "modulo"}
@@ -49,6 +50,17 @@ class ViewLowering:
         self.name_context = {"database": self.database, "schemas": [schema, "dbo"],
                              "case_sensitive": names.identifiers_case_sensitive(collation)}
         self.scope: dict[str, dict] = {}   # alias -> {"table": identity, "columns": {name: column}}
+        # Marked secrets never enter the representation: text copied from the source is masked.
+        self.secrets = [secrets.SecretSpan.from_json(s) for s in reader.value(identity, "secrets")
+                        if s["fact"] == "source_text"]
+        self.settings: set[str] = set()
+
+    def source(self, offset: int, length: int) -> str:
+        """Source text, masked: each marked span becomes its named setting."""
+        text, used = secrets.mask(self.parsed.text[offset:offset + length], self.secrets, prefix=self.identity,
+                                  offset=offset)
+        self.settings.update(used)
+        return text
 
     # ------------------------------------------------------------------ artefact
 
@@ -73,12 +85,13 @@ class ViewLowering:
                             dependencies=sorted({n.attrs["table"] for n in body.walk() if n.kind == "read_table"}),
                             vocabulary_version=vocabulary.version())
         self.attach_comments(body)
+        artefact.secret_settings = sorted(self.settings)
         artefact.number_nodes()
         return artefact
 
     def opaque(self, fragment, reason: str, role: str = "") -> Node:
         span = self.parsed.span(fragment)
-        text = self.parsed.text[span.offset:span.offset + span.length]
+        text = self.source(span.offset, span.length)
         return Node("opaque_fragment", span, UNKNOWN, {"reason": reason, "text": text}, role=role)
 
     def attach_comments(self, body: Node) -> None:
@@ -87,7 +100,7 @@ class ViewLowering:
                          key=lambda n: n.position.offset)
         for comment in self.parsed.comments:
             after = [n for n in anchors if n.position.offset >= comment.offset]
-            (after[0] if after else body).comments.append(comment.text.rstrip())
+            (after[0] if after else body).comments.append(self.source(comment.offset, len(comment.text)).rstrip())
 
     # ------------------------------------------------------------------ queries
 
@@ -193,7 +206,7 @@ class ViewLowering:
         def visit(f):
             if type_name(f) == "FunctionCall" and str(f.FunctionName.Value).upper() in AGGREGATES:
                 found.append(f)
-        _walk(fragment, visit)
+        walk(fragment, visit)
         return bool(found)
 
     def expression(self, e) -> Node:
@@ -322,19 +335,6 @@ class ViewLowering:
 def _as(node: Node, role: str) -> Node:
     node.role = role
     return node
-
-
-def _walk(fragment, visit) -> None:
-    """Visit a ScriptDom fragment and every fragment below it."""
-    import Microsoft.SqlServer.TransactSql.ScriptDom as scriptdom  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
-
-    class Visitor(scriptdom.TSqlFragmentVisitor):
-        __namespace__ = "migrt.lowering"
-
-        def Visit(self, node):  # noqa: N802 (ScriptDom's name)
-            visit(node)
-
-    fragment.Accept(Visitor())
 
 
 def lower_view(reader: CatalogReader, identity: str, parsed: Parsed) -> Artefact:

@@ -11,7 +11,7 @@ import dataclasses
 import json
 from typing import Any
 
-FORMAT_VERSION = "ir-0.1"
+FORMAT_VERSION = "ir-0.2"   # 0.2: secret_settings
 DETERMINISTIC = "deterministic"
 
 
@@ -129,6 +129,11 @@ class Artefact:
     body: Node
     dependencies: list[str] = dataclasses.field(default_factory=list)
     vocabulary_version: str = ""
+    # Named settings standing for marked secrets the source text holds. The node tree never
+    # holds a marked span: text copied into it is masked (core.secrets). original_source is
+    # the client's own record, kept verbatim in their control database; whatever sends it
+    # elsewhere masks it first.
+    secret_settings: list[str] = dataclasses.field(default_factory=list)
 
     def number_nodes(self) -> None:
         """Give every node a stable id in tree order, so documents are deterministic."""
@@ -145,6 +150,7 @@ class Artefact:
             "identity": self.identity,
             "artefact_type": self.artefact_type,
             "dependencies": sorted(self.dependencies),
+            "secret_settings": sorted(self.secret_settings),
             "original_source": self.original_source,
             "body": self.body.to_json(),
         }

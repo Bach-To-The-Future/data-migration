@@ -22,6 +22,7 @@ from collections.abc import Sequence
 
 from ...core.differences import Catalogue
 from ...core.ir import Artefact, Node, VType
+from .names import Names
 
 ANSI_PIN = 'spark.conf.set("spark.sql.ansi.enabled", "true")'
 SESSION_SPARK = "spark = ss.spark"
@@ -31,7 +32,6 @@ COMPARE = {"=": "==", "<>": "!=", ">": ">", "<": "<", ">=": ">=", "<=": "<="}
 MONEY = "3.11"                # silent difference: money arithmetic
 MONEY_NOT_BUILT = "it needs the support library's money type, which is not built yet"
 SUM_INT = "3.14"              # silent difference: a running integer total that leaves int
-KIND_FOLDERS = {"view": "views"}
 
 
 class Unsupported(Exception):
@@ -57,6 +57,7 @@ class GeneratedFile:
     manual_items: list[ManualItem]
     differences: dict[str, str]           # node id -> the silent difference it carries as a caveat
     escape_hatch_uses: list[str]          # node ids generated as spark.sql (none yet)
+    name_adjustments: dict[str, dict[str, str]]   # rule -> {source name: the changed name this file uses}
 
 
 def spark_type(t: VType, node: Node) -> str:
@@ -86,20 +87,6 @@ def python_name(name: str, taken: set[str]) -> str:
     return candidate
 
 
-def quote_table(identity: str) -> str:
-    return ".".join(f"`{part.replace('`', '``')}`" for part in identity.split("."))
-
-
-def relative_path(identity: str, artefact_type: str) -> str:
-    """converted/<Database>/<schema>/<kind>/<Name>.py (spec section 6). Name adjustments
-    for names Unity Catalog or Python cannot take are later work; such a name is refused."""
-    database, schema, name = identity.split(".")
-    for part in (database, schema, name):
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part):
-            raise ValueError(f"{identity}: names needing adjustment are not handled yet")
-    return f"converted/{database}/{schema}/{KIND_FOLDERS[artefact_type]}/{name}.py"
-
-
 class _Lines:
     def __init__(self):
         self.lines: list[str] = []
@@ -118,19 +105,22 @@ class _Lines:
 
 
 class ViewGenerator:
-    def __init__(self, artefact: Artefact, snapshot_id: str, tool_version: str, differences: Catalogue):
+    def __init__(self, artefact: Artefact, snapshot_id: str, tool_version: str, differences: Catalogue,
+                 names: Names):
         self.artefact = artefact
+        self.recorded_names = names
         self.differences = differences
         self.snapshot_id = snapshot_id
         self.tool_version = tool_version
         self.out = _Lines()
         self.manual: list[ManualItem] = []
         self.caveats_by_node: dict[str, str] = {}
-        self.names: set[str] = {"ss", "spark", "F", "DataFrame"}
+        self.names: set[str] = {"ss", "spark", "F", "DataFrame"}   # Python names taken in the file
 
     def generate(self) -> GeneratedFile:
         a = self.artefact
-        name = a.identity.split(".")[-1]
+        path, name = self.recorded_names.module(a.identity, a.artefact_type)
+        self.names.add(name)
         emit = self.out.emit
         emit(f'"""{a.identity}, a view, generated as PySpark by migrt {self.tool_version}.')
         emit("")
@@ -157,8 +147,8 @@ class ViewGenerator:
         else:
             emit(f"    return {result}", [a.body])
         self.drop_unused_functions_import()
-        return GeneratedFile(relative_path(a.identity, a.artefact_type), "\n".join(self.out.lines) + "\n",
-                             self.out.links, self.manual, self.caveats_by_node, [])
+        return GeneratedFile(path, "\n".join(self.out.lines) + "\n", self.out.links, self.manual,
+                             self.caveats_by_node, [], {rule: dict(sorted(used.items())) for rule, used in sorted(self.recorded_names.used.items())})
 
     def drop_unused_functions_import(self) -> None:
         """A function body with no column expression (one wholly manual) needs no `F`."""
@@ -190,7 +180,7 @@ class ViewGenerator:
         """Emit the statements for one plan step and return the variable holding it."""
         if node.kind == "read_table":
             var = python_name(node.attrs["alias"], self.names)
-            self.step(node, f'{var} = spark.read.table("{quote_table(node.attrs["table"])}").alias("{node.attrs["alias"]}")')
+            self.step(node, f'{var} = spark.read.table("{self.recorded_names.table(node.attrs["table"])}").alias("{node.attrs["alias"]}")')
             return var
         if node.kind == "join":
             left, right = self.plan(node.child("left")), self.plan(node.child("right"))
@@ -219,6 +209,7 @@ class ViewGenerator:
     def project(self, node: Node) -> str:
         source = self.plan(node.child("input"))
         var = python_name("projected", self.names)
+        self.out.comments(node, "    ")
         self.out.emit(f"    # source {node.span}")
         self.out.emit(f"    {var} = {source}.select(", [_shallow(node)])
         for output in node.children_with("output"):
@@ -358,7 +349,9 @@ def _shallow(node: Node) -> Node:
     return dataclasses.replace(node, children=[])
 
 
-def generate(artefact: Artefact, snapshot_id: str, tool_version: str, differences: Catalogue) -> GeneratedFile:
+def generate(artefact: Artefact, snapshot_id: str, tool_version: str, differences: Catalogue,
+             names: Names) -> GeneratedFile:
+    """`names` holds the recorded name adjustments: files, modules and tables are named by them."""
     if artefact.artefact_type != "view":
         raise ValueError(f"{artefact.identity}: only views are generated so far")
-    return ViewGenerator(artefact, snapshot_id, tool_version, differences).generate()
+    return ViewGenerator(artefact, snapshot_id, tool_version, differences, names).generate()
