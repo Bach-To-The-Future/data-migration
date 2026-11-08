@@ -221,7 +221,7 @@ In v1 the **operator** is a delivery engineer. Hosting, sign-in, licensing and b
 
 ### 3. Extraction and the catalog
 
-Decided in: [What does the catalog hold and how does conversion read it?][t8], [What SQL Server permissions does the extractor need?][t25], [Which SQL Server versions does v1 support?][t26], [How does the final independent validator work?][t32]. ADR: [0007][adr7]. Research: [extractor permissions][r-perm].
+Decided in: [What does the catalog hold and how does conversion read it?][t8], [What SQL Server permissions does the extractor need?][t25], [Which SQL Server versions does v1 support?][t26], [How does the final independent validator work?][t32]. ADRs: [0007][adr7], [0025][adr25]. Research: [extractor permissions][r-perm].
 
 **Inputs and provenance.**
 
@@ -275,10 +275,12 @@ Nothing at server level and no fixed role: the `msdb` role `SQLAgentReaderRole` 
 
 **Secrets.** The extractor marks likely secrets by fixed patterns: linked-server logins, connection strings in SSIS packages, credentials in SQL Agent job steps, and connection details in raw rows (for example `provider_string` in `sys.servers`). A marked span stays in the client's own catalog, is masked whenever text is sent to a model or shown in a report, and is never written into generated code: it is replaced by a named setting and listed in the report. Pattern matching will miss some, and the report says so.
 
+**Files in folders.** Each folder is named for the database its files belong to, and every file is kept verbatim in the raw capture. A `.sql` file holding only data definition (with `SET`, `USE` and `PRINT`) is replayed; any other `.sql` file is a query batch; one calling `sp_add_job` is a SQL Agent job script; a `.dtsx` file is an SSIS package. Any other file is listed as not read. Beside a live server, the server is the only source of its databases' objects: a folder's data definition and job scripts for them are not replayed but listed as superseded, and a folder for a database the server extraction does not read is refused ([ADR 0025][adr25]).
+
 **Extraction from folders alone.**
 
-- Table shapes are built by replaying data-definition statements in a fixed order: `CREATE` before `ALTER`, file-name order within each. Two `CREATE` statements for the same object is an extraction error that names both files.
-- Required settings: the database default collation and the time zone. Everything else a server would have supplied takes SQL Server's documented default, recorded as assumed.
+- Table shapes are built by replaying data-definition statements in a fixed order: `CREATE` before `ALTER`, file-name order within each. `CREATE INDEX` and `CREATE OR ALTER` count as `CREATE` statements. Two `CREATE` statements for the same object is an extraction error that names both files. Statements that build no fact (drops, grants, statistics) are listed with the reason.
+- Required settings: the database default collation and the time zone. Everything else a server would have supplied takes SQL Server's documented default, recorded as assumed. The SQL Server release and each database's compatibility level may be given as settings; otherwise SQL Server 2022 and level 160 are assumed. A value assumed inside a parsed fact, such as a column's collation or nullability or a constraint's generated name, is recorded in the object's `assumed_values`.
 - Lost without a server: server and database settings, per-routine settings unless the script sets them, row counts, trigger firing order, and confirmation that an object exists.
 - The report flags every column whose collation was assumed and gives a completeness summary: how many facts were read, parsed and assumed.
 
@@ -1529,6 +1531,7 @@ A second Fable review checked the commit that applied these decisions and found 
 [adr20]: ../adr/0020-orchestrators-are-policies-over-a-fixed-engine.md
 [adr21]: ../adr/0021-delivered-jobs-hold-a-write-lease-on-every-table-they-write.md
 [adr22]: ../adr/0022-recurring-idioms-are-converted-once-and-reused.md
+[adr25]: ../adr/0025-a-live-server-is-the-only-source-of-its-databases-objects.md
 [vocab-json]: ../spec-drafts/operation-vocabulary.json
 [r-perm]: ../research/extractor-permissions.md
 [r-replay]: ../research/replayable-agent-loops.md
