@@ -34,9 +34,11 @@ src/migrt/
     ir.py              the intermediate representation
     checker.py         verifies the representation
     vocabulary.py      the operation vocabulary (Annex A), with its JSON copy
+    differences.py     the silent-differences catalogue: the one interface to both halves
     report.py          the report data
-  sources/sqlserver/   connection (SqlClient), extractor, parser (ScriptDom), names, types, lowering
-  targets/pyspark/     generator, layer1
+  sources/sqlserver/   connection (SqlClient), extractor, parser (ScriptDom), names, types, lowering,
+                       differences (the source half, Annex C, as data)
+  targets/pyspark/     generator, layer1, differences (the target half, Annex D, as data)
 tests/                 run with sandbox/engine-tests.sh
 ```
 
@@ -54,5 +56,7 @@ A pre-commit hook lints staged engine files with pyflakes on the host, without D
 ```
 git config core.hooksPath .githooks
 ```
+
+Each half of the silent-differences catalogue is a JSON file in its package, checked cell by cell against Annexes C and D and the operation vocabulary by `tests/test_differences.py`. Change an annex and its half together; each half's version is the hash of its entries.
 
 Review applies [`CODING_STANDARDS.md`](../CODING_STANDARDS.md).

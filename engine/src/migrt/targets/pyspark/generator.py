@@ -8,6 +8,10 @@ An operation this target cannot yet generate exactly is declared unsupported her
 becomes a manual item: its column is emitted as `F.raise_error(...)`, so the file still
 runs its other columns and fails loudly, never silently, where the item is used. The
 report lists every manual item with its reason and source position.
+
+Where a reason or caveat comes from a silent difference, this target names the entry and
+its own reason only; the wording of the difference comes from the core's catalogue, so
+the source's behaviour is worded by the source half (ADR 0019).
 """
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ import keyword
 import re
 from collections.abc import Sequence
 
+from ...core.differences import Catalogue
 from ...core.ir import Artefact, Node, VType
 
 ANSI_PIN = 'spark.conf.set("spark.sql.ansi.enabled", "true")'
@@ -23,13 +28,9 @@ SESSION_SPARK = "spark = ss.spark"
 FUNCTIONS_IMPORT = "from pyspark.sql import functions as F"
 AGGREGATE_KINDS = {"count_values", "count_rows", "sum", "average", "minimum", "maximum"}
 COMPARE = {"=": "==", "<>": "!=", ">": ">", "<": "<", ">=": ">=", "<=": "<="}
-MONEY_REASON = ("money arithmetic truncates to four places at every step in SQL Server; it needs the "
-                "support library's money type, which is not built yet")
-# Silent difference 3.14. The wording moves to the source half of the differences catalogue
-# when that half is built as data (issue #102).
-SUM_INT_CAVEAT = ("Silent difference 3.14: SQL Server raises an overflow error when a running total leaves int, "
-                  "even if the final total fits, and whether it does can depend on the plan's aggregation order; "
-                  "Spark raises only when the final total does not fit")
+MONEY = "3.11"                # silent difference: money arithmetic
+MONEY_NOT_BUILT = "it needs the support library's money type, which is not built yet"
+SUM_INT = "3.14"              # silent difference: a running integer total that leaves int
 KIND_FOLDERS = {"view": "views"}
 
 
@@ -54,7 +55,7 @@ class GeneratedFile:
     text: str
     links: dict[int, list[str]]           # generated line number -> node ids
     manual_items: list[ManualItem]
-    caveats: dict[str, str]               # node id -> caveat
+    differences: dict[str, str]           # node id -> the silent difference it carries as a caveat
     escape_hatch_uses: list[str]          # node ids generated as spark.sql (none yet)
 
 
@@ -117,13 +118,14 @@ class _Lines:
 
 
 class ViewGenerator:
-    def __init__(self, artefact: Artefact, snapshot_id: str, tool_version: str):
+    def __init__(self, artefact: Artefact, snapshot_id: str, tool_version: str, differences: Catalogue):
         self.artefact = artefact
+        self.differences = differences
         self.snapshot_id = snapshot_id
         self.tool_version = tool_version
         self.out = _Lines()
         self.manual: list[ManualItem] = []
-        self.caveats: dict[str, str] = {}
+        self.caveats_by_node: dict[str, str] = {}
         self.names: set[str] = {"ss", "spark", "F", "DataFrame"}
 
     def generate(self) -> GeneratedFile:
@@ -156,7 +158,7 @@ class ViewGenerator:
             emit(f"    return {result}", [a.body])
         self.drop_unused_functions_import()
         return GeneratedFile(relative_path(a.identity, a.artefact_type), "\n".join(self.out.lines) + "\n",
-                             self.out.links, self.manual, self.caveats, [])
+                             self.out.links, self.manual, self.caveats_by_node, [])
 
     def drop_unused_functions_import(self) -> None:
         """A function body with no column expression (one wholly manual) needs no `F`."""
@@ -304,7 +306,7 @@ class ViewGenerator:
             return f"F.lit({node.attrs['value']!r})"
         if k in ("money_multiply", "money_divide") or (node.type is not None and node.type.name == "money"
                                                        and k in ("add", "subtract", "sum", "average")):
-            raise Unsupported(node, MONEY_REASON)
+            raise Unsupported(node, f"{self.differences.difference(MONEY)}; {MONEY_NOT_BUILT}")
         if k in ("add", "subtract", "multiply", "modulo"):
             op = {"add": "+", "subtract": "-", "multiply": "*", "modulo": "%"}[k]
             a, b = (self.expr(x, grouped) for x in args)
@@ -325,7 +327,7 @@ class ViewGenerator:
             if node.value_type.param("bits") != 32:
                 raise Unsupported(node, f"{k} returning {node.type} is not generated yet")
             a = self.expr(args[0], {})
-            self.caveats[node.id] = SUM_INT_CAVEAT
+            self.caveats_by_node[node.id] = SUM_INT
             if k == "sum":
                 return f'F.sum({a}).cast("int")'
             # AVG over int is the int sum divided by the count of values, truncated toward zero.
@@ -356,7 +358,7 @@ def _shallow(node: Node) -> Node:
     return dataclasses.replace(node, children=[])
 
 
-def generate(artefact: Artefact, snapshot_id: str, tool_version: str) -> GeneratedFile:
+def generate(artefact: Artefact, snapshot_id: str, tool_version: str, differences: Catalogue) -> GeneratedFile:
     if artefact.artefact_type != "view":
         raise ValueError(f"{artefact.identity}: only views are generated so far")
-    return ViewGenerator(artefact, snapshot_id, tool_version).generate()
+    return ViewGenerator(artefact, snapshot_id, tool_version, differences).generate()

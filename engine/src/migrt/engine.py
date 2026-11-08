@@ -16,18 +16,24 @@ import pathlib
 import uuid
 
 from .core import checker, control_db, report
+from .core.differences import Catalogue
 from .core.catalog import CatalogReader, Snapshot
 from .core.ir import FORMAT_VERSION, Artefact
 from .core import vocabulary
-from .sources.sqlserver import extractor, lowering, names, parser
+from .sources.sqlserver import differences as source_differences, extractor, lowering, names, parser
 from .sources.sqlserver.extractor import ExtractorPermissionError
-from .targets.pyspark import generator, layer1
+from .targets.pyspark import differences as target_differences, generator, layer1
 
 __all__ = ["Engagement", "SqlServerSource", "ArtefactResult", "RunResult", "ExtractorPermissionError",
            "extract", "read_snapshot", "preview_run", "delete_engagement_data", "TOOL_VERSION"]
 
 TOOL_VERSION = "0.1.0"
 TARGET = {"platform": "PySpark on Databricks", "runtime": "17.3 LTS"}
+
+
+def _differences() -> Catalogue:
+    """The silent-differences catalogue: the source's half and the target's, read together."""
+    return Catalogue(source_differences.half(), target_differences.half())
 
 
 @dataclasses.dataclass(frozen=True)
@@ -119,10 +125,11 @@ def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list
     snapshot = extract(engagement, source)
     snapshot = control_db.load_snapshot(dsn, snapshot.id)   # convert from what was stored
     out_dir = pathlib.Path(out_dir)
+    differences = _differences()
 
     results, report_items, run_rows = [], [], []
     for identity in artefacts:
-        converted = _convert_view(snapshot, identity)
+        converted = _convert_view(snapshot, identity, differences)
         path = out_dir / converted.file.relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(converted.file.text, encoding="utf-8", newline="\n")
@@ -149,7 +156,7 @@ def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list
                 "edition": server.fact("edition").value, "collation": server.fact("collation").value},
         target=TARGET,
         versions={"tool": TOOL_VERSION, "ir_format": FORMAT_VERSION, "vocabulary": vocabulary.version(),
-                  "report_data": report.SCHEMA_VERSION},
+                  **differences.versions(), "report_data": report.SCHEMA_VERSION},
         artefacts=report_items,
         degradations=[{"kind": "skipped check", "where": "every artefact",
                        "text": "Preview run: layers 2 to 6 of the testing module and final validation did not run."},
@@ -168,7 +175,7 @@ def preview_run(engagement: Engagement, source: SqlServerSource, artefacts: list
     return RunResult(run_id, snapshot.id, True, results, report_path)
 
 
-def _convert_view(snapshot: Snapshot, identity: str) -> _ConvertedView:
+def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue) -> _ConvertedView:
     """Lower, check, generate and run layer 1 for one view."""
     reader = CatalogReader(snapshot, names.resolve)
     database = identity.split(".", 1)[0]
@@ -185,7 +192,7 @@ def _convert_view(snapshot: Snapshot, identity: str) -> _ConvertedView:
                           reader.value(found, "quoted_identifier", extractor.SOURCE))
     artefact = lowering.lower_view(reader, found, parsed)
     checker.require(artefact, lambda table: {c["name"] for c in reader.value(table, "columns")})
-    generated = generator.generate(artefact, snapshot.id, TOOL_VERSION)
+    generated = generator.generate(artefact, snapshot.id, TOOL_VERSION, differences)
     spans = {n.id: (str(n.span) if n.span else None) for n in artefact.nodes()}
     checks = layer1.run(generated.text, links=generated.links, node_spans=spans,
                         manual_items=[m.id for m in generated.manual_items],
@@ -201,8 +208,9 @@ def _convert_view(snapshot: Snapshot, identity: str) -> _ConvertedView:
                  "status": report.CONSTRUCT_MANUAL if item else report.CONSTRUCT_NOT_RECONCILED}
         if item:
             entry["reason"] = item.reason
-        if node.id in generated.caveats:
-            entry["caveat"] = generated.caveats[node.id]
+        if node.id in generated.differences:
+            entry["difference"] = generated.differences[node.id]
+            entry["caveat"] = differences.difference(entry["difference"])
         constructs.append(entry)
     item = report.preview_artefact(
         name=found, artefact_type="view", area=found.split(".")[1], output=generated.relative_path,

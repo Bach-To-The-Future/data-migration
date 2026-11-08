@@ -163,6 +163,14 @@ _Avoid_: Lock (which suggests the database enforces it)
 A neutral kind of failure the core names, such as divide by zero or key violation. Each target maps its runtime's failures to error classes, and each source maps error classes to its own error codes.
 _Avoid_: Error number (which belongs to a source), exception type (which belongs to a target)
 
+**Silent difference**:
+A construct whose obvious target equivalent runs without error but gives a different result, such as integer division or trailing spaces in a comparison. Each is an entry in the differences catalogue, identified by its entry ID (such as 3.14).
+_Avoid_: Gotcha, incompatibility (which suggests a loud failure)
+
+**Differences catalogue**:
+The silent differences as versioned data, split into a source half (how each source construct behaves, in vocabulary terms) and a target half (where the target's built-ins differ, and what reproduces the source), which share entry IDs. Each half speaks only of its own side, and both versions are part of the test definition's fingerprint.
+_Avoid_: Tolerance catalogue (one of its uses), gotcha list
+
 **Support library**:
 The versioned package that converted code may import to reproduce source behaviour the target lacks.
 _Avoid_: Helper library, runtime, utils

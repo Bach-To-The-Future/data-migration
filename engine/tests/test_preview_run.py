@@ -104,3 +104,28 @@ def test_a_view_whose_query_is_not_lowered_fails_when_called_never_returns_nothi
     import pytest
     with pytest.raises(RuntimeError, match="Manual work 1"):
         namespace["vTopProducts"](Session())
+
+
+def test_report_data_carries_both_halves_of_the_differences_catalogue(engagement, extractor_server, tmp_path):
+    """Caveats and manual-work reasons are worded from the catalogue, keyed by entry ID:
+    SQL Server's behaviour from the source half, Spark's from the target half (issue #102)."""
+    from migrt import engine
+    from migrt.sources.sqlserver import differences as source
+    from migrt.targets.pyspark import differences as target
+
+    result = engine.preview_run(engagement, extractor_server, artefacts=[VIEW], out_dir=tmp_path / "out")
+
+    data = json.loads(result.report_data_path.read_text(encoding="utf-8"))
+    versions = data["run"]["versions"]
+    assert versions["differences_source"] == source.half().version
+    assert versions["differences_target"] == target.half().version
+    [item] = data["artefacts"]
+    sums = [c for c in item["constructs"] if c["operation"] in ("sum", "average") and c["status"] != "manual work"]
+    assert sums and all(c["difference"] == "3.14" for c in sums)
+    sql_server, spark = source.half().entry("3.14").wording, target.half().entry("3.14").wording
+    assert sql_server and spark
+    assert all(c["caveat"] == f"Silent difference 3.14: {sql_server}; {spark}" for c in sums)
+    money_wording = source.half().entry("3.11").wording
+    assert money_wording
+    money = [c for c in item["constructs"] if c["status"] == "manual work" and "3.11" in c["reason"]]
+    assert money and all(money_wording in c["reason"] for c in money)

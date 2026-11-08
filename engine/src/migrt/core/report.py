@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-SCHEMA_VERSION = "report-data/0.1"
+SCHEMA_VERSION = "report-data/0.2"   # 0.2: differences versions, and each caveat's entry ID
 PREVIEW_BANNER = ("Preview run: reconciliation was off. Nothing in this report was checked against the "
                   "original, and nothing in it is converted.")
 NOT_RECONCILED = "Not reconciled"

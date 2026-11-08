@@ -1,0 +1,645 @@
+{
+  "about": "The PySpark target half of the silent-differences catalogue (ADR 0019): where Spark's built-ins differ from the meaning the source gives the construct, and which built-in or treatment reproduces it. Its entries are Annex D's, keyed by the same IDs as the source half, and the engine's tests check every cell against docs/spec/annex-d-differences-pyspark.md. 'behaviour' is Spark's behaviour (with ANSI on, in section 1, where 'behaviour_ansi_off' is the other column). Only a target-only entry (9.14) holds its own example; the others' examples are the source half's. 'naive_built_in' is, where one exists, the built-in named in the entry's Spark cell that a direct conversion would emit and that the reproducing helper replaces, for mutation testing; the tests check the cell names it. 'wording' is the report's plain wording of Spark's behaviour, never of the source's. The version is the hash of 'entries'.",
+  "target": "PySpark on Databricks",
+  "annex": "docs/spec/annex-d-differences-pyspark.md",
+  "entries": [
+    {
+      "id": "1.1",
+      "section": "1. ANSI mode",
+      "behaviour": "`ARITHMETIC_OVERFLOW` error ([Spark ANSI][s-ansi])",
+      "behaviour_ansi_off": "`-2147483648` ([Spark ANSI][s-ansi])",
+      "reproduces": "ANSI on",
+      "evidence": "Both"
+    },
+    {
+      "id": "1.2",
+      "section": "1. ANSI mode",
+      "behaviour": "`DIVIDE_BY_ZERO` error ([ANSI_MODE][d-ansimode])",
+      "behaviour_ansi_off": "`NULL` ([ANSI_MODE][d-ansimode])",
+      "reproduces": "ANSI on. `try_divide` gives the `NULL` variant in both modes ([Spark ANSI][s-ansi])",
+      "evidence": "Both"
+    },
+    {
+      "id": "1.3",
+      "section": "1. ANSI mode",
+      "behaviour": "`CAST_INVALID_INPUT` error ([Spark ANSI][s-ansi])",
+      "behaviour_ansi_off": "`NULL` ([Spark ANSI][s-ansi])",
+      "reproduces": "ANSI on. T-SQL `TRY_CAST` ([TRY_CAST][m-trycast]) maps to `try_cast` in both modes",
+      "evidence": "Both"
+    },
+    {
+      "id": "1.4",
+      "section": "1. ANSI mode",
+      "behaviour": "`CAST_OVERFLOW` error ([ANSI_MODE][d-ansimode])",
+      "behaviour_ansi_off": "`57` ([ANSI_MODE][d-ansimode])",
+      "reproduces": "ANSI on",
+      "evidence": "Both"
+    },
+    {
+      "id": "1.5",
+      "section": "1. ANSI mode",
+      "behaviour": "The string is promoted to `BIGINT`; runtime error ([ANSI_MODE][d-ansimode])",
+      "behaviour_ansi_off": "`true` ([ANSI_MODE][d-ansimode])",
+      "reproduces": "ANSI on",
+      "evidence": "Both"
+    },
+    {
+      "id": "1.6",
+      "section": "1. ANSI mode",
+      "behaviour": "Type-mismatch error ([ANSI_MODE][d-ansimode])",
+      "behaviour_ansi_off": "`12.6`: both strings are cast to `DOUBLE` ([ANSI_MODE][d-ansimode])",
+      "reproduces": "`concat`, chosen by the converter from the operand types. No setting",
+      "evidence": "Both"
+    },
+    {
+      "id": "1.7",
+      "section": "1. ANSI mode",
+      "behaviour": "`BIGINT` column ([ANSI_MODE][d-ansimode])",
+      "behaviour_ansi_off": "`STRING` column, so later sorting and comparison are lexical ([ANSI_MODE][d-ansimode])",
+      "reproduces": "Explicit cast of each branch",
+      "evidence": "Both"
+    },
+    {
+      "id": "1.8",
+      "section": "1. ANSI mode",
+      "behaviour": "An exception is raised, so a converted handler runs",
+      "behaviour_ansi_off": "No exception; the handler never runs and the `NULL` or wrapped value flows on (rows 1.1 to 1.4)",
+      "reproduces": "ANSI on",
+      "evidence": "Both"
+    },
+    {
+      "id": "2.1",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "False: `'A' <> 'a'` ([Databricks collation][d-collation])",
+      "reproduces": "`COLLATE UTF8_LCASE` or `UNICODE_CI`, the `collate` function, or a default collation on the table, schema or session (Databricks SQL, Runtime 16.1+) ([Databricks collation][d-collation])",
+      "evidence": "Both"
+    },
+    {
+      "id": "2.2",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "They do not match and form separate groups",
+      "reproduces": "As 2.1, applied to the key columns",
+      "evidence": "Inferred"
+    },
+    {
+      "id": "2.3",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "False. `UTF8_LCASE` does not fold accents ([Databricks collation][d-collation])",
+      "reproduces": "`UNICODE_CI_AI` for accent-insensitive sources ([Databricks collation][d-collation])",
+      "evidence": "Both"
+    },
+    {
+      "id": "2.4",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "False ([Databricks collation][d-collation])",
+      "reproduces": "The `RTRIM` modifier, for example `UTF8_BINARY_RTRIM` or `UTF8_LCASE_RTRIM` (Databricks SQL, Runtime 16.2+) ([Databricks collation][d-collation]); otherwise `rtrim` on both sides",
+      "evidence": "Both"
+    },
+    {
+      "id": "2.5",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "False",
+      "reproduces": "As 2.4",
+      "evidence": "Both"
+    },
+    {
+      "id": "2.6",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "False: `LIKE` is always sensitive to trailing spaces, even under an `RTRIM` collation ([Databricks `like`][d-like])",
+      "reproduces": "None. Apply `rtrim` to the matched expression when the source column is `char` or `varchar`",
+      "evidence": "Both",
+      "naive_built_in": "LIKE"
+    },
+    {
+      "id": "2.7",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "Byte order: `'Z' < 'a'`, so `'Banana'` sorts first ([Databricks collation][d-collation])",
+      "reproduces": "`UTF8_LCASE` or `UNICODE_CI` ([Databricks collation][d-collation]). Exact equality with a given SQL Server sort order is not established (§11)",
+      "evidence": "Both"
+    },
+    {
+      "id": "2.8",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "False",
+      "reproduces": "`ILIKE`, or `LIKE` on a `UTF8_LCASE` string. `LIKE` supports only `UTF8_BINARY` and `UTF8_LCASE`, with or without `RTRIM` ([Databricks `like`][d-like], [Databricks collation][d-collation])",
+      "evidence": "Both"
+    },
+    {
+      "id": "2.9",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "False: only `%` and `_` are special, every other character is literal ([Spark LIKE][s-like], [Databricks `like`][d-like])",
+      "reproduces": "`RLIKE` with the pattern rewritten as a regular expression",
+      "evidence": "Both",
+      "naive_built_in": "like"
+    },
+    {
+      "id": "2.10",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "`\\` is the default escape character, so `\\_` matches only a literal underscore ([Spark LIKE][s-like])",
+      "reproduces": "An explicit `ESCAPE` clause naming a character the pattern does not use",
+      "evidence": "Both"
+    },
+    {
+      "id": "2.11",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "`'ABCx'`: the documented example `replace('ABCabc', 'abc', 'DEF')` returns `'ABCDEF'` ([Spark string functions][s-fstring])",
+      "reproduces": "Not established whether these functions honour a non-binary collation (§11)",
+      "evidence": "Both",
+      "naive_built_in": "replace"
+    },
+    {
+      "id": "2.12",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "`'ab!'`: `CAST` treats `CHAR` and `VARCHAR` as `STRING`; only table columns pad ([Spark migration guide][s-migration], [Spark data types][s-types])",
+      "reproduces": "`rpad(x, n)`",
+      "evidence": "Both",
+      "naive_built_in": "CAST"
+    },
+    {
+      "id": "2.13",
+      "section": "2. Collation, case sensitivity and trailing spaces",
+      "behaviour": "Not truncated: `CAST` ignores the length ([Spark migration guide][s-migration])",
+      "reproduces": "`substring(x, 1, n)` or `left(x, n)`",
+      "evidence": "Both",
+      "naive_built_in": "CAST"
+    },
+    {
+      "id": "3.1",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "`2.5`: `/` returns `DOUBLE` unless both operands are `DECIMAL` ([Databricks `/`][d-slash])",
+      "reproduces": "`div`, which returns the integral part as `BIGINT` and truncates toward zero (`-5.9 div 1` is `-5`) ([Databricks `div`][d-div], [Spark math functions][s-fmath])",
+      "evidence": "Both",
+      "naive_built_in": "/"
+    },
+    {
+      "id": "3.2",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "`1.5`: the result is `DOUBLE` ([Databricks `avg`][d-avg])",
+      "reproduces": "`sum(c) div count(c)`",
+      "evidence": "Both",
+      "naive_built_in": "avg"
+    },
+    {
+      "id": "3.3",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "`DECIMAL(p + 4, s + 4)` ([Databricks `avg`][d-avg])",
+      "reproduces": "Cast the result to the T-SQL type. Whether the last digit then agrees is not established (§11)",
+      "evidence": "Both",
+      "naive_built_in": "avg"
+    },
+    {
+      "id": "3.4",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "`BIGINT` for any integral input; `DECIMAL(p + min(10, 31-p), s)` for decimal input. ANSI off: a `BIGINT` overflow wraps ([Databricks `sum`][d-sum])",
+      "reproduces": "Cast the result to the T-SQL type",
+      "evidence": "Both",
+      "naive_built_in": "sum"
+    },
+    {
+      "id": "3.5",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "About `7.9E-31`: `pow` returns `DOUBLE` ([Databricks `pow`][d-pow])",
+      "reproduces": "Cast the result to the first argument's type",
+      "evidence": "Both",
+      "naive_built_in": "pow"
+    },
+    {
+      "id": "3.6",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "`round` takes two arguments, always rounds half up and reduces the scale ([Databricks `round`][d-round])",
+      "reproduces": "None found. A converter that drops the third argument rounds where T-SQL truncated",
+      "evidence": "Both",
+      "naive_built_in": "round"
+    },
+    {
+      "id": "3.7",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "`TINYINT` is -128 to 127 ([Databricks TINYINT][d-tinyint]). ANSI on: overflow error. ANSI off: wraps",
+      "reproduces": "Map `tinyint` to `SMALLINT`",
+      "evidence": "Both"
+    },
+    {
+      "id": "3.8",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "Default is `DECIMAL(10, 0)` ([Databricks DECIMAL][d-decimal]). ANSI on: overflow error. ANSI off: no error",
+      "reproduces": "Always emit an explicit precision and scale",
+      "evidence": "Both"
+    },
+    {
+      "id": "3.9",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "ANSI on: `CAST_INVALID_INPUT`. ANSI off: `NULL` ([Databricks `cast`][d-cast])",
+      "reproduces": "None. Emit an explicit test for the empty string",
+      "evidence": "Both",
+      "naive_built_in": "cast"
+    },
+    {
+      "id": "3.10",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "Plain notation, without an exponent, for magnitudes from 0.001 up to 10,000,000 ([Databricks `cast`][d-cast])",
+      "reproduces": "None. Format explicitly",
+      "evidence": "Both",
+      "naive_built_in": "cast"
+    },
+    {
+      "id": "3.11",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "Spark has no `money` type; as `DECIMAL(19, 4)` a division follows the decimal scale rules and keeps more digits ([Spark ANSI][s-ansi])",
+      "reproduces": "Cast each intermediate result to `DECIMAL(19, 4)`",
+      "evidence": "Inferred",
+      "wording": "Spark has no money type, and as decimal(19, 4) a division follows the decimal scale rules and keeps more digits"
+    },
+    {
+      "id": "3.12",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "No equivalent function. An emulation such as `try_cast(x AS DOUBLE) IS NOT NULL` gives a different answer for these inputs",
+      "reproduces": "None",
+      "evidence": "Inferred",
+      "naive_built_in": "try_cast"
+    },
+    {
+      "id": "3.13",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "The same: partial sums per partition are combined in an order that depends on partitioning",
+      "reproduces": "None. Reconciliation applies a tolerance only to output columns whose lineage includes a floating-point aggregation, and names this entry in the evidence",
+      "evidence": "Inferred. Added by the owner in [How does reconciliation generate data and compare results?](https://github.com/Bach-To-The-Future/data-migration/issues/13)"
+    },
+    {
+      "id": "3.14",
+      "section": "3. Numbers: division, implicit conversion, decimal precision",
+      "behaviour": "`sum` over an integral column accumulates in `BIGINT` ([Databricks `sum`][d-sum]), so no running total leaves `int`; cast to `INT`, the result fails under ANSI only when the final total does not fit",
+      "reproduces": "None. A helper that fails when a running total leaves `int` reproduces SQL Server for a given order of rows; since SQL Server's order is not defined, a caveat stays in the report wherever the helper is used",
+      "evidence": "SQL Server half tested on the 2022 CU27 sandbox for the order shown; the dependence on plan order and the Spark half are inferred. Added by the owner in [Engine skeleton: one view converted end to end as a preview run](https://github.com/Bach-To-The-Future/data-migration/issues/36)",
+      "naive_built_in": "sum",
+      "wording": "Spark raises only when the final total does not fit"
+    },
+    {
+      "id": "4.1",
+      "section": "4. Dates and times",
+      "behaviour": "The timestamp keeps `.999`: six fractional digits are stored and nothing is rounded to a coarser grid ([Databricks TIMESTAMP][d-timestamp])",
+      "reproduces": "None. Matters for end-of-day predicates and for comparing against stored `datetime` values",
+      "evidence": "Both"
+    },
+    {
+      "id": "4.2",
+      "section": "4. Dates and times",
+      "behaviour": "The timestamp keeps the seconds ([Databricks TIMESTAMP][d-timestamp])",
+      "reproduces": "None. Emulate by adding 30 seconds and truncating to the minute",
+      "evidence": "Both"
+    },
+    {
+      "id": "4.3",
+      "section": "4. Dates and times",
+      "behaviour": "Six fractional digits by default; extra digits in a string or cast are truncated. Databricks `TIMESTAMP(p)` with 7 to 9 digits is in Beta ([Databricks TIMESTAMP][d-timestamp], [Databricks `cast`][d-cast])",
+      "reproduces": "None outside the Beta type",
+      "evidence": "Both"
+    },
+    {
+      "id": "4.4",
+      "section": "4. Dates and times",
+      "behaviour": "`TIMESTAMP` is an absolute instant shown in the session time zone; the offset is not kept ([Spark data types][s-types])",
+      "reproduces": "None. Carry the offset in a separate column",
+      "evidence": "Both"
+    },
+    {
+      "id": "4.5",
+      "section": "4. Dates and times",
+      "behaviour": "`TIMESTAMP` is interpreted in the session time zone, so the same stored value reads differently when the session zone changes; `TIMESTAMP_NTZ` ignores time zones ([Spark data types][s-types])",
+      "reproduces": "`TIMESTAMP_NTZ`",
+      "evidence": "Both"
+    },
+    {
+      "id": "4.6",
+      "section": "4. Dates and times",
+      "behaviour": "`current_timestamp()` in the session time zone, which defaults to UTC in Databricks SQL and to the JVM's zone in Apache Spark ([Databricks TIMEZONE][d-timezone], [Spark configuration][s-config])",
+      "reproduces": "Set the session time zone to the source server's zone",
+      "evidence": "Both",
+      "naive_built_in": "current_timestamp"
+    },
+    {
+      "id": "4.7",
+      "section": "4. Dates and times",
+      "behaviour": "`0` (derived): `datediff(unit, start, end)` and `timestamp_diff` count whole elapsed units ([Databricks `datediff` (timestamp)][d-datediff3], [PySpark `timestamp_diff`][p-tsdiff])",
+      "reproduces": "None single. Year: `year(end) - year(start)`. Month: year difference times 12 plus month difference. Day: two-argument `datediff` on dates. Smaller units: truncate both sides with `date_trunc`, then difference",
+      "evidence": "Both",
+      "naive_built_in": "datediff"
+    },
+    {
+      "id": "4.8",
+      "section": "4. Dates and times",
+      "behaviour": "Two-argument `datediff(endDate, startDate)` takes the end first ([Spark datetime functions][s-fdatetime], [PySpark `datediff`][p-datediff])",
+      "reproduces": "Swap the arguments; keeping T-SQL's order flips the sign",
+      "evidence": "Both",
+      "naive_built_in": "datediff"
+    },
+    {
+      "id": "4.9",
+      "section": "4. Dates and times",
+      "behaviour": "`dayofweek` is fixed at 1 = Sunday, giving `7`; `weekday` is 0 = Monday ([Spark datetime functions][s-fdatetime])",
+      "reproduces": "`dayofweek` only when the source runs with `DATEFIRST 7`; otherwise compute from it",
+      "evidence": "Both",
+      "naive_built_in": "dayofweek"
+    },
+    {
+      "id": "4.10",
+      "section": "4. Dates and times",
+      "behaviour": "`53` (derived): `weekofyear` is ISO 8601, Monday start, week 1 has more than 3 days ([Spark datetime functions][s-fdatetime], [Databricks `weekofyear`][d-weekofyear])",
+      "reproduces": "None for `week`. T-SQL's `iso_week` datepart does match `weekofyear`",
+      "evidence": "Both",
+      "naive_built_in": "weekofyear"
+    },
+    {
+      "id": "4.11",
+      "section": "4. Dates and times",
+      "behaviour": "A number cast to `TIMESTAMP` is seconds since 1970-01-01 UTC, and the reverse cast gives seconds; both are allowed with ANSI on ([Databricks `cast`][d-cast], [Spark ANSI][s-ansi])",
+      "reproduces": "None. Rewrite the idiom (`date_trunc('DAY', d)` for the common one)",
+      "evidence": "Both",
+      "naive_built_in": "cast"
+    },
+    {
+      "id": "4.12",
+      "section": "4. Dates and times",
+      "behaviour": "ANSI on: error. ANSI off: `NULL` ([Databricks `cast`][d-cast])",
+      "reproduces": "None",
+      "evidence": "Both",
+      "naive_built_in": "cast"
+    },
+    {
+      "id": "4.13",
+      "section": "4. Dates and times",
+      "behaviour": "A cast accepts only the documented `yyyy-mm-dd` forms. ANSI on: error. ANSI off: `NULL` ([Databricks TIMESTAMP][d-timestamp], [Databricks `cast`][d-cast])",
+      "reproduces": "`to_date` with an explicit pattern chosen from the source's `DATEFORMAT`",
+      "evidence": "Both",
+      "naive_built_in": "cast"
+    },
+    {
+      "id": "5.1",
+      "section": "5. NULL handling",
+      "behaviour": "`NULL`: `concat` is null-intolerant ([Spark NULL semantics][s-null])",
+      "reproduces": "`concat_ws('', …)`, which skips `NULL` ([Spark string functions][s-fstring])",
+      "evidence": "Both",
+      "naive_built_in": "concat"
+    },
+    {
+      "id": "5.2",
+      "section": "5. NULL handling",
+      "behaviour": "`concat` and the double-pipe operator give `NULL` ([Spark NULL semantics][s-null])",
+      "reproduces": "`concat` matches the default. `concat_ws('', …)` matches the legacy `OFF` setting",
+      "evidence": "Both"
+    },
+    {
+      "id": "5.3",
+      "section": "5. NULL handling",
+      "behaviour": "`=` with a `NULL` operand is always `NULL`, so no rows ([Spark NULL semantics][s-null])",
+      "reproduces": "`<=>` or `Column.eqNullSafe`, or `isNull` ([Spark NULL semantics][s-null], [PySpark `eqNullSafe`][p-eqnullsafe])",
+      "evidence": "Both",
+      "naive_built_in": "="
+    },
+    {
+      "id": "5.4",
+      "section": "5. NULL handling",
+      "behaviour": "`coalesce` returns `'abcdef'`: the result is the least common type ([Spark ANSI][s-ansi])",
+      "reproduces": "Cast the replacement to the first argument's type, with `substring` for strings",
+      "evidence": "Both",
+      "naive_built_in": "coalesce"
+    },
+    {
+      "id": "5.5",
+      "section": "5. NULL handling",
+      "behaviour": "`coalesce` returns a decimal `1.5` ([Databricks type rules][d-typerules])",
+      "reproduces": "As 5.4",
+      "evidence": "Both",
+      "naive_built_in": "coalesce"
+    },
+    {
+      "id": "5.6",
+      "section": "5. NULL handling",
+      "behaviour": "ANSI on: `BIGINT`. ANSI off: `STRING` (row 1.7)",
+      "reproduces": "Explicit casts",
+      "evidence": "Both"
+    },
+    {
+      "id": "6.1",
+      "section": "6. Row counts and identity",
+      "behaviour": "The DataFrame API has no equivalent. Databricks has `GET DIAGNOSTICS … ROW_COUNT` for the latest DML statement, only inside a SQL compound statement (Runtime 18 LTS+) ([GET DIAGNOSTICS][d-getdiag]). Delta records per-operation counts in the table history ([Delta utility][dl-utility], [Databricks history][d-history])",
+      "reproduces": "None in the DataFrame API. Re-counting with `df.count()` runs the query again and can return a different number (row 9.11)",
+      "evidence": "Both"
+    },
+    {
+      "id": "6.2",
+      "section": "6. Row counts and identity",
+      "behaviour": "Delta history reports `numTargetRowsInserted`, `numTargetRowsUpdated` and `numTargetRowsDeleted` separately ([Delta utility][dl-utility])",
+      "reproduces": "Sum the three metrics",
+      "evidence": "Both"
+    },
+    {
+      "id": "6.3",
+      "section": "6. Row counts and identity",
+      "behaviour": "Delta identity columns are `BIGINT` only, unique and in multiples of the step, but \"not guaranteed to be contiguous\" ([Databricks identity columns][d-gencols], [Delta batch][dl-batch])",
+      "reproduces": "None for density. `row_number()` over an explicit ordering gives dense numbers. `monotonically_increasing_id()` is unique but not consecutive and not deterministic ([PySpark][p-mono])",
+      "evidence": "Both"
+    },
+    {
+      "id": "6.4",
+      "section": "6. Row counts and identity",
+      "behaviour": "No documented equivalent in Spark, Delta or Databricks. Emulating with `max(id)` reads other writers' rows and any explicitly supplied values",
+      "reproduces": "None",
+      "evidence": "Inferred",
+      "naive_built_in": "max"
+    },
+    {
+      "id": "6.5",
+      "section": "6. Row counts and identity",
+      "behaviour": "`CREATE TABLE … AS SELECT` cannot define an identity column, so the copy has plain values ([Databricks identity columns][d-gencols])",
+      "reproduces": "Create the table with the identity column first, then insert",
+      "evidence": "Both"
+    },
+    {
+      "id": "7.1",
+      "section": "7. Errors and transactions",
+      "behaviour": "By default each statement is its own transaction against one table, and nothing spans statements, so a converted \"rollback\" leaves the earlier writes committed ([Databricks ACID][d-acid])",
+      "reproduces": "Databricks only: `BEGIN ATOMIC … END` or `BEGIN TRANSACTION … COMMIT` through SQL, on Runtime 18.0+ with Unity Catalog managed tables that have catalog commits enabled; DML and `SELECT` only, no DDL ([Databricks transactions][d-txn]). Apache Spark with Delta: none ([Delta concurrency][dl-cc])",
+      "evidence": "Both"
+    },
+    {
+      "id": "7.2",
+      "section": "7. Errors and transactions",
+      "behaviour": "An uncaught Python exception stops the script at the second statement, so the third never runs. This is Python's behaviour and is not stated in the Spark documentation",
+      "reproduces": "A SQL compound statement with a `CONTINUE HANDLER`, which resumes at the next statement ([Spark SQL scripting][s-scripting], [compound statement][d-compound]); in Python, a `try` around each statement",
+      "evidence": "Inferred"
+    },
+    {
+      "id": "7.3",
+      "section": "7. Errors and transactions",
+      "behaviour": "`BEGIN ATOMIC` rolls back all changes when any statement fails ([compound statement][d-compound])",
+      "reproduces": "`BEGIN ATOMIC`, within the limits in 7.1. Handlers are not allowed inside an atomic block",
+      "evidence": "Both"
+    },
+    {
+      "id": "7.4",
+      "section": "7. Errors and transactions",
+      "behaviour": "An atomic block rolls back everything. For an interactive transaction the documentation says only that you must run `ROLLBACK` ([Databricks transactions][d-txn])",
+      "reproduces": "None found",
+      "evidence": "Both"
+    },
+    {
+      "id": "7.5",
+      "section": "7. Errors and transactions",
+      "behaviour": "Primary key, foreign key and unique constraints \"are informational only and aren't enforced\", so the duplicate is inserted ([Databricks constraints][d-constraints])",
+      "reproduces": "None. Rewrite as `MERGE`, or check before inserting",
+      "evidence": "Both"
+    },
+    {
+      "id": "7.6",
+      "section": "7. Errors and transactions",
+      "behaviour": "A Python `except` catches every exception, including analysis errors such as an unresolved column; a SQL `SQLEXCEPTION` handler covers every SQLSTATE outside classes `XX` and `02` ([Spark SQL scripting][s-scripting])",
+      "reproduces": "None exact. The handler can run for errors T-SQL would not have routed to `CATCH`",
+      "evidence": "Inferred"
+    },
+    {
+      "id": "8.1",
+      "section": "8. MERGE",
+      "behaviour": "The keys do not match under `UTF8_BINARY`, so `WHEN NOT MATCHED` inserts a second row",
+      "reproduces": "Collation on the key columns, as in §2",
+      "evidence": "Inferred"
+    },
+    {
+      "id": "8.2",
+      "section": "8. MERGE",
+      "behaviour": "The documented `UPDATE` syntax has no `FROM` clause ([Databricks UPDATE][d-update]); the natural rewrite as `MERGE` fails with `DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE` ([Databricks MERGE][d-merge])",
+      "reproduces": "None. Deduplicate the source with an explicit rule. This is an error and not silent, but the source code may depend on the lenient behaviour",
+      "evidence": "Both"
+    },
+    {
+      "id": "8.3",
+      "section": "8. MERGE",
+      "behaviour": "The documented Delta `MERGE` syntax has no `OUTPUT` or returning clause ([Databricks MERGE][d-merge]). Reading the table before and after is not atomic with the merge",
+      "reproduces": "None found (§11)",
+      "evidence": "Inferred"
+    },
+    {
+      "id": "8.4",
+      "section": "8. MERGE",
+      "behaviour": "The documented Delta DML has no triggers, so their side effects do not happen",
+      "reproduces": "None",
+      "evidence": "Inferred"
+    },
+    {
+      "id": "8.5",
+      "section": "8. MERGE",
+      "behaviour": "Allowed: \"an unconditional delete is not ambiguous\" ([Databricks MERGE][d-merge])",
+      "reproduces": "Not needed; Spark succeeds with the intended result",
+      "evidence": "Inferred"
+    },
+    {
+      "id": "9.1",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`length` returns `4`: \"includes the trailing spaces\" ([Spark string functions][s-fstring])",
+      "reproduces": "`length(rtrim(x))`",
+      "evidence": "Both",
+      "naive_built_in": "length"
+    },
+    {
+      "id": "9.2",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`octet_length('abc')` is `3` (derived): the byte length of the string, which Databricks stores as UTF-8 ([Spark string functions][s-fstring], [Databricks collation][d-collation])",
+      "reproduces": "None. Use `length(x) * 2` for `nvarchar` without supplementary characters",
+      "evidence": "Both",
+      "naive_built_in": "octet_length"
+    },
+    {
+      "id": "9.3",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`'f'` (derived): a negative position counts from the end ([Spark string functions][s-fstring], [Databricks `substr`][d-substr])",
+      "reproduces": "None. When the start can be below 1, emit `substring(x, 1, greatest(start + len - 1, 0))`",
+      "evidence": "Both",
+      "naive_built_in": "substr"
+    },
+    {
+      "id": "9.4",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "Not documented for position 0; PySpark says only that the position is 1-based ([PySpark `substring`][p-substring])",
+      "reproduces": "As 9.3",
+      "evidence": "Inferred",
+      "naive_built_in": "substring"
+    },
+    {
+      "id": "9.5",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`0`: \"if pos is less than 1, the result is 0\" ([Databricks `charindex`][d-charindex])",
+      "reproduces": "`charindex` or `locate` with `greatest(start, 1)`. Note `instr(str, substr)` takes its arguments in the opposite order ([Spark string functions][s-fstring])",
+      "evidence": "Both",
+      "naive_built_in": "charindex"
+    },
+    {
+      "id": "9.6",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "Empty string ([Spark string functions][s-fstring])",
+      "reproduces": "None; Spark is the lenient side",
+      "evidence": "Both"
+    },
+    {
+      "id": "9.7",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`split` takes a Java regular expression, so `'.'` matches every character, and it returns an array ([Spark string functions][s-fstring], [Databricks `split`][d-split])",
+      "reproduces": "`split` with the separator escaped as a regex literal, then `explode` or `posexplode`",
+      "evidence": "Both",
+      "naive_built_in": "split"
+    },
+    {
+      "id": "9.8",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`overlay` is the nearest function; its out-of-range behaviour is not documented ([Spark string functions][s-fstring])",
+      "reproduces": "Guard the arguments explicitly",
+      "evidence": "Inferred",
+      "naive_built_in": "overlay"
+    },
+    {
+      "id": "9.9",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`LIMIT` is \"used in conjunction with ORDER BY to ensure that the results are deterministic\"; without it the rows returned are not defined ([Spark LIMIT][s-limit], [Databricks LIMIT][d-limit])",
+      "reproduces": "None: no ordering exists to reproduce. The two engines, and two runs of either, can return different rows",
+      "evidence": "Both"
+    },
+    {
+      "id": "9.10",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`LIMIT` has no ties option ([Spark LIMIT][s-limit])",
+      "reproduces": "A `rank()` window filtered to `<= 5`. Dropping `WITH TIES` silently loses rows",
+      "evidence": "Inferred",
+      "naive_built_in": "LIMIT"
+    },
+    {
+      "id": "9.11",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "A DataFrame or temp view is lazily evaluated and recomputed when used, so it sees the modified `src` and re-evaluates non-deterministic expressions ([PySpark quickstart][p-quick], [createOrReplaceTempView][p-tempview])",
+      "reproduces": "Write the intermediate result to a table. Whether `cache()` gives a guaranteed snapshot is not established (§11)",
+      "evidence": "Both"
+    },
+    {
+      "id": "9.12",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`rand()` produces an independent value per row ([Spark math functions][s-fmath], [PySpark `rand`][p-rand])",
+      "reproduces": "Generate one value in Python and pass it as a literal",
+      "evidence": "Both",
+      "naive_built_in": "rand"
+    },
+    {
+      "id": "9.13",
+      "section": "9. String functions, TOP and other statements",
+      "behaviour": "`DataFrame.first()` returns the first row, or `None` when there are none ([PySpark `first`][p-first])",
+      "reproduces": "None. Emit `row = df.first()` and assign only when `row` is not `None`; several rows need an explicit ordering",
+      "evidence": "Both",
+      "naive_built_in": "DataFrame.first"
+    },
+    {
+      "id": "9.14",
+      "section": "9. String functions, TOP and other statements",
+      "target_only": true,
+      "example": "`'C:\\temp\\new'` inside embedded SQL text (the escape hatch, `expr`, `selectExpr`)",
+      "behaviour": "`\\` escapes in SQL string literals, so `\\t` and `\\n` become a tab and a newline ([Spark literals][s-literals])",
+      "reproduces": "A raw literal `r'…'`, or `spark.sql.parser.escapedStringLiterals=true` ([Spark literals][s-literals])",
+      "evidence": "Inferred"
+    }
+  ]
+}
