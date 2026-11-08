@@ -4,6 +4,9 @@
 name: Sandbox and engine
 
 on:
+  # Most work lands directly on master; the repository is public, so runs are free.
+  push:
+    branches: [master]
   pull_request:
     branches: [master]
   schedule:
@@ -13,8 +16,8 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request supersedes its running check; a nightly or manual run on
-# master is never cancelled by another.
+# A new push to a pull request supersedes its running check. Runs on master (each push,
+# nightly, manual) are never cancelled, so every commit there gets its own result.
 concurrency:
   group: sandbox-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
