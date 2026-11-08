@@ -19,7 +19,9 @@ permissions:
 # A new push to a pull request supersedes its running check. Runs on master (each push,
 # nightly, manual) are never cancelled, so every commit there gets its own result.
 concurrency:
-  group: sandbox-${{ github.event_name }}-${{ github.ref }}
+  # One group per pull request; every other run is its own group, since a shared group
+  # would also drop queued runs.
+  group: sandbox-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
