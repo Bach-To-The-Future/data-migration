@@ -306,12 +306,37 @@ def test_changing_one_table_changes_only_that_tables_hash_and_the_raw_capture(en
     assert after.id != before.id
 
 
+# Raw-capture columns SQL Server updates by itself, with no change by anyone (ADR 0024,
+# Consequences): log truncation state, SQL Agent's next run, and row-derived counters.
+SERVER_MAINTAINED = {("sys.databases", "log_reuse_wait"), ("sys.databases", "log_reuse_wait_desc"),
+                     ("dbo.sysjobschedules", "next_run_date"), ("dbo.sysjobschedules", "next_run_time"),
+                     ("sys.identity_columns", "last_value"), ("sys.sequences", "current_value"),
+                     ("sys.partitions", "rows")}
+
+
+def _changed_cells(before: dict, after: dict) -> set[tuple[str, str]]:
+    """(view, column) of every cell that differs between two captures of one view."""
+    changed = {(before["view"], "(row count)")} if len(before["rows"]) != len(after["rows"]) else set()
+    for old, new in zip(before["rows"], after["rows"]):
+        changed |= {(before["view"], c) for c in old if old.get(c) != new.get(c)}
+    return changed
+
+
 def test_re_extracting_an_unchanged_server_invalidates_nothing(engagement, scratch):
     first = engine.extract(engagement, scratch)
     second = engine.extract(engagement, scratch)
 
-    assert first.id == second.id
-    assert [o.content_hash for o in first.objects] == [o.content_hash for o in second.objects]
+    # Every object conversion reads is unchanged, so no cache key moves.
+    assert [(o.identity, o.content_hash) for o in first.objects if o.kind != "raw_capture"] == [
+        (o.identity, o.content_hash) for o in second.objects if o.kind != "raw_capture"]
+    # The raw capture changes only where SQL Server changed its own metadata meanwhile; then,
+    # and only then, the snapshot identifier changes with it (ADR 0023).
+    cells = set()
+    for o in first.objects:
+        if o.kind == "raw_capture" and o.content_hash != second.get(o.identity).content_hash:
+            cells |= _changed_cells(facts(first, o.identity), facts(second, o.identity))
+    assert cells <= SERVER_MAINTAINED, cells - SERVER_MAINTAINED
+    assert (first.id == second.id) == (not cells)
 
 
 # ---------------------------------------------------------------- name adjustments
