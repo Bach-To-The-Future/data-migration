@@ -6,6 +6,8 @@ Entries are copied unchanged from [the research catalogue](../research/tsql-spar
 
 Fourteen entries were marked "Inferred" from documentation; thirteen were later confirmed on SQL Server and local Spark, and entry 8.5 was refuted (no difference). Those results are in [Annex G](annex-g-agreements-and-tested-differences.md), not in the entries below.
 
+This annex is also data, in [`engine/src/migrt/targets/pyspark/differences.json`](../../engine/src/migrt/targets/pyspark/differences.json), and the engine's tests check that the two agree cell by cell: change both together.
+
 
 ## 1. ANSI mode
 

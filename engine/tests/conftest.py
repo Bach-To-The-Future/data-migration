@@ -5,18 +5,20 @@ import uuid
 
 import pytest
 
-from migrt import engine
-
 
 @pytest.fixture
 def engagement():
     """A fresh engagement with its own control database, dropped afterwards."""
+    from migrt import engine
+
     eng = engine.Engagement(name=f"test_{uuid.uuid4().hex[:10]}", control_server_dsn=os.environ["MIGRT_CONTROL_DSN"])
     yield eng
     engine.delete_engagement_data(eng)
 
 
 def sandbox_server(login="migration_extractor", password=None, databases=("RetailSample",)):
+    from migrt import engine
+
     return engine.SqlServerSource(
         host=os.environ.get("MSSQL_HOST", "sqlserver"),
         port=1433,

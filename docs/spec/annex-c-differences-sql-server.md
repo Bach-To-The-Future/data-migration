@@ -8,6 +8,8 @@ Thirteen of this half's entries were marked "Inferred" from documentation; twelv
 
 Entry 9.14 is in Annex D only: it concerns SQL text the target embeds in its escape hatch, not a SQL Server construct (decided in [Independent review of the assembled spec](https://github.com/Bach-To-The-Future/data-migration/issues/28)). So this half has 83 entries and Annex D 84, counting entry 3.14, added after the research catalogue was copied.
 
+This annex is also data, in [`engine/src/migrt/sources/sqlserver/differences.json`](../../engine/src/migrt/sources/sqlserver/differences.json), and the engine's tests check that the two agree cell by cell: change both together.
+
 The **Vocabulary** column names the operations and types in [Annex A](../spec-drafts/operation-vocabulary.md) that carry each entry's meaning. Lowering resolves the construct into them, using catalog types and collations; where meaning depends on operand types, it chooses the operation that means exactly that. A comparison rule is the case, accent and trailing-space behaviour taken from SQL Server's collation precedence.
 
 ## 1. ANSI mode

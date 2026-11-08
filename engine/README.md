@@ -51,6 +51,8 @@ sh sandbox/engine-tests.sh -k layer1  # arguments go to pytest
 
 All three run in the toolbox; the tests run against the sandbox SQL Server and Postgres, through the engine's library interface, the PySpark target's layer-1 contract, and the control database for the immutability claim. Imports of .NET namespaces carry a targeted `pyright: ignore`, because pythonnet provides them only at run time.
 
+Tests that need no server, such as `tests/test_differences.py`, also run on the host for a quick loop: `cd engine && PYTHONPATH=src python -m pytest tests/test_differences.py`. The sandbox run above stays the gate.
+
 A pre-commit hook lints staged engine files with pyflakes on the host, without Docker. Enable it once per clone:
 
 ```

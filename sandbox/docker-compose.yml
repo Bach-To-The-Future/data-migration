@@ -20,6 +20,14 @@ services:
       - sqlserver-data:/var/opt/mssql
       - ../corpus/public/.cache:/var/opt/mssql/backup:ro
     mem_limit: 4g
+    # Healthy once it accepts logins and every database has finished recovery, so the
+    # tools container never starts against a server that is still coming up.
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -b -Q \"IF EXISTS (SELECT 1 FROM sys.databases WHERE state_desc <> 'ONLINE') RAISERROR('a database is not online yet', 16, 1)\""]
+      interval: 5s
+      timeout: 10s
+      start_period: 30s
+      retries: 60
 
   # The control database server: one Postgres database per engagement (ADR 0007).
   postgres:
@@ -32,6 +40,11 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U migrt -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
   # Python with PySpark, Delta, .NET with ScriptDom and SqlClient, and the engine's
   # dependencies. Runs the corpus build, the difference tests and the engine, so the
@@ -51,8 +64,10 @@ services:
       - ..:/work
     working_dir: /work
     depends_on:
-      - sqlserver
-      - postgres
+      sqlserver:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     profiles: ["tools"]
 
 volumes:
