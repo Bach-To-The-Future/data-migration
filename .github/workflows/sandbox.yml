@@ -1,0 +1,56 @@
+# The repo's guardrail beyond the local pre-commit hook (issue #37): on plain Docker Engine,
+# with no Docker Desktop, rebuild the sandbox and both corpora from scratch, check that the
+# corpus manifest is byte-identical, then run the engine's lint, types and tests.
+name: Sandbox and engine
+
+on:
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: "17 2 * * *"      # nightly, 02:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sandbox-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # The SQL Server and toolbox images and the restored public databases need more disk
+      # than the runner leaves free; these preinstalled SDKs are unused here.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Docker Engine and Python
+        run: |
+          docker version
+          docker compose version
+          python3 --version
+
+      # From scratch: a fresh runner has no data volumes, no sandbox/.env and no cached
+      # backups, so this generates secrets, downloads and checks the backups, builds the
+      # toolbox image (with the .NET libraries and pyright), restores and exports the public
+      # corpus, builds the sample, runs it, and rewrites the manifest.
+      - name: Build the sandbox and both corpora
+        run: python3 corpus/build.py
+
+      - name: The manifest is byte-identical
+        run: |
+          python3 -c "import json; n = len(json.load(open('corpus/manifest.json', encoding='utf-8'))['artefacts']); print(n, 'artefacts'); assert n == 133, n"
+          git diff --exit-code -- corpus/manifest.json corpus/public/backups.json
+
+      # Lint (pyflakes), types (pyright) and tests (pytest), in the toolbox, against the
+      # SQL Server and Postgres the build started.
+      - name: Engine checks
+        run: sh sandbox/engine-tests.sh
