@@ -45,13 +45,15 @@ DEPENDENCY_VIEW = "sys.sql_expression_dependencies"   # read only where SELECT o
 MSDB_VIEWS = tuple(f"dbo.{t}" for t in MSDB_TABLES)
 # What the snapshot's identity leaves out (ADR 0023, amended), and nothing but the report may
 # read. Raw-capture columns that change with nobody acting on the client's objects: log
-# truncation state, SQL Agent's next run and run history, and partition row counts (which
+# truncation state, SQL Agent's next run and run history, partition row counts (which
 # Query Store's internal tables move by themselves, and from which a table's row count is
-# built). And volatile informational facts: a table's row count. These lists change only by
-# a recorded decision; a test holds them to the ADR. Identity last_value and sequence
-# current_value are not here: they stay in the identity (ADR 0024).
+# built), and the counters that move with the client's rows: an identity's last value and a
+# sequence's current and last used values. And volatile informational facts: a table's row
+# count. These lists change only by a recorded decision; a test holds them to the ADR.
 IGNORED_FOR_IDENTITY = {
     "sys.databases": ("log_reuse_wait", "log_reuse_wait_desc"),
+    "sys.identity_columns": ("last_value",),
+    "sys.sequences": ("current_value", "last_used_value"),
     "dbo.sysjobschedules": ("next_run_date", "next_run_time"),
     "dbo.sysjobsteps": ("last_run_outcome", "last_run_duration", "last_run_retries", "last_run_date",
                         "last_run_time"),

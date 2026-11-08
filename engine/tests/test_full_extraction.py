@@ -479,6 +479,28 @@ def test_row_derived_counters_stay_in_the_raw_capture_only(engagement, scratch):
     assert not any("last_value" in c for c in facts(snapshot, "MigrtExtractTest.s.Parent")["columns"])
 
 
+def test_inserting_rows_and_drawing_sequence_values_leaves_the_snapshot_unchanged(engagement, scratch,
+                                                                                  scratch_database):
+    """The counters move with the client's rows, not its objects (ADR 0023, amended): the
+    identifier leaves them out, and the extraction records the raw captures that differed."""
+    before = engine.extract(engagement, scratch)
+    with sa_connection(scratch_database) as sa:
+        sa.query("INSERT INTO s.Parent (Code) VALUES (N'counter')")
+        sa.query("SELECT NEXT VALUE FOR s.Seq")
+    try:
+        after = engine.extract(engagement, scratch)
+    finally:
+        with sa_connection(scratch_database) as sa:
+            sa.query("DELETE FROM s.Parent WHERE Code = N'counter'")
+
+    assert after.id == before.id
+    moved = {o.identity for o in after.objects if o.content_hash != before.get(o.identity).content_hash}
+    assert extractor.raw_identity("db:MigrtExtractTest", "sys.identity_columns") in moved
+    assert extractor.raw_identity("db:MigrtExtractTest", "sys.sequences") in moved
+    assert "MigrtExtractTest.s.Parent" in moved          # its row count, informational
+    assert {i for i in moved if not i.startswith("raw:")} == {"MigrtExtractTest.s.Parent"}
+
+
 def test_an_unsupported_server_is_refused_before_anything_is_read():
     with pytest.raises(extractor.UnsupportedServer, match="before 2017"):
         extractor.check_version({"EngineEdition": "3", "Edition": "Enterprise Edition", "ProductVersion": "13.0.7000.253"})
