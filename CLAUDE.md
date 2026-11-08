@@ -4,6 +4,8 @@
 
 Issues and specs live in this repo's GitHub Issues, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
+Once an implemented ticket's acceptance criteria are met and its commits are pushed, close the issue with a summary comment: the commits, what was built, and anything deferred, naming the ticket that takes it. An implemented ticket left open blocks everything behind it in `tools/tickets.py`.
+
 ### Triage labels
 
 The five canonical triage roles use their default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
