@@ -8,8 +8,10 @@ its role:
 - **Data definition**: a .sql file holding only data-definition statements (with SET, USE
   and PRINT). For a database read from no server, its statements are replayed in a fixed
   order to build the catalog: every CREATE before every ALTER, file-name order within each,
-  statement order within a file; CREATE INDEX and CREATE OR ALTER count as CREATE. A
-  second CREATE of the same object is an extraction error naming both files. Beside a live server, the server
+  statement order within a file. CREATE INDEX runs between the two, after every other
+  CREATE, because script exports put indexes in files of their own that can sort before
+  their tables'; CREATE OR ALTER counts as CREATE. A second CREATE of the same object, or
+  of the same index, is an extraction error naming both files. Beside a live server, the server
   is the source of its databases' objects, and such files are not replayed; each statement
   is listed as superseded (ADR 0025).
 - **Query batch**: any other .sql file. It is an artefact, kept whole; its own data
@@ -60,7 +62,6 @@ NAMED_BY_SERVER = "not named in the file: SQL Server names it when it is created
 DEFAULT_SCHEMA = "a one-part name is created in the creator's default schema, assumed dbo"
 SEQUENCE_DEFAULT = "not in the CREATE SEQUENCE statement: SQL Server's default"
 FIRING_ORDER = "not set in the files: a trigger fires in no set order until sp_settriggerorder sets one"
-VERSION_DEFAULT = "16"   # SQL Server 2022, the release the sandbox runs
 RELEASES = {"14": "2017", "15": "2019", "16": "2022", "17": "2025"}
 LEVELS = {"14": 140, "15": 150, "16": 160, "17": 170}
 
@@ -535,11 +536,14 @@ class _Replay:
     # ------------------------------------------------------------ the replay
 
     def replay(self, statements: list[_Statement]) -> None:
-        """Every CREATE statement (CREATE INDEX and CREATE OR ALTER among them) in file-name
-        order, then every ALTER statement in file-name order (spec section 3)."""
-        creates, alters = [], []
+        """Every CREATE statement but CREATE INDEX (CREATE OR ALTER among them), then every
+        CREATE INDEX, then every ALTER statement, each group in file-name order (spec
+        section 3)."""
+        creates, indexes, alters = [], [], []
         for s in statements:
-            if s.kind in CREATES or s.kind in INDEXES or s.kind in CREATE_OR_ALTER:
+            if s.kind in INDEXES:
+                indexes.append(s)
+            elif s.kind in CREATES or s.kind in CREATE_OR_ALTER:
                 creates.append(s)
             elif s.kind in ALTERS or _procedure(s.fragment) == TRIGGER_ORDER:
                 alters.append(s)
@@ -553,7 +557,7 @@ class _Replay:
                 continue
             else:
                 self.skip(s, "not data definition the replay applies")
-        for s in creates:
+        for s in creates + indexes:
             if s.database not in self.databases:
                 self.skip(s, f"runs in database {s.database}, which this extraction does not read")
             elif s.kind in INDEXES:
@@ -630,6 +634,7 @@ class _Replay:
             self.add_constraint(table, c, s, None, trusted)
         for index in (definition.Indexes or []):
             if index.Unique:
+                self.index_named(table, _id(index.Name), s)
                 columns = [self.sorted_column(table, c, s) for c in index.Columns]
                 clustered = "CLUSTERED" if index.IndexType is not None and str(
                     index.IndexType.IndexTypeKind) == "Clustered" else "NONCLUSTERED"
@@ -762,6 +767,7 @@ class _Replay:
         table.data.setdefault("unique_indexes", [])
         table.data.setdefault("columns", [])
         clustered = f.Clustered is not None and bool(f.Clustered)
+        self.index_named(table, _id(f.Name), s)
         columns = [self.index_column(table, c, s) for c in f.Columns]
         table.data["unique_indexes"].append({
             "name": _id(f.Name), "columns": columns,
@@ -769,6 +775,14 @@ class _Replay:
             "filter": _text(s.text, f.FilterPredicate) if f.FilterPredicate is not None else None,
             "index_type": "CLUSTERED" if clustered else "NONCLUSTERED", "enabled": True})
         table.touched(s)
+
+    def index_named(self, table: _Object, name: str | None, s: _Statement) -> None:
+        """An index is created once: a second CREATE of it names both places."""
+        made = table.data.setdefault("index_where", {})
+        key = name if self.databases[table.database].case_sensitive else (name or "").casefold()
+        if key in made:
+            raise DuplicateCreate(f"{table.identity} index {name}", made[key], s.where)
+        made[key] = s.where
 
     def index_column(self, table: _Object, c, s: _Statement) -> dict:
         ids = c.Column.MultiPartIdentifier.Identifiers

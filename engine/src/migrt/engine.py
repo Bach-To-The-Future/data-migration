@@ -79,9 +79,9 @@ class Folder:
 
 @dataclasses.dataclass(frozen=True)
 class FolderSettings:
-    """What a server would have supplied, for databases extracted from folders alone: each
-    database's default collation and the time zone (both required), and optionally the SQL
-    Server release and each database's compatibility level."""
+    """What a server would have supplied, for databases extracted from folders alone, all
+    required: each database's default collation and compatibility level, the time zone,
+    and the SQL Server release."""
     collations: dict[str, str] = dataclasses.field(default_factory=dict)
     time_zone: str | None = None
     version: str | None = None

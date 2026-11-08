@@ -22,13 +22,14 @@ docker compose -f sandbox/docker-compose.yml --profile tools run --rm tools \
 
 It writes `out/retail_demo/converted/RetailSample/sales/views/vOrderTotals.py` and `out/retail_demo/report/report-data.json`, and prints the run's result as JSON. Every artefact in a preview run is "Not reconciled": nothing in it is converted. On SQL Server 2017, where `CURRENT_TIMEZONE()` fails, pass the server's time zone with `--time-zone`.
 
-Folders of exported files go beside the server with `--folder DB=PATH`, or stand alone with `--no-server`, which needs each database's default collation and the time zone:
+Folders of exported files go beside the server with `--folder DB=PATH`, or stand alone with `--no-server`, which needs each database's default collation and compatibility level, the SQL Server release and the time zone:
 
 ```
 docker compose -f sandbox/docker-compose.yml --profile tools run --rm tools \
     python -m migrt preview --engagement retail_files --no-server \
     --folder RetailSample=corpus/sample/database --folder RetailSample=corpus/sample/artefacts \
-    --collation RetailSample=SQL_Latin1_General_CP1_CI_AS --time-zone UTC \
+    --collation RetailSample=SQL_Latin1_General_CP1_CI_AS --compatibility-level RetailSample=160 \
+    --sql-server-version 2022 --time-zone UTC \
     --artefact RetailSample.sales.vOrderTotals --out out/retail_files
 ```
 

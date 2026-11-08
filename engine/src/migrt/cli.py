@@ -41,8 +41,8 @@ def _parser() -> argparse.ArgumentParser:
     preview.add_argument("--collation", action="append", default=[], metavar="DB=COLLATION",
                          help="without a server: database DB's default collation (required); repeatable")
     preview.add_argument("--compatibility-level", action="append", default=[], metavar="DB=LEVEL",
-                         help="without a server: database DB's compatibility level; repeatable")
-    preview.add_argument("--sql-server-version", help="without a server: the SQL Server release, such as 2019")
+                         help="without a server: database DB's compatibility level (required); repeatable")
+    preview.add_argument("--sql-server-version", help="without a server: the SQL Server release, such as 2019 (required)")
     preview.add_argument("--artefact", action="append", required=True, help="database.schema.name; repeatable")
     preview.add_argument("--out", required=True, type=pathlib.Path, help="where the delivered project is written")
     return p

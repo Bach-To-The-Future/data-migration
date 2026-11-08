@@ -14,8 +14,10 @@ from migrt.sources.sqlserver import extractor, folders, names
 from conftest import SCRATCH_BATCHES, sandbox_server
 
 SAMPLE = pathlib.Path(__file__).parents[2] / "corpus" / "sample"
+DB = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": 160})
 SAMPLE_FOLDERS = [engine.Folder(SAMPLE / "database", "RetailSample"), engine.Folder(SAMPLE / "artefacts", "RetailSample")]
-RETAIL = engine.FolderSettings(collations={"RetailSample": "SQL_Latin1_General_CP1_CI_AS"}, time_zone="UTC")
+RETAIL = engine.FolderSettings(collations={"RetailSample": "SQL_Latin1_General_CP1_CI_AS"}, time_zone="UTC",
+                               version="2022", compatibility_levels={"RetailSample": 160})
 JOB = "agent_job:RetailSample - Nightly sales roll-up"
 PACKAGE = "ssis_package:RetailSample/recognised/ssis/LoadDailySales.dtsx"
 
@@ -93,7 +95,8 @@ def test_folders_alone_rebuild_a_case_sensitive_database_with_every_kind_of_obje
                                                                                     tmp_path):
     (tmp_path / "scratch.sql").write_text("\nGO\n".join(SCRATCH_BATCHES) + "\nGO\n", encoding="utf-8")
     folder = engine.extract(engagement, None, [engine.Folder(tmp_path, scratch_database)],
-                            engine.FolderSettings({scratch_database: "Latin1_General_CS_AS"}, "UTC"))
+                            engine.FolderSettings({scratch_database: "Latin1_General_CS_AS"}, "UTC", "2022",
+                                                  {scratch_database: 160}))
     live = engine.extract(engagement, sandbox_server(databases=(scratch_database,)))
 
     assert differences(live, folder, unnamed_ok=True) == []
@@ -113,7 +116,7 @@ def test_create_statements_run_before_alter_statements_in_file_name_order(engage
     (tmp_path / "c_alter.sql").write_text("ALTER TABLE dbo.T ALTER COLUMN B varchar(9) NOT NULL;\n", encoding="utf-8")
 
     snapshot = engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")],
-                              engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC"))
+                              DB)
 
     t = facts(snapshot, "Db.dbo.T")
     assert [(c["name"], c["max_length"], c["nullable"]) for c in t["columns"]] == [("A", 4, False), ("B", 9, False)]
@@ -129,12 +132,11 @@ def test_a_second_create_of_an_object_is_an_error_naming_both_files(engagement, 
 
     with pytest.raises(engine.DuplicateCreate) as raised:
         engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")],
-                       engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC"))
+                       DB)
 
     assert "Db/one.sql line 1" in str(raised.value) and "Db/two.sql line 2" in str(raised.value)
 
 
-DB = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC")
 
 
 @pytest.mark.parametrize("files, named", [
@@ -153,12 +155,24 @@ def test_a_create_or_alter_or_a_job_made_twice_is_a_duplicate_too(engagement, tm
     assert all(n in str(raised.value) for n in named)
 
 
-def test_an_index_in_a_file_before_its_tables_file_fails_loudly(engagement, tmp_path):
-    """CREATE INDEX is a CREATE, replayed in file-name order like any other."""
-    (tmp_path / "a.sql").write_text("CREATE UNIQUE INDEX UX ON dbo.T (A);", encoding="utf-8")
-    (tmp_path / "b.sql").write_text("CREATE TABLE dbo.T (A int NOT NULL);", encoding="utf-8")
+def test_create_index_runs_after_the_other_creates_so_an_index_file_may_sort_first(engagement, tmp_path):
+    """Script exports put indexes in files of their own, which can sort before their tables'
+    (spec section 3: CREATE, then CREATE INDEX, then ALTER, each in file-name order)."""
+    (tmp_path / "a_index.sql").write_text("CREATE UNIQUE INDEX UX ON dbo.T (A);", encoding="utf-8")
+    (tmp_path / "b_table.sql").write_text("CREATE TABLE dbo.T (A int NOT NULL);", encoding="utf-8")
+    (tmp_path / "c_index.sql").write_text("CREATE UNIQUE INDEX UX2 ON dbo.T (A DESC);", encoding="utf-8")
 
-    with pytest.raises(engine.FolderExtractionError, match="Db/a.sql line 1.*no CREATE"):
+    snapshot = engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
+
+    assert [i["name"] for i in facts(snapshot, "Db.dbo.T")["unique_indexes"]] == ["UX", "UX2"]
+
+
+def test_a_duplicate_create_index_is_an_error_too(engagement, tmp_path):
+    (tmp_path / "a.sql").write_text("CREATE TABLE dbo.T (A int NOT NULL);\nCREATE UNIQUE INDEX UX ON dbo.T (A);",
+                                    encoding="utf-8")
+    (tmp_path / "b.sql").write_text("CREATE UNIQUE INDEX UX ON dbo.T (A);", encoding="utf-8")
+
+    with pytest.raises(engine.DuplicateCreate, match="Db/a.sql line 2.*Db/b.sql line 1"):
         engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], DB)
 
 
@@ -181,12 +195,14 @@ def test_folder_settings_beside_a_server_are_refused_not_ignored(engagement):
         engine.extract(engagement, sandbox_server(), SAMPLE_FOLDERS, RETAIL)
 
 
-def test_the_collation_and_the_time_zone_are_required_without_a_server(engagement):
+def test_the_collation_time_zone_version_and_level_are_required_without_a_server(engagement):
     with pytest.raises(engine.SettingsRequired) as raised:
         engine.extract(engagement, None, SAMPLE_FOLDERS, engine.FolderSettings())
 
     assert raised.value.missing == ["the time zone, which a server would have supplied",
-                                    "the default collation of database RetailSample"]
+                                    "the SQL Server version, which selects the sandbox",
+                                    "the default collation of database RetailSample",
+                                    "the compatibility level of database RetailSample, which selects the parser"]
 
 
 def test_everything_else_a_server_would_have_supplied_is_recorded_as_assumed(engagement):
@@ -196,7 +212,9 @@ def test_everything_else_a_server_would_have_supplied_is_recorded_as_assumed(eng
     assert {f.provenance.kind for f in server.facts} == {"assumed"}
     database = snapshot.get("RetailSample")
     assert {f.provenance.kind for f in database.facts} == {"assumed"}
-    assert database.fact("compatibility_level", extractor.SOURCE).value == 160
+    level = database.fact("compatibility_level", extractor.SOURCE)
+    assert (level.value, level.provenance.detail) == (160, "the compatibility level setting")
+    assert server.fact("version").provenance.detail == "the version setting: SQL Server 2022"
     view = snapshot.get("RetailSample.sales.vOrderTotals")
     assert view.fact("ansi_nulls", extractor.SOURCE).provenance.kind == "assumed"
     assert view.fact("source_text").provenance == view.fact("name_parts").provenance
@@ -259,7 +277,7 @@ def test_every_file_is_kept_verbatim_and_every_other_file_is_listed(engagement, 
     (tmp_path / "notes.txt").write_text("not read", encoding="utf-8")
 
     snapshot = engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")],
-                              engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC"))
+                              DB)
 
     raw = facts(snapshot, "raw:file:Db/t.sql")
     assert raw["text"] == text and raw["encoding"] == "utf-16"
@@ -275,7 +293,8 @@ def test_one_command_previews_a_view_from_folders_alone(engagement, tmp_path, ca
 
     assert cli.main(common) == 3
     assert "the default collation of database RetailSample" in capsys.readouterr().err
-    assert cli.main(common + ["--collation", "RetailSample=SQL_Latin1_General_CP1_CI_AS"]) == 0
+    assert cli.main(common + ["--collation", "RetailSample=SQL_Latin1_General_CP1_CI_AS",
+                              "--sql-server-version", "2022", "--compatibility-level", "RetailSample=160"]) == 0
     summary = json.loads(capsys.readouterr().out)
     assert [a["status"] for a in summary["artefacts"]] == ["Not reconciled"]
     assert (tmp_path / "converted/RetailSample/sales/views/vOrderTotals.py").is_file()

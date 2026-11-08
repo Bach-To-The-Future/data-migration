@@ -292,9 +292,11 @@ class Reading:
 class Settings:
     """What a server would have supplied, given by the operator for databases read from
     folders alone (spec section 3). The time zone is passed as `time_zone`."""
-    collations: dict[str, str] = dataclasses.field(default_factory=dict)   # required: each database's default
+    # All required: the version selects the sandbox, and a level selects the parser and
+    # changes what code means (decided by the owner on issue #40).
+    collations: dict[str, str] = dataclasses.field(default_factory=dict)   # each database's default
     version: str | None = None                                             # a release, such as "2019"
-    compatibility_levels: dict[str, int] = dataclasses.field(default_factory=dict)
+    compatibility_levels: dict[str, int] = dataclasses.field(default_factory=dict)   # each database's
 
 
 class SettingsRequired(Exception):
@@ -323,8 +325,11 @@ def extract(address: ServerAddress | None, databases: list[str], *, time_zone: s
 
 def _require(folder_inputs, settings: Settings, time_zone: str | None) -> None:
     missing = [] if time_zone else ["the time zone, which a server would have supplied"]
-    missing += [f"the default collation of database {d}" for d in _folder_databases(folder_inputs)
-                if not _setting(settings.collations, d)]
+    missing += [] if settings.version else ["the SQL Server version, which selects the sandbox"]
+    for d in _folder_databases(folder_inputs):
+        missing += [] if _setting(settings.collations, d) else [f"the default collation of database {d}"]
+        missing += [] if _setting(settings.compatibility_levels, d) else [
+            f"the compatibility level of database {d}, which selects the parser"]
     if not folder_inputs:
         missing.append("a folder of files, or a live server")
     if missing:
@@ -447,8 +452,6 @@ def _job_references(snapshot: Snapshot, contexts: dict[str, folders.DatabaseCont
 
 
 def _folder_version(settings: Settings) -> str:
-    if settings.version is None:
-        return folders.VERSION_DEFAULT
     major = next((m for m, release in folders.RELEASES.items() if settings.version in (m, release)), None)
     if major is None:
         raise UnsupportedServer(f"SQL Server {settings.version}: extraction from folders takes a release of "
@@ -461,8 +464,7 @@ def _folder_server(settings: Settings, time_zone: str | None, major: str,
     """The server and database objects of an extraction without a server: every fact is a
     setting or SQL Server's documented default, so every one is assumed."""
     release = folders.RELEASES[major]
-    version = Provenance("assumed", f"the version setting: SQL Server {release}" if settings.version else
-                         f"no version given: SQL Server {release}, the release the sandbox runs")
+    version = Provenance("assumed", f"the version setting: SQL Server {release}")
     unknown = Provenance("assumed", "no server: not known")
     first = min(databases, key=str.casefold)   # whatever order the folders were given in
     server = CatalogObject(folders.NO_SERVER, "server", (
@@ -477,8 +479,7 @@ def _folder_server(settings: Settings, time_zone: str | None, major: str,
     ))
     out = []
     for name in databases:
-        given = _setting(settings.compatibility_levels, name)
-        level = int(given or folders.LEVELS[major])
+        level = int(_setting(settings.compatibility_levels, name) or 0)   # required: _require checked it
         if level not in parser.PARSERS:
             raise UnsupportedServer(f"compatibility level {level} for database {name} is not one SQL Server has")
         default = Provenance("assumed", "SQL Server's default for a new database")
@@ -487,9 +488,7 @@ def _folder_server(settings: Settings, time_zone: str | None, major: str,
         out.append(CatalogObject(name, "database", (
             Fact("skeleton", "collation", _setting(settings.collations, name),
                  Provenance("assumed", "the database default collation setting")),
-            Fact(SOURCE, "compatibility_level", level, Provenance(
-                "assumed", "the compatibility level setting" if given else
-                f"no level given: {level}, the default for a database created on SQL Server {release}")),
+            Fact(SOURCE, "compatibility_level", level, Provenance("assumed", "the compatibility level setting")),
             Fact(SOURCE, "ansi_nulls_default", False, default),
             Fact(SOURCE, "quoted_identifier_default", False, default),
             Fact(SOURCE, "ansi_defaults", ansi, default),
