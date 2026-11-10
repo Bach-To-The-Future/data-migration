@@ -249,7 +249,7 @@ def read_files(folders: list[FolderInput]) -> list[SourceFile]:
             elif path.suffix.casefold() in EXPORT_SUFFIXES:
                 try:
                     text, encoding = _decode(path.read_bytes(), f"{folder.database}/{relative}")
-                except FolderExtractionError:
+                except (FolderExtractionError, UnicodeDecodeError):
                     files.append(SourceFile(folder, relative, None, None))   # not text: not an export
                 else:
                     files.append(SourceFile(folder, relative, text if shape_export.is_export(text) else None,
@@ -1572,7 +1572,8 @@ def extract(files: list[SourceFile], databases: dict[str, DatabaseContext], *,
                                         "this extraction does not read")
         p = Provenance("file", file.label)
         if file.text is None:
-            reason = ("a .csv file that is not a result-shape export: its header is not the script's in Annex F"
+            reason = ("a .csv file that is not a result-shape export: it is not text, or its header is not the "
+                      "script's in Annex F"
                       if file.suffix in EXPORT_SUFFIXES else "not a .sql, .dtsx or result-shape export file")
             roles.append({"file": file.label, "role": NOT_READ, "reason": reason})
             continue

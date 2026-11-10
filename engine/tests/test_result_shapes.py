@@ -267,9 +267,9 @@ def test_the_command_line_takes_the_sandbox(engagement, tmp_path, capsys):
 # What SQL Server describes on the real corpus databases that the sandbox, recreating the catalog
 # alone, does not. Full-text search is manual work by an earlier decision (spec section 6); a
 # natively compiled procedure needs memory-optimized tables and types, which the catalog does not
-# yet hold (the follow-up ticket "Memory-optimized tables, types and natively compiled procedures").
+# yet hold (issue #103, "Memory-optimized tables, types and natively compiled procedures").
 CORPUS_GAPS = {
-    "AdventureWorks2022.dbo.uspSearchCandidateResumes": "full-text search",
+    "AdventureWorks2022.dbo.uspSearchCandidateResumes": "full-text search, which is manual work",
     "WideWorldImporters.Website.RecordColdRoomTemperatures": "error 41323",
 }
 CORPUS = ("RetailSample", "AdventureWorks2022", "WideWorldImporters")
@@ -469,3 +469,23 @@ def test_a_malformed_export_is_an_extraction_error_naming_its_file_and_line(enga
 
     with pytest.raises(engine.FolderExtractionError, match=r"result-shapes\.csv.*line 2"):
         engine.extract(engagement, source, [folder])
+
+
+def test_an_export_entry_for_an_object_that_is_not_a_procedure_is_reported_too(engagement, source, tmp_path):
+    rows = export_csv().splitlines()
+    folder = folder_with(tmp_path, **{"result-shapes.csv": "\r\n".join([*rows, "s,vParents,1,Id,int,,,4,10,0,0,,"]) + "\r\n"})
+
+    snapshot = engine.extract(engagement, source, [folder])
+
+    found = engine.extraction_findings(snapshot)["result_shapes"]
+    assert found["export_unmatched"] == [{"file": f"{SHAPE_DB}/result-shapes.csv", "object": f"{SHAPE_DB}.s.vParents"}]
+    assert not snapshot.get(f"{SHAPE_DB}.s.vParents").has_fact("result_shape_unavailable")
+
+
+def test_a_csv_that_is_not_text_is_listed_as_not_read_with_its_own_reason(engagement, source, tmp_path):
+    (tmp_path / "blob.csv").write_bytes(b"\xff\xfe\x00\xd8garbage\x80")
+    
+    snapshot = engine.extract(engagement, source, [engine.Folder(tmp_path, SHAPE_DB)])
+
+    [entry] = [f for f in engine.extraction_findings(snapshot)["folders"]["files"] if f["file"].endswith("blob.csv")]
+    assert entry["role"] == folders.NOT_READ and "not text" in entry["reason"]

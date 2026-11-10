@@ -202,8 +202,6 @@ class _Scratch:
         return conn
 
     def create(self, collation: str, level: int) -> None:
-        if not SAFE_COLLATION.match(collation):
-            raise SqlServerError([])
         with self._open("master") as master:
             master.query(f"CREATE DATABASE {quote(self.name)} COLLATE {collation}")
             master.query(f"ALTER DATABASE {quote(self.name)} SET COMPATIBILITY_LEVEL = {int(level)}")
@@ -335,6 +333,8 @@ ORDER BY column_ordinal"""
 
 def described_shape(rows: list[dict]) -> list[dict] | str:
     """The shape a description gives, or the reason it could not be described."""
+    if rows and rows[0]["error_number"] == FULL_TEXT_ERROR:
+        return FULL_TEXT
     if rows and rows[0]["error_number"] is not None:
         return f"SQL Server could not describe it (error {rows[0]['error_number']}): {rows[0]['error_message'].strip()}"
     out = []
@@ -390,6 +390,8 @@ def _describe_database(address: SandboxAddress, statements: list[str] | None, da
         return refuse(f"compatibility level {level} is below {LOWEST_LEVEL}, which no sandbox accepts (ADR 0015): "
                       "its shapes come from the guarded remote tier if one exists, else the administrator's export "
                       "(spec section 3)")
+    if not SAFE_COLLATION.match(collation):
+        return refuse(f"the sandbox cannot be given the collation name {collation!r}, which SQL Server does not use")
     scratch = _Scratch(address, statements)
     try:
         try:
@@ -411,16 +413,21 @@ def _describe_database(address: SandboxAddress, statements: list[str] | None, da
         scratch.drop()
 
 
+def _not_recreated(made: _Recreation, target: CatalogObject) -> str:
+    why = made.not_recreated[target.identity]
+    return why if why == FULL_TEXT else f"it could not be recreated in the sandbox: {why}"
+
+
 def _describe(conn: Connection, made: _Recreation, target: CatalogObject, views: dict) -> _Outcome:
     _, schema, name = target.fact("name_parts").value
     if target.kind in FILE_BUILT_KINDS:
         if target.identity not in made.created:
-            return _Outcome(reason=f"it could not be recreated in the sandbox: {made.not_recreated[target.identity]}")
+            return _Outcome(reason=_not_recreated(made, target))
         return _Outcome(shape=views[(schema, name)], sandbox=True)
     if not _recreatable(target):
         return _Outcome(reason=_unextractable(target))
     if target.identity not in made.created:
-        return _Outcome(reason=f"it could not be recreated in the sandbox: {made.not_recreated[target.identity]}")
+        return _Outcome(reason=_not_recreated(made, target))
     described = described_shape(conn.query(DESCRIBE, {"name": _qualified(schema, name)}))
     if isinstance(described, str):
         return _Outcome(reason=described)
@@ -453,20 +460,21 @@ class ExportsDisagree(folders.FolderExtractionError):
         super().__init__(f"two result-shape exports both describe {identity}: {first} and {second}. Keep one.")
 
 
-def _settings_provenance(snapshot: Snapshot, target: CatalogObject, database: CatalogObject) -> tuple[str, list[str]]:
-    """Where the settings a shape was described under came from: server, unless any was assumed."""
+def _settings_provenance(target: CatalogObject, database: CatalogObject) -> tuple[str, list[str]]:
+    """Where the settings a shape was described under came from: the server, unless any was
+    assumed ("file" is the export's alone)."""
     used = [("the compatibility level", database.fact("compatibility_level", SOURCE).provenance),
             ("the default collation", database.fact("collation").provenance)]
     for setting in ("ansi_nulls", "quoted_identifier"):
         if target.has_fact(setting, SOURCE):
             used.append((f"the module's {setting.upper()}", target.fact(setting, SOURCE).provenance))
     assumed = [what for what, p in used if p.kind == "assumed"]
-    own = target.fact("source_text").provenance.kind if target.has_fact("source_text") else "server"
-    return ("assumed" if assumed else ("file" if own == "file" else "server")), assumed
+    return ("assumed" if assumed else "server"), assumed
 
 
-def _unavailable_kind(target: CatalogObject) -> str:
-    return "file" if target.has_fact("source_text") and target.fact("source_text").provenance.kind == "file" else "server"
+def _unavailable_kind(database: CatalogObject) -> str:
+    """The provenance of "could not be described": assumed where the database's settings are."""
+    return "assumed" if database.fact("compatibility_level", SOURCE).provenance.kind == "assumed" else "server"
 
 
 def attach(snapshot: Snapshot, sandbox: SandboxAddress | None, *, statements: list[str] | None = None) -> Snapshot:
@@ -492,9 +500,9 @@ def attach(snapshot: Snapshot, sandbox: SandboxAddress | None, *, statements: li
             outcomes[t.identity] = (_Outcome(shape=entry.shape, reason=reason), Provenance("file", label))
         elif t.kind == "clr_procedure" or not _recreatable(t):
             outcomes[t.identity] = (_Outcome(reason=_unextractable(t)),
-                                    Provenance(_unavailable_kind(t), "not described: it cannot be recreated"))
+                                    Provenance(_unavailable_kind(snapshot.get(db)), "not described: it cannot be recreated"))
         elif sandbox is None:
-            outcomes[t.identity] = (_Outcome(reason=NO_SANDBOX), Provenance(_unavailable_kind(t),
+            outcomes[t.identity] = (_Outcome(reason=NO_SANDBOX), Provenance(_unavailable_kind(snapshot.get(db)),
                                                                               "not described: no sandbox was given"))
         else:
             by_database.setdefault(db, []).append(t)
@@ -506,13 +514,13 @@ def attach(snapshot: Snapshot, sandbox: SandboxAddress | None, *, statements: li
         results, done = _describe_database(sandbox, statements, database, objects, by_database[db])
         ran[db] = done
         for t in by_database[db]:
-            kind, assumed = _settings_provenance(snapshot, t, database)
+            kind, assumed = _settings_provenance(t, database)
             outcome = results[t.identity]
             how = (READ_BY if t.kind in FILE_BUILT_KINDS else DESCRIBED_BY) if outcome.sandbox else "not described"
             detail = how + (f"; assumed: {', '.join(assumed)}" if assumed else "")
             outcomes[t.identity] = (outcome, Provenance(kind, detail))
     unmatched = sorted(({"file": label, "object": identity} for identity, (label, _) in exports.items()
-                        if not snapshot.has(identity)), key=lambda e: (e["file"], e["object"]))
+                        if identity not in {t.identity for t in targets}), key=lambda e: (e["file"], e["object"]))
     added: dict[str, tuple[Fact, ...]] = {}
     for identity, (outcome, provenance) in outcomes.items():
         fact = (Fact("skeleton", "result_shape", outcome.shape, provenance) if outcome.reason is None else
