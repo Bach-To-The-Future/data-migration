@@ -953,8 +953,8 @@ class _Database:
             facts.append(Fact(SOURCE, "dependency_cross_check", check,
                               Provenance("server", f"parser references against {DEPENDENCY_VIEW}")))
             out[identity] = facts
-        # Dependencies from objects that are not modules (computed columns, constraints,
-        # defaults) are kept, but the parser does not read those expressions yet.
+        # Dependencies from objects that are not modules (computed columns, constraints, defaults) belong to the
+        # table or table type that holds them; the parser reads their expressions like a module's text.
         if self.dependencies_granted:
             unchecked, unattributed = self.unchecked_dependencies(server)
             if unattributed:
@@ -963,11 +963,48 @@ class _Database:
             for parent, deps in sorted(unchecked.items()):
                 out.setdefault(parent, []).append(Fact(SOURCE, "server_dependencies", deps,
                                                        Provenance("server", DEPENDENCY_VIEW)))
-                out[parent].append(Fact(SOURCE, "dependency_cross_check", {
-                    "status": "not run", "reason": "the parser does not read constraint, default and computed-column "
-                                                   "expressions yet (issue #42)"},
-                    Provenance("server", DEPENDENCY_VIEW)))
+                out[parent].append(Fact(SOURCE, "dependency_cross_check",
+                                        self.expression_cross_check(parent, deps, snapshot, system_types, schemas,
+                                                                    engagement),
+                                        Provenance("server", f"parser references against {DEPENDENCY_VIEW}")))
         return out
+
+    @staticmethod
+    def expression_texts(obj: CatalogObject) -> list[str]:
+        """The T-SQL expressions a table or table type holds, each as a statement the parser can read: computed
+        columns and defaults are the select list of a query, and a check constraint is a condition."""
+        texts: list[str] = []
+        if obj.has_fact("columns"):
+            for c in obj.fact("columns").value:
+                if c.get("computed_expression"):
+                    texts.append(f"SELECT {c['computed_expression']}")
+                if (c.get("default") or {}).get("definition"):
+                    texts.append(f"SELECT {c['default']['definition']}")
+        if obj.has_fact("check_constraints"):
+            texts += [f"SELECT 1 WHERE {c['definition']}" for c in obj.fact("check_constraints").value
+                      if c.get("definition")]
+        return texts
+
+    def expression_cross_check(self, parent: str, server: list[dict], snapshot: Snapshot, system_types: set[str],
+                               schemas: set[str], engagement: set[str]) -> dict:
+        """The parser's references in the parent's expressions against SQL Server's dependencies recorded for them.
+        The parent's own columns are not references."""
+        texts = self.expression_texts(snapshot.get(parent))
+        if not texts:
+            kind = snapshot.get(parent).kind
+            return {"status": "not run", "reason": f"the {kind} holds no expression the parser can read: its "
+                                                   "definition is not extracted"}
+        found: list[dict] = []
+        for text in texts:
+            try:
+                parsed = parser.parse(parent, text, self.compatibility_level, True)
+            except parser.ParseFailed:
+                # The parser's message can quote the client's text, so the reason does not repeat it.
+                return {"status": "not run", "reason": "an expression of the object did not parse"}
+            found += resolution.work_out(parsed, snapshot, self.context(parent), system_types=system_types,
+                                         schemas=schemas, engagement=engagement)
+        unique = {_canonical(r): r for r in found}
+        return self.cross_check(sorted(unique.values(), key=_canonical), server, own=parent)
 
     def server_dependencies(self, snapshot: Snapshot) -> dict[int, list[dict]]:
         """sys.sql_expression_dependencies, by referencing object id, one entry per referenced
@@ -1012,7 +1049,7 @@ class _Database:
         return {k: sorted(v, key=_canonical) for k, v in out.items()}, unattributed
 
     @staticmethod
-    def cross_check(parsed: list[dict], server: list[dict]) -> dict:
+    def cross_check(parsed: list[dict], server: list[dict], own: str | None = None) -> dict:
         """Compare the parser's references with SQL Server's. Two kinds of entry are set aside,
         each listed with its reason, because one side never records them: system objects,
         which sys.sql_expression_dependencies does not track, and a trigger's inserted and
@@ -1025,12 +1062,17 @@ class _Database:
                 and r["external"] != "system object"}
         pseudo = {key(d) for d in server if d["resolved"] is None and len(d["name"]) == 1
                   and d["name"][0].casefold() in references.PSEUDO_TABLES}
-        theirs = {key(d) for d in server} - pseudo
+        # An expression of a table names the table's own columns, which are not references.
+        mine = {key(d) for d in server if own is not None and d["resolved"] == own}
+        theirs = {key(d) for d in server} - pseudo - mine
         result = {"status": "agrees" if ours == theirs else "disagrees",
                   "parser_only": sorted(ours - theirs), "server_only": sorted(theirs - ours)}
         if ignored:
             result["ignored_parser"] = {"entries": ignored, "reason": f"system objects, which {DEPENDENCY_VIEW} "
                                                                       "does not track"}
+        if mine:
+            result["ignored_server_own"] = {"entries": sorted(mine), "reason": "the table's own columns, which an "
+                                                                              "expression of the table names"}
         if pseudo:
             result["ignored_server"] = {"entries": sorted(pseudo), "reason": "a trigger's inserted and deleted "
                                                                              "tables, which are not catalog objects"}

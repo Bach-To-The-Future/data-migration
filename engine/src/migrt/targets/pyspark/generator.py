@@ -32,6 +32,7 @@ COMPARE = {"=": "==", "<>": "!=", ">": ">", "<": "<", ">=": ">=", "<=": "<="}
 MONEY = "3.11"                # silent difference: money arithmetic
 MONEY_NOT_BUILT = "it needs the support library's money type, which is not built yet"
 SUM_INT = "3.14"              # silent difference: a running integer total that leaves int
+STRING_COMPARISON = "comparing strings by a named rule needs the support library's comparison helpers (not built yet)"
 
 
 class Unsupported(Exception):
@@ -178,11 +179,15 @@ class ViewGenerator:
 
     def plan(self, node: Node) -> str:
         """Emit the statements for one plan step and return the variable holding it."""
+        if node.kind == "read_table" and node.attrs.get("named_query"):
+            raise Unsupported(node, "reading a named query has no PySpark generation yet")
         if node.kind == "read_table":
             var = python_name(node.attrs["alias"], self.names)
             self.step(node, f'{var} = spark.read.table("{self.recorded_names.table(node.attrs["table"])}").alias("{node.attrs["alias"]}")')
             return var
         if node.kind == "join":
+            if node.attrs["kind"] == "cross" or not node.children_with("condition"):
+                raise Unsupported(node, "a cross join has no PySpark generation yet")
             left, right = self.plan(node.child("left")), self.plan(node.child("right"))
             condition = self.expr(node.child("condition"), {})
             var = python_name("joined", self.names)
@@ -218,6 +223,8 @@ class ViewGenerator:
         return var
 
     def aggregate(self, node: Node) -> str:
+        if node.children_with("having"):
+            raise Unsupported(node, "HAVING has no PySpark generation yet")
         source = self.plan(node.child("input"))
         keys = node.children_with("key")
         outputs = node.children_with("output")
@@ -226,6 +233,8 @@ class ViewGenerator:
         for key in keys:
             if key.kind != "column":
                 raise Unsupported(key, "grouping by an expression is not generated yet")
+            if key.attrs.get("rule"):
+                raise Unsupported(key, f"grouping by strings: {STRING_COMPARISON}")
             ref = (key.attrs["relation"], key.attrs["column"])
             exact = [o.attrs["output_name"] for o in outputs if o.kind == "column"
                      and (o.attrs["relation"], o.attrs["column"]) == ref]
@@ -294,11 +303,24 @@ class ViewGenerator:
                 return f'F.col("{grouped[ref]}")'
             return f'F.col("{ref[0]}.{ref[1]}")'
         if k == "literal":
+            if "secret_setting" in node.attrs:
+                raise Unsupported(node, f"the literal is a marked secret, shown as the named setting "
+                                        f"{node.attrs['secret_setting']}; nothing reads settings yet (the settings "
+                                        "file, issue #44)")
+            if node.value_type.name not in ("integer", "boolean", "string"):
+                raise Unsupported(node, f"a literal of type {node.type} has no PySpark generation yet")
             return f"F.lit({node.attrs['value']!r})"
+        if k == "implicit_convert":
+            source = args[0].value_type
+            if source.name == "integer" and node.value_type.name == "integer":
+                return f'{self.expr(args[0], grouped)}.cast("{spark_type(node.value_type, node)}")'
+            raise Unsupported(node, f"the conversion of {source} to {node.type} has no PySpark generation yet")
         if k in ("money_multiply", "money_divide") or (node.type is not None and node.type.name == "money"
                                                        and k in ("add", "subtract", "sum", "average")):
             raise Unsupported(node, f"{self.differences.difference(MONEY)}; {MONEY_NOT_BUILT}")
         if k in ("add", "subtract", "multiply", "modulo"):
+            if node.value_type.name != "integer":
+                raise Unsupported(node, f"{k} on {node.type} has no PySpark generation yet")
             op = {"add": "+", "subtract": "-", "multiply": "*", "modulo": "%"}[k]
             a, b = (self.expr(x, grouped) for x in args)
             return f'({a} {op} {b}).cast("{spark_type(node.value_type, node)}")'
@@ -310,6 +332,8 @@ class ViewGenerator:
             # toward zero exactly as SQL Server does; dividing by zero raises in both.
             return f'({a} / {b}).cast("{spark_type(node.value_type, node)}")'
         if k == "count_values":
+            if node.attrs.get("rule"):
+                raise Unsupported(node, f"COUNT(DISTINCT) over strings: {STRING_COMPARISON}")
             fn = "F.count_distinct" if node.attrs.get("distinct") else "F.count"
             return f'{fn}({self.expr(args[0], {})}).cast("int")'
         if k == "count_rows":
@@ -324,14 +348,20 @@ class ViewGenerator:
             # AVG over int is the int sum divided by the count of values, truncated toward zero.
             return f'(F.sum({a}).cast("int") / F.count({a})).cast("int")'
         if k in ("minimum", "maximum"):
+            if node.attrs.get("rule"):
+                raise Unsupported(node, f"{k} over strings: {STRING_COMPARISON}")
             return f"F.{'min' if k == 'minimum' else 'max'}({self.expr(args[0], {})})"
         if k == "null_replacement":
             a, b = (self.expr(x, grouped) for x in args)
             return f'F.coalesce({a}, {b}.cast("{spark_type(node.value_type, node)}"))'
         if k == "null_if_equal":
+            if node.attrs.get("rule"):
+                raise Unsupported(node, f"NULLIF over strings: {STRING_COMPARISON}")
             a, b = (self.expr(x, grouped) for x in args)
             return f"F.nullif({a}, {b})"
         if k == "compare":
+            if node.attrs.get("rule"):
+                raise Unsupported(node, STRING_COMPARISON)
             a, b = (self.expr(x, grouped) for x in args)
             return f"({a} {COMPARE[node.attrs['operator']]} {b})"
         if k in ("and", "or"):

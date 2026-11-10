@@ -11,7 +11,7 @@ import dataclasses
 import json
 from typing import Any
 
-FORMAT_VERSION = "ir-0.2"   # 0.2: secret_settings
+FORMAT_VERSION = "ir-0.3"   # 0.2: secret_settings. 0.3: hints; the plan and expression conventions of issue #42
 DETERMINISTIC = "deterministic"
 
 
@@ -27,6 +27,22 @@ class VType:
 
     def param(self, key: str):
         return dict(self.params).get(key)
+
+    def str_param(self, key: str) -> str:
+        value = self.param(key)
+        if not isinstance(value, str):
+            raise ValueError(f"{self} has no text parameter {key!r}")
+        return value
+
+    def flag(self, key: str) -> bool:
+        return bool(self.param(key))
+
+    def length(self) -> int | str:
+        """A string's or binary's length: a number, or the text "unlimited"."""
+        value = self.param("length")
+        if not isinstance(value, (int, str)):
+            raise ValueError(f"{self} has no length")
+        return value
 
     def int_param(self, key: str) -> int:
         value = self.param(key)
@@ -134,6 +150,11 @@ class Artefact:
     # the client's own record, kept verbatim in their control database; whatever sends it
     # elsewhere masks it first.
     secret_settings: list[str] = dataclasses.field(default_factory=list)
+    # Table, join and query hints, kept on their nodes and listed here for the report
+    # (spec section 4, item 3): {node, source_position, hint}.
+    hints: list[dict] = dataclasses.field(default_factory=list)
+    # Settings lowering assumed because the source does not store them, each worded for the report.
+    assumptions: list[str] = dataclasses.field(default_factory=list)
 
     def number_nodes(self) -> None:
         """Give every node a stable id in tree order, so documents are deterministic."""
@@ -151,6 +172,8 @@ class Artefact:
             "artefact_type": self.artefact_type,
             "dependencies": sorted(self.dependencies),
             "secret_settings": sorted(self.secret_settings),
+            "hints": self.hints,
+            "assumptions": sorted(self.assumptions),
             "original_source": self.original_source,
             "body": self.body.to_json(),
         }

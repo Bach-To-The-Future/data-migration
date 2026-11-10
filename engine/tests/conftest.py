@@ -109,3 +109,16 @@ def scratch_database():
     yield SCRATCH
     with sa_connection() as master:
         _drop_scratch(master)
+
+
+CORPUS_DATABASES = ("RetailSample", "AdventureWorks2022", "WideWorldImporters")
+
+
+@pytest.fixture(scope="session")
+def corpus_snapshot():
+    """The three corpus databases extracted live once for the session, with no control database."""
+    from migrt.sources.sqlserver import extractor
+
+    address = extractor.ServerAddress(os.environ.get("MSSQL_HOST", "sqlserver"), 1433, "migration_extractor",
+                                      os.environ["MIGRT_EXTRACTOR_PASSWORD"])
+    return extractor.extract(address, list(CORPUS_DATABASES))

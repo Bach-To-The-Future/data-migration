@@ -112,6 +112,10 @@ A reference from an artefact to an object outside the catalog, such as another d
 **Unresolved external reference**:
 A foreign key whose referenced table is missing from the folders an extraction read. The referencing table cannot be recreated faithfully, so artefacts that write it are "Not reconcilable locally" until the export is extended.
 
+**Comparison rule**:
+How two strings compare, taken from the collation that governs the comparison: whether case, accents and trailing spaces count, or binary order. Lowering names it on every operation that compares strings, by the source's own precedence (for SQL Server, an explicit `COLLATE` over a column's collation over the database default); two different column collations in one comparison are a conflict, kept as an opaque fragment.
+_Avoid_: Collation (which is the setting a rule is taken from), sort order
+
 **Opaque fragment**:
 A piece of source kept verbatim, with its position and the reason, because lowering could not express it in the intermediate representation. It is never dropped.
 _Avoid_: Flagged fragment (which is target code), unparsed block

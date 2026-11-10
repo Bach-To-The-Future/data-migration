@@ -2,7 +2,7 @@
 
 The script migration tool's engine, `migrt`: the core, the SQL Server source and the PySpark target, built from the [v1 architecture spec](../docs/spec/v1-architecture-spec.md). Its library interface is [`migrt.engine`](src/migrt/engine.py); the command line ([`migrt.cli`](src/migrt/cli.py)) is a thin front end over it.
 
-**State:** the skeleton of [issue #36](https://github.com/Bach-To-The-Future/data-migration/issues/36), with full live extraction for SQL Server 2017 and later ([issue #39](https://github.com/Bach-To-The-Future/data-migration/issues/39)), and extraction from folders with inventories of SSIS packages and SQL Agent jobs ([issue #40](https://github.com/Bach-To-The-Future/data-migration/issues/40)). One view runs end to end as a preview run: the extractor's version check and permission self-check, extraction of every catalog level with its raw capture, references and dependency cross-check, an immutable snapshot in a per-engagement Postgres control database with its name adjustments, lowering into a first cut of the intermediate representation, the checker, generation and layer-1 code checks, and `report-data.json`. Later tickets widen each layer.
+**State:** the skeleton of [issue #36](https://github.com/Bach-To-The-Future/data-migration/issues/36), with full live extraction for SQL Server 2017 and later ([issue #39](https://github.com/Bach-To-The-Future/data-migration/issues/39)), extraction from folders with inventories of SSIS packages and SQL Agent jobs ([issue #40](https://github.com/Bach-To-The-Future/data-migration/issues/40)), and the lowering of queries and expressions of views and functions ([issue #42](https://github.com/Bach-To-The-Future/data-migration/issues/42)). One view runs end to end as a preview run: the extractor's version check and permission self-check, extraction of every catalog level with its raw capture, references and dependency cross-check, an immutable snapshot in a per-engagement Postgres control database with its name adjustments, lowering into the intermediate representation, the checker, generation and layer-1 code checks, and `report-data.json`. Later tickets widen each layer.
 
 ## Run it
 
@@ -65,6 +65,12 @@ src/migrt/
                        differences (the target half, Annex D, as data)
 tests/                 run with sandbox/engine-tests.sh
 ```
+
+## Lowering
+
+Views, inline and multi-statement table-valued functions and scalar functions lower into the core's intermediate representation ([`lowering.py`](src/migrt/sources/sqlserver/lowering.py); the conventions are in the docstrings of [`queries.py`](src/migrt/sources/sqlserver/queries.py) and [`expressions.py`](src/migrt/sources/sqlserver/expressions.py)). A query is a logical plan that keeps the source's names and the order of its steps; every expression has its T-SQL type from the catalog, with the conversions SQL Server's data type precedence makes written out as `implicit_convert`; every string comparison names its comparison rule from collation precedence (two different implicit collations are a conflict and stay an opaque fragment). Table, join and query hints are kept on their nodes and reported as not applicable on the target; comments annotate the nearest node; a literal inside a marked secret lowers to its named setting.
+
+What lowering cannot express is an opaque fragment with its reason: the whole query, or the one select item. The procedural statements of a function body (DECLARE, SET, IF, WHILE, SELECT into a variable, INSERT into a table variable) are lowered by [issue #43](https://github.com/Bach-To-The-Future/data-migration/issues/43); until then each is an opaque fragment that is a scope barrier, and dynamic SQL has its own node kind. Generation does not handle most of the new nodes yet: each becomes a manual item (issue #44 and later), never wrong code.
 
 ## Checks
 

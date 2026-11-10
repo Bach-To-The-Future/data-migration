@@ -80,9 +80,11 @@ def test_report_data_is_deterministic_outside_its_run_specific_section(engagemen
     assert first.artefacts[0].file.read_bytes() == second.artefacts[0].file.read_bytes()
 
 
-def test_a_view_whose_query_is_not_lowered_fails_when_called_never_returns_nothing(engagement, extractor_server, tmp_path):
-    """TOP ... WITH TIES is not lowered yet: the query is kept as an opaque fragment, the
-    file still passes layer 1, and calling the function raises instead of returning rows."""
+def test_a_view_whose_plan_is_not_generated_fails_when_called_never_returns_nothing(engagement, extractor_server, tmp_path):
+    """TOP ... WITH TIES is lowered (issue #42) to a `limit` step the target cannot generate yet: the
+    step is listed as manual work, the file still passes layer 1, and calling the function raises
+    instead of returning rows. (Until #42 this view's query was an opaque fragment; the test's point,
+    that nothing is silently left out, is unchanged.)"""
     from migrt import engine
 
     view = "RetailSample.sales.vTopProducts"
@@ -90,7 +92,7 @@ def test_a_view_whose_query_is_not_lowered_fails_when_called_never_returns_nothi
 
     [artefact] = result.artefacts
     assert artefact.layer1.passed, artefact.layer1.failures
-    assert [m.reason for m in artefact.manual_items] and "TOP" in artefact.manual_items[0].reason
+    assert [m.reason for m in artefact.manual_items] and "limit has no PySpark generation" in artefact.manual_items[0].reason
     namespace = {}
     exec(compile(artefact.file.read_text(encoding="utf-8"), str(artefact.file), "exec"), namespace)
 
@@ -129,3 +131,30 @@ def test_report_data_carries_both_halves_of_the_differences_catalogue(engagement
     assert money_wording
     money = [c for c in item["constructs"] if c["status"] == "manual work" and "3.11" in c["reason"]]
     assert money and all(money_wording in c["reason"] for c in money)
+
+
+def test_hints_assumptions_and_string_comparisons_reach_the_report_data(engagement, scratch_database, tmp_path):
+    """A table hint is kept and reported as not applicable on the target; the CONCAT_NULL_YIELDS_NULL assumption is
+    a degradation of its artefact; a string comparison, which needs its comparison rule, is manual work (issue #42)."""
+    from migrt import engine
+    from conftest import sa_connection, sandbox_server
+
+    with sa_connection(scratch_database) as conn:
+        conn.query("CREATE VIEW s.vHinted AS SELECT p.Id, p.Code + N'!' AS Tag FROM s.Parent AS p WITH (NOLOCK) "
+                   "WHERE p.Code = N'x'")
+    try:
+        result = engine.preview_run(engagement, sandbox_server(databases=(scratch_database,)),
+                                    artefacts=[f"{scratch_database}.s.vHinted"], out_dir=tmp_path / "out")
+    finally:
+        with sa_connection(scratch_database) as conn:
+            conn.query("DROP VIEW s.vHinted")
+
+    data = json.loads(result.report_data_path.read_text(encoding="utf-8"))
+    [item] = data["artefacts"]
+    assert [(h["hint"], h["status"]) for h in item["hints"]] == [("NOLOCK", "not applicable on the target")]
+    assert all(h["node"] and h["source_position"] for h in item["hints"])
+    assert [d["kind"] for d in item["degradations"]] == ["assumption"]
+    assert "CONCAT_NULL_YIELDS_NULL" in item["degradations"][0]["text"]
+    manual = [(c["operation"], c["reason"]) for c in item["constructs"] if c["status"] == "manual work"]
+    assert any("comparing strings by a named rule" in reason for op, reason in manual), manual
+    assert data["schema_version"] == "report-data/0.5"

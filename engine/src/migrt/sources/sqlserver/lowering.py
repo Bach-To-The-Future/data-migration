@@ -1,341 +1,297 @@
-"""Lowering for SQL Server views, first cut (spec sections 4 and 5).
+"""Lowering for SQL Server views and functions (spec sections 4 and 5).
 
-Deterministic and faithful: every node gets the vocabulary operation that means exactly
-what the T-SQL means, typed from the catalog, with its source position. What this cut
-cannot express is kept verbatim as an opaque fragment with its reason, never dropped:
-the whole query when its shape is not handled, otherwise the one select item.
+Deterministic and faithful: every node gets the vocabulary operation that means exactly what the
+T-SQL means, typed from the catalog, with its source position (expressions.py and queries.py hold
+the rules). What lowering cannot express is kept verbatim as an opaque fragment with its reason,
+never dropped: the whole query when its shape is not handled, otherwise the one select item.
 
-Handled: one query specification over named tables and qualified joins, WHERE, GROUP BY,
-column references, integer literals, + - * / % on integers and money, COUNT, SUM, AVG,
-MIN, MAX, ISNULL, NULLIF, and comparisons that are not between strings (string
-comparisons need their comparison rule from collation precedence: later work).
+Artefacts handled here: a view (`view_body`, one query), an inline table-valued function
+(`table_function_body`, one query), and the outer record, parameters and `RETURN` of a scalar or
+multi-statement function. The procedural statements of a function body (DECLARE, SET, IF, WHILE,
+INSERT into a table variable) are lowered by ticket 08a (#43): until then each is an opaque fragment
+that is a scope barrier, and dynamic SQL has its own node kind.
 """
 from __future__ import annotations
 
-from ...core.catalog import CatalogReader
-from ...core import secrets
-from ...core.ir import UNKNOWN, Artefact, Node, VType
+from collections.abc import Callable
+
 from ...core import vocabulary
+from ...core.catalog import CatalogReader
+from ...core.ir import Artefact, Node
 from . import names
 from . import types as T
+from .expressions import Opaque, as_role, type_name
 from .parser import Parsed, walk
+from .queries import Queries
 
-AGGREGATES = {"COUNT", "SUM", "AVG", "MIN", "MAX"}
-BINARY = {"Add": "add", "Subtract": "subtract", "Multiply": "multiply", "Divide": "divide", "Modulo": "modulo"}
-COMPARISONS = {"Equals": "=", "NotEqualToBrackets": "<>", "NotEqualToExclamation": "<>", "GreaterThan": ">",
-               "LessThan": "<", "GreaterThanOrEqualTo": ">=", "LessThanOrEqualTo": "<="}
-JOINS = {"Inner": "inner", "LeftOuter": "left", "RightOuter": "right", "FullOuter": "full"}
-
-
-class Opaque(Exception):
-    """Raised inside lowering when a construct is not handled; caught at the nearest point
-    that can keep the source verbatim as an opaque fragment."""
-
-    def __init__(self, fragment, reason: str):
-        self.fragment, self.reason = fragment, reason
-        super().__init__(reason)
+VIEWS = {"CreateViewStatement", "CreateOrAlterViewStatement", "AlterViewStatement"}
+FUNCTIONS = {"CreateFunctionStatement", "CreateOrAlterFunctionStatement", "AlterFunctionStatement"}
+PERMISSIONS = {"GrantStatement", "RevokeStatement", "DenyStatement", "RevertStatement"}
+SCHEMA_CHANGES = {"CreateTableStatement", "AlterTableStatement", "DropTableStatement", "CreateIndexStatement",
+                  "DropIndexStatement", "AlterIndexStatement", "CreateSchemaStatement", "DropSchemaStatement",
+                  "CreateSequenceStatement", "AlterSequenceStatement", "DropSequenceStatement",
+                  "CreateViewStatement", "DropViewStatement", "AlterViewStatement", "CreateProcedureStatement",
+                  "DropProcedureStatement", "AlterProcedureStatement", "CreateSynonymStatement",
+                  "DropSynonymStatement", "TruncateTableStatement"}
+PROCEDURAL = ("the statement is lowered by ticket 08a (#43), procedural lowering: until then it is kept as written, "
+              "and everything it might have touched is unknown from here on")
 
 
-def type_name(fragment) -> str:
-    return str(fragment.GetType().Name)
-
-
-class ViewLowering:
+class Lowering(Queries):
     def __init__(self, reader: CatalogReader, identity: str, parsed: Parsed):
-        self.reader = reader
-        self.identity = identity
-        self.parsed = parsed
-        self.database, schema, _name = identity.split(".")
-        collation = reader.value(self.database, "collation")
-        self.name_context = {"database": self.database, "schemas": [schema, "dbo"],
-                             "case_sensitive": names.identifiers_case_sensitive(collation)}
-        self.scope: dict[str, dict] = {}   # alias -> {"table": identity, "columns": {name: column}}
-        # Marked secrets never enter the representation: text copied from the source is masked.
-        self.secrets = [secrets.SecretSpan.from_json(s) for s in reader.value(identity, "secrets")
-                        if s["fact"] == "source_text"]
-        self.settings: set[str] = set()
-
-    def source(self, offset: int, length: int) -> str:
-        """Source text, masked: each marked span becomes its named setting."""
-        text, used = secrets.mask(self.parsed.text[offset:offset + length], self.secrets, prefix=self.identity,
-                                  offset=offset)
-        self.settings.update(used)
-        return text
+        super().__init__(reader, identity, parsed)
+        self.opaque_dependencies: set[str] = set()
 
     # ------------------------------------------------------------------ artefact
 
     def lower(self) -> Artefact:
         [batch] = list(self.parsed.tree.Batches)
         [statement] = list(batch.Statements)
-        if type_name(statement) not in ("CreateViewStatement", "CreateOrAlterViewStatement"):
-            raise ValueError(f"{self.identity} is not a CREATE VIEW statement")
+        kind = type_name(statement)
+        artefact_type = self.reader.kind_of(self.identity)
+        if kind in VIEWS and artefact_type == "view":
+            body = self.view(statement)
+        elif kind in FUNCTIONS and artefact_type in ("scalar_function", "inline_function", "table_function"):
+            body = self.function(statement, artefact_type)
+        else:
+            raise ValueError(f"{self.identity} is a {artefact_type}, but its text is a {kind}")
+        artefact = Artefact(self.identity, artefact_type, self.parsed.text, body, dependencies=self.dependencies(body),
+                            vocabulary_version=vocabulary.version())
+        for n in body.walk():
+            if n.kind == "null" and n.type is not None and n.type.name == "unknown":
+                n.type = T.INT                  # a NULL nothing types is an int, as SQL Server types it
+        self.attach_comments(body)
+        artefact.secret_settings = sorted(self.settings)
+        artefact.assumptions = sorted(self.assumptions)
+        artefact.number_nodes()
+        artefact.hints = self.hints(body)
+        return artefact
+
+    def stored_settings(self, statement) -> dict:
+        options = [self.text_of(o) for o in (getattr(statement, "ViewOptions", None) or getattr(statement, "Options", None) or [])]
+        if getattr(statement, "WithCheckOption", False):
+            options.append("WITH CHECK OPTION")
+        return {"options": options,
+                "ansi_nulls": bool(self.reader.value(self.identity, "ansi_nulls", "sqlserver")),
+                "quoted_identifier": bool(self.reader.value(self.identity, "quoted_identifier", "sqlserver"))}
+
+    def view(self, statement) -> Node:
         select = statement.SelectStatement
         try:
-            if statement.Columns is not None and statement.Columns.Count:
-                raise Opaque(select, "a view's column list (CREATE VIEW v (a, b)) is not lowered yet")
             if not self.reader.value(self.identity, "ansi_nulls", "sqlserver"):
                 raise Opaque(select, "a view created with ANSI_NULLS OFF is not lowered yet")
-            plan = self.query(select)
+            plan, outputs = self.select_statement(select)
+            columns = statement.Columns
+            if columns is not None and columns.Count:
+                if columns.Count != len(outputs):
+                    raise Opaque(select, "the view's column list names a different number of columns than the query "
+                                         "returns")
+                self.rename_outputs(plan, [str(c.Value) for c in columns])
         except Opaque as opaque:
             plan = self.opaque(select, opaque.reason)
         plan.role = "query"
-        body = Node("view_body", self.parsed.span(statement), children=[plan],
-                    attrs={"name": self.identity})
-        artefact = Artefact(self.identity, "view", self.parsed.text, body,
-                            dependencies=sorted({n.attrs["table"] for n in body.walk() if n.kind == "read_table"}),
-                            vocabulary_version=vocabulary.version())
-        self.attach_comments(body)
-        artefact.secret_settings = sorted(self.settings)
-        artefact.number_nodes()
-        return artefact
+        return Node("view_body", self.span(statement), None, dict(self.stored_settings(statement), name=self.identity),
+                    [plan])
 
-    def opaque(self, fragment, reason: str, role: str = "") -> Node:
-        span = self.parsed.span(fragment)
-        text = self.source(span.offset, span.length)
-        return Node("opaque_fragment", span, UNKNOWN, {"reason": reason, "text": text}, role=role)
+    # ------------------------------------------------------------------ functions
 
-    def attach_comments(self, body: Node) -> None:
-        """A comment annotates the nearest node after it: a select item or a plan step."""
-        anchors = sorted((n for n in body.walk() if n.role in ("output", "input", "left", "right", "query")),
-                         key=lambda n: n.position.offset)
-        for comment in self.parsed.comments:
-            after = [n for n in anchors if n.position.offset >= comment.offset]
-            (after[0] if after else body).comments.append(self.source(comment.offset, len(comment.text)).rstrip())
-
-    # ------------------------------------------------------------------ queries
-
-    def query(self, select) -> Node:
-        if select.WithCtesAndXmlNamespaces is not None:
-            raise Opaque(select, "common table expressions are not lowered yet")
-        if select.OptimizerHints is not None and select.OptimizerHints.Count:
-            raise Opaque(select, "query hints are not lowered yet")
-        spec = select.QueryExpression
-        if type_name(spec) != "QuerySpecification":
-            raise Opaque(spec, f"{type_name(spec)} is not lowered yet")
-        for prop, what in (("TopRowFilter", "TOP"), ("OrderByClause", "ORDER BY"), ("HavingClause", "HAVING"),
-                           ("ForClause", "FOR"), ("OffsetClause", "OFFSET"), ("Into", "INTO")):
-            if getattr(spec, prop, None) is not None:
-                raise Opaque(spec, f"{what} is not lowered yet")
-        if str(spec.UniqueRowFilter) == "Distinct":
-            raise Opaque(spec, "SELECT DISTINCT is not lowered yet")
-        if spec.FromClause is None:
-            raise Opaque(spec, "a query without FROM is not lowered yet")
-
-        refs = list(spec.FromClause.TableReferences)
-        if len(refs) != 1:
-            raise Opaque(spec.FromClause, "comma-separated FROM lists are not lowered yet")
-        plan = self.table_reference(refs[0])
-        if spec.WhereClause is not None:
-            condition = self.predicate(spec.WhereClause.SearchCondition)
-            plan = Node("filter", self.parsed.span(spec.WhereClause), children=[_as(plan, "input"), _as(condition, "condition")])
-
-        items = list(spec.SelectElements)
-        grouping = spec.GroupByClause
-        aggregating = grouping is not None or any(self.has_aggregate(i) for i in items)
-        children = [_as(plan, "input")]
-        if grouping is not None:
-            if str(grouping.GroupByOption) != "None" or grouping.All:
-                raise Opaque(grouping, "GROUP BY options are not lowered yet")
-            for spec_item in grouping.GroupingSpecifications:
-                if type_name(spec_item) != "ExpressionGroupingSpecification":
-                    raise Opaque(spec_item, f"{type_name(spec_item)} is not lowered yet")
-                children.append(_as(self.expression(spec_item.Expression), "key"))
-        for item in items:
-            children.append(self.select_item(item))
-        span = self.parsed.span(spec)
-        return Node("aggregate" if aggregating else "project", span, children=children)
-
-    def table_reference(self, ref) -> Node:
-        kind = type_name(ref)
-        if kind == "NamedTableReference":
-            obj = ref.SchemaObject
-            if obj.ServerIdentifier is not None:
-                raise Opaque(ref, "a linked-server table is an external reference, not lowered yet")
-            parts = tuple(str(i.Value) for i in obj.Identifiers)
-            context = dict(self.name_context, kinds={"table"})
+    def function(self, statement, artefact_type: str) -> Node:
+        children = self.parameters(statement)
+        return_type = statement.ReturnType
+        attrs: dict = dict(self.stored_settings(statement), name=self.identity)
+        if artefact_type == "scalar_function":
+            body = "scalar_function_body"
+            children += self.statements(statement)
+        elif artefact_type == "inline_function":
+            body = "table_function_body"
+            attrs["form"] = "inline"
+            select = return_type.SelectStatement
             try:
-                table = self.reader.resolve(parts, context)
-            except names.AmbiguousName as ambiguous:
-                raise Opaque(ref, str(ambiguous)) from None
-            if table is None:
-                raise Opaque(ref, f"{'.'.join(parts)} does not resolve to a table in the catalog")
-            if ref.TableHints is not None and ref.TableHints.Count:
-                raise Opaque(ref, "table hints are not lowered yet")
-            alias = str(ref.Alias.Value) if ref.Alias is not None else parts[-1]
-            columns = {c["name"]: c for c in self.reader.value(table, "columns")}
-            key = alias if self.name_context["case_sensitive"] else alias.casefold()
-            if key in self.scope:
-                raise Opaque(ref, f"alias {alias} is used twice")
-            self.scope[key] = {"alias": alias, "table": table, "columns": columns}
-            return Node("read_table", self.parsed.span(ref), attrs={"table": table, "alias": alias})
-        if kind == "QualifiedJoin":
-            join_kind = JOINS.get(str(ref.QualifiedJoinType))
-            if join_kind is None or ref.JoinHint.ToString() != "None":
-                raise Opaque(ref, f"{ref.QualifiedJoinType} join is not lowered yet")
-            left = self.table_reference(ref.FirstTableReference)
-            right = self.table_reference(ref.SecondTableReference)
-            condition = self.predicate(ref.SearchCondition)
-            return Node("join", self.parsed.span(ref), attrs={"kind": join_kind},
-                        children=[_as(left, "left"), _as(right, "right"), _as(condition, "condition")])
-        raise Opaque(ref, f"{kind} is not lowered yet")
-
-    def select_item(self, item) -> Node:
-        if type_name(item) != "SelectScalarExpression":
-            raise Opaque(item, f"{type_name(item)} (such as SELECT *) is not lowered yet")
-        expression = item.Expression
-        if item.ColumnName is not None:
-            name = str(item.ColumnName.Value)
-        elif type_name(expression) == "ColumnReferenceExpression":
-            name = str(list(expression.MultiPartIdentifier.Identifiers)[-1].Value)
+                plan, _ = self.select_statement(select)
+            except Opaque as opaque:
+                plan = self.opaque(select, opaque.reason)
+            children.append(as_role(plan, "query"))
         else:
-            raise Opaque(item, "a view column needs a name")
-        try:
-            node = self.expression(expression)
-        except Opaque as opaque:
-            node = self.opaque(item, opaque.reason)
-        node.span = self.parsed.span(item)
-        node.role = "output"
-        node.attrs = dict(node.attrs, output_name=name)
-        return node
+            body = "table_function_body"
+            declared = return_type.DeclareTableVariableBody
+            attrs.update(form="multi_statement", return_variable=str(declared.VariableName.Value))
+            attrs["returns"] = [{"name": str(c.ColumnIdentifier.Value), "type": self.data_type(c.DataType).to_json()}
+                                for c in declared.Definition.ColumnDefinitions]
+            children += self.statements(statement)
+        return Node(body, self.span(statement), None, attrs, children)
 
-    # ------------------------------------------------------------------ expressions
+    def parameters(self, statement) -> list[Node]:
+        declared = {p["name"].casefold(): p for p in self.reader.value(self.identity, "parameters")}
+        out = []
+        for p in statement.Parameters:
+            name = str(p.VariableName.Value)
+            fact = declared.get(name.casefold()) or declared.get("@" + name.casefold().lstrip("@"))
+            if fact is None:
+                raise ValueError(f"{self.identity}: parameter {name} is not in the catalog")
+            t = T.from_column(fact, default=self.default_label)
+            self.variables[name.casefold()] = (fact["name"], t)
+            default = self.text_of(p.Value) if p.Value is not None else None
+            attrs = {"name": fact["name"], "direction": fact["direction"], "readonly": fact["readonly"],
+                     "default": default}
+            out.append(Node("declare_parameter", self.span(p), t, attrs, role="parameter"))
+        return out
 
-    def has_aggregate(self, fragment) -> bool:
+    def statements(self, statement) -> list[Node]:
+        listed = list(statement.StatementList.Statements) if statement.StatementList is not None else []
+        if len(listed) == 1 and type_name(listed[0]) == "BeginEndBlockStatement":
+            listed = list(listed[0].StatementList.Statements)
+        return [as_role(self.body_statement(s), "statement") for s in listed]
+
+    def body_statement(self, s) -> Node:
+        kind = type_name(s)
+        if kind == "ReturnStatement":
+            children = []
+            if s.Expression is not None:
+                try:
+                    value = self.expression(s.Expression)
+                except Opaque as opaque:
+                    value = self.opaque(s.Expression, opaque.reason)
+                children.append(as_role(value, "argument"))
+            return Node("return", self.span(s), None, {}, children)
+        if kind == "ExecuteStatement":
+            dynamic = self.dynamic_sql(s)
+            if dynamic is not None:
+                return dynamic
+        if kind in PERMISSIONS:
+            return Node("permission_change", self.span(s), None,
+                        {"text": self.text_of(s), "manual": True, "scope_barrier": False})
+        if kind in SCHEMA_CHANGES and not self.temp_target(s):
+            return Node("schema_change", self.span(s), None,
+                        {"text": self.text_of(s), "manual": True, "scope_barrier": False})
+        return self.opaque(s, f"{kind}: {PROCEDURAL}", barrier=True)
+
+    def temp_target(self, statement) -> bool:
         found = []
 
         def visit(f):
-            if type_name(f) == "FunctionCall" and str(f.FunctionName.Value).upper() in AGGREGATES:
+            if type_name(f) == "SchemaObjectName" and f.BaseIdentifier is not None \
+                    and str(f.BaseIdentifier.Value).startswith("#"):
                 found.append(f)
-        walk(fragment, visit)
+        walk(statement, visit)
         return bool(found)
 
-    def expression(self, e) -> Node:
-        kind = type_name(e)
-        span = self.parsed.span(e)
-        if kind == "ParenthesisExpression":
-            return self.expression(e.Expression)
-        if kind == "ColumnReferenceExpression":
-            return self.column(e)
-        if kind == "IntegerLiteral":
-            value = int(str(e.Value))
-            if not -2**31 <= value < 2**31:
-                raise Opaque(e, "an integer literal outside int becomes numeric: not lowered yet")
-            return Node("literal", span, T.INT, {"value": value})
-        if kind == "BinaryExpression":
-            return self.binary(e, span)
-        if kind == "NullIfExpression":
-            first, second = self.expression(e.FirstExpression), self.expression(e.SecondExpression)
-            self.require_comparable(e, first, second)
-            return Node("null_if_equal", span, first.type, {"rule": None},
-                        [_as(first, "argument"), _as(second, "argument")])
-        if kind == "FunctionCall":
-            return self.function(e, span)
-        raise Opaque(e, f"{kind} is not lowered yet")
+    def dynamic_sql(self, statement) -> Node | None:
+        """EXEC (string) and sp_executesql: the expressions that build the text are lowered; the statement is a
+        scope barrier and always manual work."""
+        spec = statement.ExecuteSpecification
+        entity = spec.ExecutableEntity
+        children, form = [], None
+        if type_name(entity) == "ExecutableStringList":
+            form = "execute string"
+            children = [as_role(self.joined_text(entity), "text")]
+        elif type_name(entity) == "ExecutableProcedureReference" and entity.ProcedureReference is not None \
+                and entity.ProcedureReference.ProcedureReference is not None \
+                and str(entity.ProcedureReference.ProcedureReference.Name.BaseIdentifier.Value).lower() == "sp_executesql":
+            form = "sp_executesql"
+            params = [p.ParameterValue for p in entity.Parameters]
+            if not params:
+                return None
+            children = [as_role(self.lowered_or_opaque(params[0]), "text")]
+            children += [as_role(self.lowered_or_opaque(p), "parameter") for p in params[1:]]
+        if form is None:
+            return None
+        return Node("dynamic_sql_execution", self.span(statement), None,
+                    {"form": form, "scope_barrier": True, "manual": True}, children)
 
-    def column(self, e) -> Node:
-        if str(e.ColumnType) != "Regular":
-            raise Opaque(e, f"{e.ColumnType} column reference is not lowered yet")
-        parts = [str(i.Value) for i in e.MultiPartIdentifier.Identifiers]
-        fold = (lambda s: s) if self.name_context["case_sensitive"] else str.casefold
-        if len(parts) == 2:
-            entry = self.scope.get(fold(parts[0]))
-            candidates = [entry] if entry else []
-        elif len(parts) == 1:
-            candidates = list(self.scope.values())
-        else:
-            raise Opaque(e, "a column named with more than two parts is not lowered yet")
-        matches = [(s, c) for s in candidates for name, c in s["columns"].items() if fold(name) == fold(parts[-1])]
-        if len(matches) != 1:
-            raise Opaque(e, f"column {'.'.join(parts)} does not resolve to exactly one column in scope")
-        scope, column = matches[0]
-        return Node("column", self.parsed.span(e), T.from_column(column),
-                    {"relation": scope["alias"], "table": scope["table"], "column": column["name"]})
+    def joined_text(self, entity) -> Node:
+        """EXEC (a + b + ...) runs the pieces joined as strings are joined with +."""
+        try:
+            pieces = [self.expression(x) for x in entity.Strings]
+            text = pieces[0]
+            for piece in pieces[1:]:
+                text = self.concatenate(entity, text, piece)
+            return text
+        except Opaque as opaque:
+            return self.opaque(entity, opaque.reason)
 
-    def binary(self, e, span) -> Node:
-        op = BINARY.get(str(e.BinaryExpressionType))
-        if op is None:
-            raise Opaque(e, f"{e.BinaryExpressionType} is not lowered yet")
-        left, right = self.expression(e.FirstExpression), self.expression(e.SecondExpression)
-        args = [_as(left, "argument"), _as(right, "argument")]
-        if T.is_integer(left.type) and T.is_integer(right.type):
-            result = T.wider_integer(left.value_type, right.value_type)
-            operation = {"divide": "integer_divide"}.get(op, op)
-            return Node(operation, span, result, children=args)
-        money = [t for t in (left.value_type, right.value_type) if T.is_money(t)]
-        others = [t for t in (left.value_type, right.value_type) if not T.is_money(t)]
-        if money and all(T.is_integer(t) for t in others):
-            result = max(money, key=lambda t: t.int_param("precision"))
-            operation = {"multiply": "money_multiply", "divide": "money_divide"}.get(op, op)
-            if operation == "modulo":
-                raise Opaque(e, "modulo on money is not lowered yet")
-            return Node(operation, span, result, children=args)
-        raise Opaque(e, f"{op} on {left.type} and {right.type} is not lowered yet")
+    def lowered_or_opaque(self, fragment) -> Node:
+        try:
+            return self.expression(fragment)
+        except Opaque as opaque:
+            return self.opaque(fragment, opaque.reason)
 
-    def function(self, e, span) -> Node:
-        if e.CallTarget is not None:
-            raise Opaque(e, "a call to a user-defined function is not lowered yet")
-        if e.OverClause is not None:
-            raise Opaque(e, "window functions are not lowered yet")
-        name = str(e.FunctionName.Value).upper()
-        params = list(e.Parameters)
-        distinct = str(e.UniqueRowFilter) == "Distinct"
-        if name == "COUNT" and len(params) == 1:
-            p = params[0]
-            if type_name(p) == "ColumnReferenceExpression" and str(p.ColumnType) == "Wildcard":
-                return Node("count_rows", span, T.INT)
-            return Node("count_values", span, T.INT, {"distinct": distinct}, [_as(self.expression(p), "argument")])
-        if distinct:
-            raise Opaque(e, f"{name}(DISTINCT ...) is not lowered yet")
-        if name in ("SUM", "AVG") and len(params) == 1:
-            arg = self.expression(params[0])
-            result = T.sum_type(arg.value_type)
-            if result is None:
-                raise Opaque(e, f"{name} over {arg.type} is not lowered yet")
-            return Node("sum" if name == "SUM" else "average", span, result, children=[_as(arg, "argument")])
-        if name in ("MIN", "MAX") and len(params) == 1:
-            arg = self.expression(params[0])
-            if arg.value_type.name == "string":
-                raise Opaque(e, f"{name} over strings needs the collation's ordering: not lowered yet")
-            return Node("minimum" if name == "MIN" else "maximum", span, arg.type, children=[_as(arg, "argument")])
-        if name == "ISNULL" and len(params) == 2:
-            first, second = self.expression(params[0]), self.expression(params[1])
-            self.require_comparable(e, first, second)
-            # ISNULL takes the first argument's type; the replacement is converted to it.
-            return Node("null_replacement", span, first.type, children=[_as(first, "argument"), _as(second, "argument")])
-        raise Opaque(e, f"{name} is not lowered yet")
+    # ------------------------------------------------------------------ comments, hints, dependencies
 
-    def require_comparable(self, e, first: Node, second: Node) -> None:
-        for t in (first.type, second.type):
-            if t is None or t.name not in ("integer", "money", "boolean"):
-                raise Opaque(e, f"comparing or replacing values of type {t} is not lowered yet")
+    def attach_comments(self, body: Node) -> None:
+        """A comment annotates the nearest node: the one that ends before it on its own line, if there is one
+        (a comment after a select item), otherwise the next one (a comment on a line of its own)."""
+        anchors = sorted((n for n in body.walk() if n.role in ("output", "input", "left", "right", "query", "statement",
+                                                               "definition", "parameter")),
+                         key=lambda n: n.position.offset)
+        for comment in self.parsed.comments:
+            line = self.parsed.text.count("\n", 0, comment.offset) + 1
+            same_line = [n for n in anchors if n.position.end_line == line
+                         and n.position.offset + n.position.length <= comment.offset]
+            after = [n for n in anchors if n.position.offset >= comment.offset]
+            chosen = max(same_line, key=lambda n: n.position.offset + n.position.length) if same_line else (
+                after[0] if after else body)
+            chosen.comments.append(self.source(comment.offset, len(comment.text)).rstrip())
 
-    def predicate(self, e) -> Node:
-        kind = type_name(e)
-        span = self.parsed.span(e)
-        if kind == "BooleanParenthesisExpression":
-            return self.predicate(e.Expression)
-        if kind == "BooleanBinaryExpression":
-            op = {"And": "and", "Or": "or"}[str(e.BinaryExpressionType)]
-            return Node(op, span, VType.of("boolean"), children=[
-                _as(self.predicate(e.FirstExpression), "argument"), _as(self.predicate(e.SecondExpression), "argument")])
-        if kind == "BooleanComparisonExpression":
-            operator = COMPARISONS.get(str(e.ComparisonType))
-            if operator is None:
-                raise Opaque(e, f"{e.ComparisonType} is not lowered yet")
-            first, second = self.expression(e.FirstExpression), self.expression(e.SecondExpression)
-            self.require_comparable(e, first, second)
-            return Node("compare", span, VType.of("boolean"), {"operator": operator, "rule": None},
-                        [_as(first, "argument"), _as(second, "argument")])
-        if kind == "BooleanIsNullExpression":
-            node = Node("is_null", span, VType.of("boolean"), children=[_as(self.expression(e.Expression), "argument")])
-            return Node("not", span, VType.of("boolean"), children=[_as(node, "argument")]) if e.IsNot else node
-        raise Opaque(e, f"{kind} is not lowered yet")
+    def hints(self, body: Node) -> list[dict]:
+        """Every table, join and query hint on a node, for the report."""
+        out = []
+        for node in body.walk():
+            for hint in list(node.attrs.get("hints", [])) + list(node.attrs.get("query_hints", [])):
+                out.append({"node": node.id, "source_position": str(node.span), "hint": hint})
+        return out
+
+    def dependencies(self, body: Node) -> list[str]:
+        found = set(self.opaque_dependencies)
+        for n in body.walk():
+            if n.kind == "read_table" and n.attrs.get("table"):
+                found.add(n.attrs["table"])
+            elif n.kind in ("call_table_function", "call_scalar_function"):
+                found.add(n.attrs["function"])
+        if self.reader.has_fact(self.identity, "references"):
+            found |= {r["resolved"] for r in self.reader.value(self.identity, "references") if r.get("resolved")}
+        found.discard(self.identity)
+        return sorted(found)
+
+    def opaque(self, fragment, reason: str, role: str = "", *, barrier: bool = False) -> Node:
+        node = super().opaque(fragment, reason, role, barrier=barrier)
+        self.opaque_dependencies |= self.referenced_objects(fragment)
+        return node
+
+    def referenced_objects(self, fragment) -> set[str]:
+        """Catalog objects an opaque fragment names, so its dependencies are not lost."""
+        found: set[str] = set()
+        candidates: list[tuple[str, ...]] = []
+
+        def visit(f):
+            kind = type_name(f)
+            if kind in ("NamedTableReference", "SchemaObjectFunctionTableReference") and f.SchemaObject is not None:
+                candidates.append(tuple(str(i.Value) for i in f.SchemaObject.Identifiers))
+            elif kind == "FunctionCall" and f.CallTarget is not None and type_name(f.CallTarget) == "MultiPartIdentifierCallTarget":
+                candidates.append(tuple(str(i.Value) for i in f.CallTarget.MultiPartIdentifier.Identifiers) +
+                                  (str(f.FunctionName.Value),))
+        walk(fragment, visit)
+        for parts in candidates:
+            if not parts or len(parts) > 3 or "".join(parts[-1:]).startswith("#"):
+                continue
+            try:
+                resolved = self.reader.resolve(parts, dict(self.name_context))
+            except names.AmbiguousName:
+                continue
+            if resolved:
+                found.add(resolved)
+        return found
 
 
-def _as(node: Node, role: str) -> Node:
-    node.role = role
-    return node
+def lower_artefact(reader: CatalogReader, identity: str, parsed: Parsed) -> Artefact:
+    """Lower a view or function (by its catalog kind) into the intermediate representation."""
+    return Lowering(reader, identity, parsed).lower()
 
 
-def lower_view(reader: CatalogReader, identity: str, parsed: Parsed) -> Artefact:
-    return ViewLowering(reader, identity, parsed).lower()
+
+def columns_of(reader: CatalogReader) -> Callable[[str], set[str]]:
+    """The column names the catalog holds for a table, view or function result, for the checker."""
+    def names_of(identity: str) -> set[str]:
+        fact = "columns" if reader.kind_of(identity) == "table" else "result_shape"
+        return {c["name"] for c in reader.value(identity, fact)}
+    return names_of
+

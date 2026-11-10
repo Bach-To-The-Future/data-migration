@@ -41,6 +41,9 @@ __all__ = ["Engagement", "SqlServerSource", "Sandbox", "Folder", "FolderSettings
 
 TOOL_VERSION = "0.1.0"
 TARGET = {"platform": "PySpark on Databricks", "runtime": "17.3 LTS"}
+# Node kinds that are not operations but are constructs the report lists (spec section 4, items 5 and 6).
+REPORTED_KINDS = {"opaque_fragment", "dynamic_sql_execution", "schema_change", "permission_change",
+                  "external_reference"}
 
 
 def _differences() -> Catalogue:
@@ -377,8 +380,8 @@ def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue,
     parsed = parser.parse(found, reader.value(found, "source_text"),
                           reader.value(database, "compatibility_level", extractor.SOURCE),
                           reader.value(found, "quoted_identifier", extractor.SOURCE))
-    artefact = lowering.lower_view(reader, found, parsed)
-    checker.require(artefact, lambda table: {c["name"] for c in reader.value(table, "columns")})
+    artefact = lowering.lower_artefact(reader, found, parsed)
+    checker.require(artefact, lowering.columns_of(reader))
     generated = generator.generate(artefact, snapshot.id, TOOL_VERSION, differences, adjusted_names)
     spans = {n.id: (str(n.span) if n.span else None) for n in artefact.nodes()}
     checks = layer1.run(generated.text, links=generated.links, node_spans=spans,
@@ -388,7 +391,7 @@ def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue,
     manual_nodes = {n.id: m for m in generated.manual_items for n in _subtree(artefact, m.node)}
     constructs = []
     for node in artefact.nodes():
-        if vocabulary.part_of(node.kind) is None and node.kind != "opaque_fragment":
+        if vocabulary.part_of(node.kind) is None and node.kind not in REPORTED_KINDS:
             continue  # node kinds such as the view body are not constructs
         item = manual_nodes.get(node.id)
         entry = {"node": node.id, "operation": node.kind, "source_position": str(node.span),
@@ -401,7 +404,9 @@ def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue,
         constructs.append(entry)
     item = report.preview_artefact(
         name=found, artefact_type="view", area=found.split(".")[1], output=generated.relative_path,
-        layer1=checks.to_json(), constructs=constructs, degradations=[],
+        layer1=checks.to_json(), constructs=constructs,
+        degradations=[{"kind": "assumption", "where": found, "text": text} for text in artefact.assumptions],
+        hints=[{**h, "status": report.HINT_NOT_APPLICABLE} for h in artefact.hints],
         secrets=[{"setting": name, "text": "A likely secret in the source. Generated code shows this named setting "
                                             "in its place; nothing reads settings yet (the settings file, issue #44)."}
                  for name in artefact.secret_settings],

@@ -12,11 +12,14 @@ import json
 
 # 0.3: the extraction section; secrets and name adjustments per artefact. 0.4: recognised
 # artefacts as manual work; the extraction section's completeness summary, assumed
-# collations, skipped cross-checks and folders.
-SCHEMA_VERSION = "report-data/0.4"
+# collations, skipped cross-checks and folders. 0.5: the hints of each artefact, reported as not applicable on
+# the target.
+SCHEMA_VERSION = "report-data/0.5"
 PREVIEW_BANNER = ("Preview run: reconciliation was off. Nothing in this report was checked against the "
                   "original, and nothing in it is converted.")
 NOT_RECONCILED = "Not reconciled"
+# What the report says of every query hint: the target has nothing to apply it to (spec section 4, item 3).
+HINT_NOT_APPLICABLE = "not applicable on the target"
 PREVIEW_GROUP = "Not reconciled: preview run"
 
 # Construct statuses (spec section 15). In a preview run a generated construct is
@@ -54,7 +57,7 @@ def recognised_artefact(*, name: str, type: str, inventory: dict, references: li
 
 def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, layer1: dict,
                      constructs: list[dict], degradations: list[dict], secrets: list[dict],
-                     name_adjustments: dict[str, dict[str, str]]) -> dict:
+                     name_adjustments: dict[str, dict[str, str]], hints: list[dict] | None = None) -> dict:
     return {
         "name": name,
         "type": artefact_type,
@@ -67,6 +70,7 @@ def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, l
         "output": output,
         "layer1": layer1,
         "constructs": constructs,
+        "hints": hints or [],
         "degradations": degradations,
         "secrets": secrets,
         "name_adjustments": name_adjustments,
