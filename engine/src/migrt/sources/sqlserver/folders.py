@@ -24,6 +24,9 @@ its role:
 - **SQL Agent job script**: a .sql file calling `sp_add_job`. Read only without a live server,
   whose msdb is otherwise the source of jobs.
 - **SSIS package**: a .dtsx file, inventoried (ssis.py).
+- **Result-shape export**: a .csv file written by the script in Annex F, which the client's
+  administrator runs under their own account (shape_export.py). It gives procedure result
+  shapes without the sandbox, and is kept whole in the raw capture.
 - Any other file is not read, and is listed.
 
 Every fact records its provenance: parsed from a named file and line, or assumed. What a
@@ -42,16 +45,19 @@ import xml.etree.ElementTree as ET
 from typing import Any, Callable
 
 from ...core.catalog import CatalogObject, Fact, Provenance, Snapshot
-from . import jobs, names, parser, resolution, secrets, ssis
+from . import jobs, names, parser, resolution, secrets, shape_export, ssis
 
 SOURCE = "sqlserver"
 SQL_SUFFIXES = (".sql",)
 PACKAGE_SUFFIXES = (".dtsx",)
+EXPORT_SUFFIXES = (".csv",)
+EXPORT_KIND = "result_shape_export"
 FOLDERS_IDENTITY = "folders"
 NO_SERVER = "(no server)"
 
 # The roles a file can have.
 DATA_DEFINITION, QUERY_BATCH, JOB_SCRIPT, PACKAGE = "data definition", "query batch", "SQL Agent job script", "SSIS package"
+SHAPE_EXPORT = "result-shape export"
 NOT_READ, DID_NOT_PARSE = "not read", "did not parse"
 
 # What a server supplies and a folder does not (spec section 3), for the report.
@@ -228,7 +234,8 @@ def _decode(data: bytes, where: str) -> tuple[str, str]:
 
 def read_files(folders: list[FolderInput]) -> list[SourceFile]:
     """Every file in every folder, in file-name order: by its path in its folder, then by
-    the folder's database. .sql and .dtsx files are read; the others are only listed."""
+    the folder's database. .sql, .dtsx and .csv files are read (a .csv that is not a result-shape
+    export is then only listed); the others are only listed."""
     files: list[SourceFile] = []
     for folder in folders:
         root = pathlib.Path(folder.path)
@@ -239,6 +246,14 @@ def read_files(folders: list[FolderInput]) -> list[SourceFile]:
             if path.suffix.casefold() in SQL_SUFFIXES + PACKAGE_SUFFIXES:
                 text, encoding = _decode(path.read_bytes(), f"{folder.database}/{relative}")
                 files.append(SourceFile(folder, relative, text, encoding))
+            elif path.suffix.casefold() in EXPORT_SUFFIXES:
+                try:
+                    text, encoding = _decode(path.read_bytes(), f"{folder.database}/{relative}")
+                except FolderExtractionError:
+                    files.append(SourceFile(folder, relative, None, None))   # not text: not an export
+                else:
+                    files.append(SourceFile(folder, relative, text if shape_export.is_export(text) else None,
+                                            encoding if shape_export.is_export(text) else None))
             else:
                 files.append(SourceFile(folder, relative, None, None))
     seen: dict[str, SourceFile] = {}
@@ -419,7 +434,7 @@ def _canonical_database(name: str, databases: dict[str, DatabaseContext]) -> str
 
 def type_shape(data_type, text: str, user_types: Callable[[list[str | None]], dict | None]) -> tuple[dict, list[dict]]:
     """A column's or parameter's declared type as the catalog holds it (as extractor's
-    _type_shape does from sys.types), with "collatable", the type's own nullability where
+    type_shape_of does from sys.types), with "collatable", the type's own nullability where
     it has one, and its user type's identity. Returns it and anything assumed about it."""
     kind = _kind(data_type)
     shape: dict = {"user_type": None, "collatable": False, "type_nullable": None}
@@ -1557,7 +1572,19 @@ def extract(files: list[SourceFile], databases: dict[str, DatabaseContext], *,
                                         "this extraction does not read")
         p = Provenance("file", file.label)
         if file.text is None:
-            roles.append({"file": file.label, "role": NOT_READ, "reason": "not a .sql or .dtsx file"})
+            reason = ("a .csv file that is not a result-shape export: its header is not the script's in Annex F"
+                      if file.suffix in EXPORT_SUFFIXES else "not a .sql, .dtsx or result-shape export file")
+            roles.append({"file": file.label, "role": NOT_READ, "reason": reason})
+            continue
+        if file.suffix in EXPORT_SUFFIXES:
+            try:
+                entries = shape_export.parse(file.text)
+            except shape_export.ExportError as failed:
+                raise FolderExtractionError(f"{file.label}: {failed}. Run the export script again, or remove the "
+                                            "file.") from None
+            objects.append(_raw(file, [s.to_json() for s in secrets.in_text(file.text)]))
+            objects.append(_export(file, database, entries))
+            roles.append({"file": file.label, "role": SHAPE_EXPORT})
             continue
         if file.suffix in PACKAGE_SUFFIXES:
             marked = secrets.in_package(file.text)
@@ -1616,6 +1643,16 @@ def extract(files: list[SourceFile], databases: dict[str, DatabaseContext], *,
              [] if live else list(LOST_WITHOUT_A_SERVER), Provenance("file", "spec section 3")),
     )))
     return FolderResult(objects, pending, replay.schemas)
+
+
+def _export(file: SourceFile, database: str, entries: list[shape_export.Entry]) -> CatalogObject:
+    """An administrator's export of result shapes, as the catalog holds it until the shapes
+    are attached to the procedures they describe (shapes.py)."""
+    p = Provenance("file", file.label)
+    return CatalogObject(f"{EXPORT_KIND}:{file.label}", EXPORT_KIND, (
+        Fact("skeleton", "file", file.label, p),
+        Fact("skeleton", "entries", [{"object": f"{database}.{e.schema}.{e.procedure}", "shape": e.shape,
+                                      "error": e.error} for e in entries], p)))
 
 
 def _raw(file: SourceFile, marked: list[dict]) -> CatalogObject:

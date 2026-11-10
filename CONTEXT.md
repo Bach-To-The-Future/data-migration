@@ -281,6 +281,9 @@ _Avoid_: Dry run, quick run
 **Sandbox**:
 A disposable instance of a source and a target that the tool controls fully. Reconciliation runs on it with synthetic data, and procedure result shapes are described on it.
 
+**Result shape**:
+The columns of a procedure's first result set, or of a view or function. A procedure's is described in the sandbox, or taken from the client administrator's export, because the extractor's login never holds `EXECUTE`. One that SQL Server cannot describe is recorded as "could not be described", with the reason.
+
 **Synthetic data**:
 Rows generated from the catalog rather than copied from a client, deliberately including edge cases.
 

@@ -1,6 +1,6 @@
 # Annex F. The extractor's grant, revoke and check scripts
 
-Part of the [v1 architecture spec](v1-architecture-spec.md), section 3. Copied unchanged from [the extractor-permissions research](../research/extractor-permissions.md), which holds the evidence: the grant set was tested on SQL Server 2017 CU31, 2019 CU32, 2022 CU27 and 2025 CU9. For SQL Server 2000 the login gets database access only; its exact script is confirmed in the build's VM tests.
+Part of the [v1 architecture spec](v1-architecture-spec.md), section 3. Copied unchanged from [the extractor-permissions research](../research/extractor-permissions.md), which holds the evidence (except the export of result shapes at the end, added for [issue #41](https://github.com/Bach-To-The-Future/data-migration/issues/41)): the grant set was tested on SQL Server 2017 CU31, 2019 CU32, 2022 CU27 and 2025 CU9. For SQL Server 2000 the login gets database access only; its exact script is confirmed in the build's VM tests.
 
 Replace the login name, and supply a password by the client's own means. None is given here.
 
@@ -58,6 +58,26 @@ SELECT permission_name FROM fn_my_permissions(NULL, 'SERVER') ORDER BY permissio
 ```
 
 These are the checks the test ran; the expected output above is what they returned on SQL Server 2022.
+
+**Export of result shapes (run by the client's administrator, under their own account)**
+
+The extractor's login never holds `EXECUTE`, and SQL Server describes a procedure's first result set only to a login that does. A client who wants shapes without the sandbox has their administrator run this in each database, under an account that holds `EXECUTE` on its procedures, and save the result as a CSV file with a header row (in SSMS, "Save Results As", or `sqlcmd -s "," -W`). The file goes in the folder for that database, beside the other exported files, and is read as a folder input. The script runs no procedure: `sys.dm_exec_describe_first_result_set_for_object` analyses the text, and so does not execute the procedure, whatever it contains.
+
+```sql
+USE [<database>];
+
+SELECT s.name AS schema_name, o.name AS procedure_name,
+       d.column_ordinal, d.name AS column_name, d.system_type_name,
+       d.user_type_schema, d.user_type_name, d.max_length, d.precision, d.scale, d.is_nullable,
+       d.error_number, d.error_message
+FROM sys.objects AS o
+JOIN sys.schemas AS s ON s.schema_id = o.schema_id
+OUTER APPLY sys.dm_exec_describe_first_result_set_for_object(o.object_id, 0) AS d
+WHERE o.type = 'P' AND o.is_ms_shipped = 0
+ORDER BY s.name, o.name, d.column_ordinal;
+```
+
+One row per column of a procedure's first result set. A procedure with no result set has one row with nothing but its names. A procedure SQL Server could not describe has one row with `error_number` and `error_message`, which the report shows as the reason ("could not be described"). A shape from the export carries "file" provenance and takes the place of the sandbox's for every procedure the file names. A procedure the catalog lacks is listed, never dropped.
 
 [mv]: https://learn.microsoft.com/en-us/sql/relational-databases/security/metadata-visibility-configuration
 [desc]: https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-exec-describe-first-result-set-for-object-transact-sql

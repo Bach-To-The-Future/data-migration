@@ -18,7 +18,8 @@ recorded by its type); SQL Agent jobs from msdb; references worked out by the pa
 SQL Server's dependency metadata as a cross-check; and likely secrets, marked.
 
 Not here, and reported where they matter: procedure result shapes, which need EXECUTE and
-are described in the sandbox (issue #41); servers before 2017 (issue #74).
+are described in the sandbox or taken from an administrator's export (shapes.py); servers before
+2017 (issue #74).
 
 Folders of files are read beside the server or without one (folders.py): query batches,
 SSIS packages and SQL Agent job scripts, and, for a database read from no server, the data
@@ -545,7 +546,7 @@ def _server_object(reading: Reading, time_zone: str | None) -> CatalogObject:
 
 # ---------------------------------------------------------------------------- one database
 
-def _type_shape(row: dict, types: dict[int, dict]) -> dict:
+def type_shape_of(row: dict, types: dict[int, dict]) -> dict:
     """A column's or parameter's declared type, from its sys.columns or sys.parameters row."""
     declared = types[row["user_type_id"]]
     # Table types (243) and CLR types (240: hierarchyid, geometry, geography and user CLR
@@ -661,7 +662,7 @@ class _Database:
         return CatalogObject(identity, kind, tuple(facts))
 
     def shape(self, oid: int) -> list[dict]:
-        return [{"name": c["name"], **_type_shape(c, self.types), "nullable": bool(c["is_nullable"])}
+        return [{"name": c["name"], **type_shape_of(c, self.types), "nullable": bool(c["is_nullable"])}
                 for c in self.columns.get(oid, [])]
 
     def relation_facts(self, oid: int, kind: str) -> list[Fact]:
@@ -675,7 +676,7 @@ class _Database:
             for c in self.columns.get(oid, []):
                 key = (oid, c["column_id"])
                 declared = self.types[c["user_type_id"]]
-                column = {"name": c["name"], **_type_shape(c, self.types), "nullable": bool(c["is_nullable"]),
+                column = {"name": c["name"], **type_shape_of(c, self.types), "nullable": bool(c["is_nullable"]),
                           "collation": c["collation_name"], "identity": bool(c["is_identity"]),
                           "computed": bool(c["is_computed"]),
                           "user_type": (names.type_identity(self.name, self.schemas[declared["schema_id"]],
@@ -801,7 +802,7 @@ class _Database:
         params, returns = [], None
         defaults, unknown = ({}, None) if kind in CLR_KINDS else self.parsed_defaults(oid)
         for r in self.parameters.get(oid, []):
-            shape = _type_shape(r, self.types)
+            shape = type_shape_of(r, self.types)
             if r["parameter_id"] == 0:
                 returns = shape
                 continue
@@ -1038,7 +1039,7 @@ class _Database:
 
 PROVENANCE_COUNTS = {"server": "read", "file": "parsed", "assumed": "assumed"}
 # Objects that hold what was read rather than facts about the client's objects.
-NOT_COUNTED = {"raw_capture", "folder_extraction"}
+NOT_COUNTED = {"raw_capture", "folder_extraction", "sandbox_description"}
 
 
 def findings(snapshot: Snapshot) -> dict:

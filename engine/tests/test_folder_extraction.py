@@ -381,7 +381,7 @@ def test_every_file_is_kept_verbatim_and_every_other_file_is_listed(engagement, 
     raw = facts(snapshot, "raw:file:Db/t.sql")
     assert raw["text"] == text and raw["encoding"] == "utf-16"
     files = facts(snapshot, folders.FOLDERS_IDENTITY)["files"]
-    assert {"file": "Db/notes.txt", "role": folders.NOT_READ, "reason": "not a .sql or .dtsx file"} in files
+    assert {"file": "Db/notes.txt", "role": folders.NOT_READ, "reason": "not a .sql, .dtsx or result-shape export file"} in files
 
 
 def test_one_command_previews_a_view_from_folders_alone(engagement, tmp_path, capsys):

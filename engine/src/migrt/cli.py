@@ -3,6 +3,7 @@ interface and prints the structured result as JSON. It holds no conversion logic
 
     python -m migrt preview --engagement NAME --database DB --artefact DB.schema.name --out DIR
     python -m migrt preview ... --folder DB=PATH            (folders beside the server)
+    python -m migrt preview ... --sandbox HOST[:PORT]       (describe procedure result shapes there)
     python -m migrt preview --no-server --folder DB=PATH --collation DB=COLLATION --time-zone ZONE ...
 
 Connection settings come from options or the environment: the extractor's password only
@@ -43,6 +44,12 @@ def _parser() -> argparse.ArgumentParser:
     preview.add_argument("--compatibility-level", action="append", default=[], metavar="DB=LEVEL",
                          help="without a server: database DB's compatibility level (required); repeatable")
     preview.add_argument("--sql-server-version", help="without a server: the SQL Server release, such as 2019 (required)")
+    preview.add_argument("--sandbox", metavar="HOST[:PORT]",
+                         help="the sandbox SQL Server, where procedure result shapes are described (spec section 3); "
+                              "without one, they are not, and the report says so")
+    preview.add_argument("--sandbox-login", default="sa", help="the sandbox's login, with full rights on it")
+    preview.add_argument("--sandbox-password-env", default="MSSQL_SA_PASSWORD",
+                         help="environment variable holding the sandbox login's password")
     preview.add_argument("--artefact", action="append", required=True, help="database.schema.name; repeatable")
     preview.add_argument("--out", required=True, type=pathlib.Path, help="where the delivered project is written")
     return p
@@ -91,9 +98,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"migrt: the login's password is not in ${args.password_env}", file=sys.stderr)
             return 2
         source = engine.SqlServerSource(args.server, args.port, args.login, password, args.database, args.time_zone)
+    sandbox = None
+    if args.sandbox:
+        host, _, port = args.sandbox.partition(":")
+        sandbox_password = os.environ.get(args.sandbox_password_env)
+        if sandbox_password is None or not host or (port and not port.isdigit()):
+            print(f"migrt: --sandbox takes HOST[:PORT], and the sandbox login's password must be in "
+                  f"${args.sandbox_password_env}", file=sys.stderr)
+            return 2
+        sandbox = engine.Sandbox(host, int(port or 1433), args.sandbox_login, sandbox_password)
     try:
         result = engine.preview_run(engagement, source, args.artefact, args.out, folders,
-                                    settings if source is None else None)
+                                    settings if source is None else None, sandbox)
     except engine.EXTRACTION_ERRORS as exc:
         print(str(exc), file=sys.stderr)
         return 3

@@ -23,17 +23,19 @@ from .core.differences import Catalogue
 from .core.catalog import CatalogReader, Snapshot
 from .core.ir import FORMAT_VERSION, Artefact
 from .core import vocabulary
-from .sources.sqlserver import differences as source_differences, extractor, lowering, names, parser
+from .sources.sqlserver import differences as source_differences, extractor, lowering, names, parser, shapes
 from .sources.sqlserver import folders as folder_source
 from .sources.sqlserver.extractor import (ExtractorPermissionError, SettingsRequired, TimeZoneRequired,
                                           UnsupportedServer)
 from .sources.sqlserver.folders import DuplicateCreate, FolderExtractionError
+from .sources.sqlserver.shapes import SandboxUnavailable
 from .targets.pyspark import differences as target_differences, generator, layer1
 from .targets.pyspark import names as target_names
 
-__all__ = ["Engagement", "SqlServerSource", "Folder", "FolderSettings", "ArtefactResult", "RunResult",
+__all__ = ["Engagement", "SqlServerSource", "Sandbox", "Folder", "FolderSettings", "ArtefactResult", "RunResult",
            "ExtractorPermissionError", "UnsupportedServer", "TimeZoneRequired", "SettingsRequired",
-           "FolderExtractionError", "DuplicateCreate", "EXTRACTION_ERRORS", "extract", "read_snapshot",
+           "FolderExtractionError", "DuplicateCreate", "SandboxUnavailable", "EXTRACTION_ERRORS", "extract",
+           "read_snapshot",
            "name_adjustments", "extraction_findings", "recognised_artefacts", "preview_run",
            "delete_engagement_data", "TOOL_VERSION"]
 
@@ -70,6 +72,20 @@ class SqlServerSource:
 
 
 @dataclasses.dataclass(frozen=True)
+class Sandbox:
+    """The sandbox SQL Server, the tool's own disposable one, and a login with full rights on
+    it. Procedure result shapes are described there (spec section 3); it is never the
+    client's server."""
+    host: str
+    port: int
+    login: str
+    password: str
+
+    def describe(self) -> str:
+        return f"sandbox SQL Server {self.host},{self.port} as {self.login}"
+
+
+@dataclasses.dataclass(frozen=True)
 class Folder:
     """A folder of exported files (query batches, SSIS packages, job scripts, data
     definition), and the database its files belong to."""
@@ -90,7 +106,7 @@ class FolderSettings:
 
 # Every error an extraction raises before storing anything, for front ends to report.
 EXTRACTION_ERRORS = (ExtractorPermissionError, UnsupportedServer, TimeZoneRequired, SettingsRequired,
-                     FolderExtractionError)
+                     FolderExtractionError, SandboxUnavailable)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -125,13 +141,19 @@ def _control(engagement: Engagement) -> str:
 
 
 def extract(engagement: Engagement, source: SqlServerSource | None, folders: Sequence[Folder] = (),
-            settings: FolderSettings | None = None) -> Snapshot:
+            settings: FolderSettings | None = None, sandbox: Sandbox | None = None) -> Snapshot:
     """Extract from a live server, folders of files, or both; store the snapshot immutably,
     and extend the name adjustments for any name not recorded yet. Raises UnsupportedServer
     or ExtractorPermissionError, before reading anything, for a server v1 does not extract
     from or a grant that is missing or more than read-only; SettingsRequired without a
     server when a setting is missing; FolderExtractionError (DuplicateCreate among them)
-    for folders that cannot be read as given."""
+    for folders that cannot be read as given.
+
+    Procedure result shapes need EXECUTE, which the extractor's login never holds, so they
+    are described in the `sandbox` (spec section 3), or taken from an administrator's export
+    in a folder. Without either, each procedure says it was not described, with the reason.
+    SandboxUnavailable is raised, before anything is stored, for a sandbox that cannot be
+    reached."""
     settings = settings or FolderSettings()
     inputs = tuple(_folder_inputs(folders))
     if source is not None and settings != FolderSettings():
@@ -143,8 +165,11 @@ def extract(engagement: Engagement, source: SqlServerSource | None, folders: Seq
     else:
         options = extractor.Settings(settings.collations, settings.version, settings.compatibility_levels)
         snapshot = extractor.extract(None, [], time_zone=settings.time_zone, folder_inputs=inputs, settings=options)
+    snapshot = shapes.attach(snapshot, None if sandbox is None else shapes.SandboxAddress(
+        sandbox.host, sandbox.port, sandbox.login, sandbox.password))
     described = [source.describe()] if source is not None else []
     described += [f"folder {f.path} for {f.database}" for f in folders]
+    described += [sandbox.describe()] if sandbox is not None else []
     dsn = _control(engagement)
     control_db.store_snapshot(dsn, snapshot, "; ".join(described))
     control_db.extend_name_adjustments(dsn, snapshot.id, target_names.scopes(list(_name_parts(snapshot).values())),
@@ -172,6 +197,7 @@ def extraction_findings(snapshot: Snapshot) -> dict:
     warning that pattern matching misses some secrets."""
     found = extractor.findings(snapshot)
     found["secrets"]["note"] = secrets.MISSES_SOME
+    found["result_shapes"] = shapes.findings(snapshot)
     return found
 
 
@@ -199,7 +225,8 @@ def _now() -> datetime.datetime:
 
 
 def preview_run(engagement: Engagement, source: SqlServerSource | None, artefacts: list[str],
-                out_dir: pathlib.Path, folders: Sequence[Folder] = (), settings: FolderSettings | None = None) -> RunResult:
+                out_dir: pathlib.Path, folders: Sequence[Folder] = (), settings: FolderSettings | None = None,
+                sandbox: Sandbox | None = None) -> RunResult:
     """Convert the named artefacts (database.schema.name) with reconciliation off, extracting
     from a live server, folders of files, or both. Writes
     converted/<Database>/<schema>/<kind>/<Name>.py and report/report-data.json under out_dir.
@@ -207,7 +234,7 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
     started = _now()
     run_id = f"run-{started:%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"
     dsn = _control(engagement)
-    snapshot = extract(engagement, source, folders, settings)
+    snapshot = extract(engagement, source, folders, settings, sandbox)
     snapshot = control_db.load_snapshot(dsn, snapshot.id)   # convert from what was stored
     out_dir = pathlib.Path(out_dir)
     differences = _differences()
@@ -291,6 +318,7 @@ def _extraction_degradations(findings: dict) -> list[dict]:
                     "text": f"Referenced by a foreign key of {tables} but not in the extraction: those tables cannot be "
                             f"recreated faithfully, and the {missing['blocked_artefacts']} artefacts that write them "
                             "are not reconcilable locally. Extend the export to include it."})
+    out += _shape_degradations(findings["result_shapes"])
     folder = findings.get("folders")
     if folder:
         for role in (folder_source.NOT_READ, folder_source.DID_NOT_PARSE):
@@ -308,6 +336,28 @@ def _extraction_degradations(findings: dict) -> list[dict]:
         if folder["lost_without_a_server"]:
             out.append({"kind": "reduced coverage", "where": "every database read from folders alone",
                         "text": "Lost without a server: " + "; ".join(folder["lost_without_a_server"]) + "."})
+    return out
+
+
+def _shape_degradations(found: dict) -> list[dict]:
+    """The result shapes that could not be described, and what the sandbox could not recreate."""
+    out = []
+    procedures = [e for e in found["could_not_be_described"] if e["procedure"]]
+    others = [e for e in found["could_not_be_described"] if not e["procedure"]]
+    for noun, entries in (("procedures", procedures), ("views and inline functions", others)):
+        if entries:
+            out.append({"kind": "reduced coverage", "where": f"{len(entries)} {noun}",
+                        "text": f"The result shape of {len(entries)} {noun} could not be described, each with its "
+                                "reason in the extraction section. The static check skips the shape comparison for "
+                                "them, and the verdict says so (spec section 3)."})
+    if found["not_recreated"]:
+        out.append({"kind": "reduced coverage", "where": f"{len(found['not_recreated'])} objects",
+                    "text": "The sandbox could not recreate these objects, each with SQL Server's reason in the "
+                            "extraction section; shapes that depend on them could not be described."})
+    if found["export_unmatched"]:
+        out.append({"kind": "reduced coverage", "where": f"{len(found['export_unmatched'])} export entries",
+                    "text": "Entries of an administrator's export of result shapes name procedures the catalog does "
+                            "not hold; they were not used."})
     return out
 
 

@@ -16,7 +16,7 @@ Then, for a preview run of one view:
 
 ```
 docker compose -f sandbox/docker-compose.yml --profile tools run --rm tools \
-    python -m migrt preview --engagement retail_demo --database RetailSample \
+    python -m migrt preview --engagement retail_demo --database RetailSample --sandbox sqlserver \
     --artefact RetailSample.sales.vOrderTotals --out out/retail_demo
 ```
 
@@ -35,7 +35,7 @@ docker compose -f sandbox/docker-compose.yml --profile tools run --rm tools \
 
 ## Extraction
 
-The extractor reads each metadata view only as `SELECT * FROM <view>` and builds every fact from those rows, so the raw capture holds exactly what the facts came from ([ADR 0024](../docs/adr/0024-the-extractor-reads-metadata-views-only-whole.md)). The views are listed in [`extractor.py`](src/migrt/sources/sqlserver/extractor.py). References are worked out by the parser and cross-checked against `sys.sql_expression_dependencies` where the optional grant is held; the report data's `extraction` section lists every disagreement, every check that was skipped or not run, the marked secrets, and the self-check's exemptions. Procedure result shapes are not extracted: they need `EXECUTE`, so they are described in the sandbox ([issue #41](https://github.com/Bach-To-The-Future/data-migration/issues/41)).
+The extractor reads each metadata view only as `SELECT * FROM <view>` and builds every fact from those rows, so the raw capture holds exactly what the facts came from ([ADR 0024](../docs/adr/0024-the-extractor-reads-metadata-views-only-whole.md)). The views are listed in [`extractor.py`](src/migrt/sources/sqlserver/extractor.py). References are worked out by the parser and cross-checked against `sys.sql_expression_dependencies` where the optional grant is held; the report data's `extraction` section lists every disagreement, every check that was skipped or not run, the marked secrets, and the self-check's exemptions. Procedure result shapes are not extracted: they need `EXECUTE`, so they are described in the sandbox ([`shapes.py`](src/migrt/sources/sqlserver/shapes.py), [issue #41](https://github.com/Bach-To-The-Future/data-migration/issues/41)), or taken from an administrator's export, a CSV in a folder written by the script in Annex F ([`shape_export.py`](src/migrt/sources/sqlserver/shape_export.py)). Give the sandbox with `--sandbox HOST[:PORT]` (login `sa` and password from `$MSSQL_SA_PASSWORD` unless `--sandbox-login` and `--sandbox-password-env` say otherwise), or as `engine.Sandbox` in the library. Each procedure then has a `result_shape` fact, or `result_shape_unavailable` holding why it could not be described; both are summarised in the report data's `extraction.result_shapes`. Without a sandbox or an export, every procedure says so. Views and inline functions read from folders are described the same way.
 
 Folders ([`folders.py`](src/migrt/sources/sqlserver/folders.py)) give query batches and SSIS packages beside a server, and without one also the data definition, replayed `CREATE` before `ALTER` in file-name order, and job scripts. Beside a server, the server is the only source of its databases' objects ([ADR 0025](../docs/adr/0025-a-live-server-is-the-only-source-of-its-databases-objects.md)). Without one, every fact a server would have supplied is assumed, as a fact with assumed provenance or as an entry in its object's `assumed_values`, and the report data's `extraction` section has the completeness summary, every column whose collation was assumed, and every file and statement that was not read, not replayed or superseded. SSIS packages ([`ssis.py`](src/migrt/sources/sqlserver/ssis.py)) and SQL Agent jobs ([`jobs.py`](src/migrt/sources/sqlserver/jobs.py)) are inventoried, with their references to catalog objects worked out by the parser, and listed in `recognised_artefacts` as manual work, every marked secret masked.
 
@@ -56,6 +56,7 @@ src/migrt/
     name_adjustments.py  extending the recorded name adjustments by a target's rules
     report.py          the report data
   sources/sqlserver/   connection (SqlClient), extractor, folders (files: the replay, batches),
+                       shapes (result shapes, described in the sandbox), shape_export (the administrator's export),
                        ssis and jobs (the recognised artefacts' inventories), references (the
                        parser's) and resolution (resolving them), secrets (the patterns), parser
                        (ScriptDom), names (the resolver), types, lowering, differences (the
