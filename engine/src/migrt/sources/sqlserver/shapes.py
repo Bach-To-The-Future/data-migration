@@ -73,6 +73,9 @@ class SandboxAddress:
     port: int
     login: str
     password: str
+    # Names this run's scratch databases (migrt_sandbox_<label>_<unique>), so that sessions
+    # sharing one sandbox can tell theirs apart. Letters and digits only; may be empty.
+    label: str = ""
 
 
 class _Cannot(Exception):
@@ -189,7 +192,8 @@ class _Scratch:
 
     def __init__(self, address: SandboxAddress, statements: list[str] | None):
         self.address, self.statements = address, statements
-        self.name = SANDBOX_DATABASE + uuid.uuid4().hex[:12]
+        label = re.sub(r"[^A-Za-z0-9]", "", address.label)[:24]
+        self.name = SANDBOX_DATABASE + (label + "_" if label else "") + uuid.uuid4().hex[:12]
 
     def _open(self, database: str) -> Connection:
         a = self.address

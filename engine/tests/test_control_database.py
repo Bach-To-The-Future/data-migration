@@ -37,10 +37,11 @@ def test_rows_added_to_a_stored_snapshot_are_detected_on_reading_it(engagement, 
 
 def test_deleting_an_engagement_drops_its_control_database(extractor_server):
     import os
-    eng = engine.Engagement("test_delete_me", os.environ["MIGRT_CONTROL_DSN"])
+    from conftest import RUN
+    eng = engine.Engagement(f"test_delete_me_{RUN}", os.environ["MIGRT_CONTROL_DSN"])
     engine.extract(eng, extractor_server)
 
     engine.delete_engagement_data(eng)
 
     with psycopg.connect(eng.control_server_dsn) as admin:
-        assert admin.execute("SELECT 1 FROM pg_database WHERE datname = 'migrt_test_delete_me'").fetchone() is None
+        assert admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (f"migrt_test_delete_me_{RUN}",)).fetchone() is None

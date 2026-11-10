@@ -11,7 +11,7 @@ from migrt import cli, engine
 from migrt.core.catalog import CatalogReader
 from migrt.sources.sqlserver import extractor, folders, names
 
-from conftest import SCRATCH_BATCHES, sandbox_server
+from conftest import SCRATCH, SCRATCH_BATCHES, sandbox_server
 
 SAMPLE = pathlib.Path(__file__).parents[2] / "corpus" / "sample"
 DB = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": 160})
@@ -101,7 +101,7 @@ def test_folders_alone_rebuild_a_case_sensitive_database_with_every_kind_of_obje
 
     assert differences(live, folder, unnamed_ok=True) == []
     # A file holds an encrypted module's text, which the server hides.
-    hidden = facts(folder, "MigrtExtractTest.s.uspHidden")
+    hidden = facts(folder, f"{SCRATCH}.s.uspHidden")
     assert hidden["extractable"] is True and hidden["with_encryption"] is True
     assert hidden["parameters"][0]["default"] == "1"
     # Security statements build nothing, and are listed.

@@ -1,9 +1,17 @@
 """Fixtures for the engine's tests. They run in the sandbox tools container, against the
 sandbox SQL Server (with the corpus built and the extractor login granted) and Postgres."""
 import os
+import re
 import uuid
 
 import pytest
+
+# Sessions working in parallel share one sandbox SQL Server and one Postgres server
+# (docs/agents/worktrees.md). Every scratch database, schema and engagement the tests create
+# carries this run's suffix, so no run drops or reads another's. MIGRT_TEST_RUN fixes it, for
+# a test that starts runs of its own.
+RUN = os.environ.get("MIGRT_TEST_RUN") or uuid.uuid4().hex[:8]
+assert re.fullmatch(r"[0-9a-f]{1,16}", RUN), "MIGRT_TEST_RUN is hexadecimal"
 
 
 @pytest.fixture
@@ -11,7 +19,7 @@ def engagement():
     """A fresh engagement with its own control database, dropped afterwards."""
     from migrt import engine
 
-    eng = engine.Engagement(name=f"test_{uuid.uuid4().hex[:10]}", control_server_dsn=os.environ["MIGRT_CONTROL_DSN"])
+    eng = engine.Engagement(name=f"test_{RUN}_{uuid.uuid4().hex[:6]}", control_server_dsn=os.environ["MIGRT_CONTROL_DSN"])
     yield eng
     engine.delete_engagement_data(eng)
 
@@ -33,7 +41,7 @@ def extractor_server():
     return sandbox_server()
 
 
-SCRATCH = "MigrtExtractTest"
+SCRATCH = f"MigrtExtractTest_{RUN}"
 # A case-sensitive scratch database with what the corpus lacks: a synonym, a sequence, user
 # types, an encrypted procedure, a disabled and an ordered trigger, a database trigger,
 # likely secrets, a name Unity Catalog refuses and names differing only by case.

@@ -83,6 +83,8 @@ class Sandbox:
     port: int
     login: str
     password: str
+    # Names this run's scratch databases, so sessions sharing one sandbox can tell theirs apart.
+    label: str = ""
 
     def describe(self) -> str:
         return f"sandbox SQL Server {self.host},{self.port} as {self.login}"
@@ -169,7 +171,7 @@ def extract(engagement: Engagement, source: SqlServerSource | None, folders: Seq
         options = extractor.Settings(settings.collations, settings.version, settings.compatibility_levels)
         snapshot = extractor.extract(None, [], time_zone=settings.time_zone, folder_inputs=inputs, settings=options)
     snapshot = shapes.attach(snapshot, None if sandbox is None else shapes.SandboxAddress(
-        sandbox.host, sandbox.port, sandbox.login, sandbox.password))
+        sandbox.host, sandbox.port, sandbox.login, sandbox.password, sandbox.label))
     described = [source.describe()] if source is not None else []
     described += [f"folder {f.path} for {f.database}" for f in folders]
     described += [sandbox.describe()] if sandbox is not None else []

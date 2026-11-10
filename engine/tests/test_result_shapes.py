@@ -18,9 +18,9 @@ from migrt import cli, engine
 from migrt.core.catalog import CatalogReader, Provenance
 from migrt.sources.sqlserver import folders, names, shapes
 
-from conftest import sa_connection, sandbox_server
+from conftest import RUN, sa_connection, sandbox_server
 
-SHAPE_DB = "MigrtShapeTest"
+SHAPE_DB = f"MigrtShapeTest_{RUN}"
 SAMPLE = pathlib.Path(__file__).parents[2] / "corpus" / "sample"
 ANNEX_F = pathlib.Path(__file__).parents[2] / "docs" / "spec" / "annex-f-extractor-scripts.md"
 
@@ -96,12 +96,14 @@ def source(shape_database):
 
 
 def sandbox() -> engine.Sandbox:
-    return engine.Sandbox(os.environ.get("MSSQL_HOST", "sqlserver"), 1433, "sa", os.environ["MSSQL_SA_PASSWORD"])
+    return engine.Sandbox(os.environ.get("MSSQL_HOST", "sqlserver"), 1433, "sa", os.environ["MSSQL_SA_PASSWORD"], RUN)
 
 
 def scratch_databases() -> list[str]:
+    """This run's scratch databases in the sandbox that are still there (another run's are not ours)."""
     with sa_connection() as master:
-        return [r["name"] for r in master.query("SELECT name FROM sys.databases WHERE name LIKE 'migrt[_]sandbox[_]%'")]
+        return [r["name"] for r in master.query("SELECT name FROM sys.databases WHERE name LIKE @pattern",
+                                                {"pattern": f"migrt[_]sandbox[_]{RUN}[_]%"})]
 
 
 def procedure(name: str) -> str:
@@ -124,7 +126,7 @@ def described(shape_database):
     """The scratch database's snapshot with its procedures described in the sandbox."""
     from conftest import sandbox_server as server
 
-    eng = engine.Engagement(name=f"test_shapes_{os.getpid()}", control_server_dsn=os.environ["MIGRT_CONTROL_DSN"])
+    eng = engine.Engagement(name=f"test_shapes_{RUN}", control_server_dsn=os.environ["MIGRT_CONTROL_DSN"])
     try:
         yield engine.extract(eng, server(databases=(shape_database,)), sandbox=sandbox())
     finally:
@@ -220,7 +222,7 @@ def test_without_a_sandbox_every_procedure_says_it_was_not_described(engagement,
 
 
 def test_a_sandbox_that_cannot_be_reached_fails_loudly_and_stores_nothing(engagement, source):
-    bad = engine.Sandbox(os.environ.get("MSSQL_HOST", "sqlserver"), 1433, "sa", "not-the-password")
+    bad = engine.Sandbox(os.environ.get("MSSQL_HOST", "sqlserver"), 1433, "sa", "not-the-password", RUN)
 
     with pytest.raises(engine.SandboxUnavailable):
         engine.extract(engagement, source, sandbox=bad)
