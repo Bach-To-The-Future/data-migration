@@ -6,6 +6,11 @@ state and its arguments returning a column expression. ANSI mode is pinned in ev
 is linked to the nodes it came from, and so to their source positions, and every expression is emitted as one
 contiguous, self-contained span of code that layer 1 checks (`layer1.Span`).
 
+A node kind is generated if the generator has a handler for it: a plan step, an expression, an artefact body, a
+statement or a parameter, each declared by decorating the code that generates it (`PLAN_STEPS`, `EXPRESSIONS`,
+`BODIES`, `STATEMENTS`, `PARAMETERS`), and `handled_kinds()` is what they are. Adding a handler is the only edit a kind
+needs; detection refuses every other kind (issue #107).
+
 Constructs the target cannot translate are detected first (`untranslatable.detect`), and generation must account
 for each of them: an operation this target cannot yet generate exactly is declared unsupported here and becomes a
 manual item. Its column is emitted as `F.raise_error(...)`, so the file still runs its other columns and fails
@@ -26,7 +31,8 @@ import dataclasses
 import functools
 import keyword
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import NoReturn
 
 from ...core import vocabulary
 from ...core.differences import Catalogue
@@ -113,6 +119,55 @@ def python_name(name: str, taken: set[str]) -> str:
     return candidate
 
 
+class Handlers:
+    """The generator's handlers for one role, by the node kind each one generates (issue #107). A handler is declared
+    by decorating the code that generates the kind, and that is the only edit a kind needs: `handled_kinds()` is
+    what the handlers are, and detection before generation refuses every other kind. A handler may still decline
+    a particular node (a money product, a string compared by a collation) by raising `Unsupported` with its own
+    reason."""
+
+    def __init__(self, role: str):
+        self.role = role
+        self.by_kind: dict[str, Callable] = {}
+
+    def __call__(self, *kinds: str):
+        def register(handler):
+            for kind in kinds:
+                if kind in self.by_kind:
+                    raise ValueError(f"{kind} has two {self.role} handlers")
+                self.by_kind[kind] = handler
+            return handler
+        return register
+
+    def of(self, node: Node) -> Callable:
+        """The handler for a node of a kind that must have one (a malformed representation does not)."""
+        found = self.by_kind.get(node.kind)
+        if found is None:
+            raise ValueError(f"{node.id}: no {self.role} handler for a {node.kind}")
+        return found
+
+
+PLAN_STEPS = Handlers("plan step")            # (generator, node) -> the variable holding the step
+EXPRESSIONS = Handlers("expression")          # (generator, node, grouped) -> code
+BODIES = Handlers("artefact body")            # (generator, function name, body); the file's functions
+STATEMENTS = Handlers("statement")            # (generator, statement, body); a scalar function's only statement
+PARAMETERS = Handlers("parameter")            # (generator, parameter node)
+ROLES = (PLAN_STEPS, EXPRESSIONS, BODIES, STATEMENTS, PARAMETERS)
+
+
+def handled_kinds() -> frozenset[str]:
+    """Every node kind the generator has a handler for, in any role. A kind has one handler in one role."""
+    kinds = [kind for role in ROLES for kind in role.by_kind]
+    if len(kinds) != len(set(kinds)):
+        raise ValueError(f"a kind has handlers in two roles: {sorted(k for k in set(kinds) if kinds.count(k) > 1)}")
+    return frozenset(kinds)
+
+
+def detect(artefact: Artefact) -> list[untranslatable.Finding]:
+    """Every node the target cannot translate, detected before generation against the kinds it has handlers for."""
+    return untranslatable.detect(artefact, handled_kinds())
+
+
 class Generator:
     def __init__(self, artefact: Artefact, snapshot_id: str, tool_version: str, differences: Catalogue,
                  names: Names, dependencies: Dependencies):
@@ -123,7 +178,8 @@ class Generator:
         self.snapshot_id = snapshot_id
         self.tool_version = tool_version
         self.draft = Draft()
-        self.findings = untranslatable.detect(artefact)
+        self.handled = handled_kinds()
+        self.findings = untranslatable.detect(artefact, self.handled)
         self.detected: dict[str, list[untranslatable.Finding]] = {}
         for found in self.findings:
             self.detected.setdefault(found.node, []).append(found)
@@ -140,24 +196,10 @@ class Generator:
         a = self.artefact
         path, name = self.recorded_names.module(a.identity, a.artefact_type)
         self.draft.taken.add(name)
-        kind = a.artefact_type
-        body = a.body
-        if kind == "view":
-            self.function_returning_dataframe(name, body, "view")
-        elif kind == "inline_function":
-            self.function_returning_dataframe(name, body, "table function")
-        elif kind == "scalar_function":
-            self.scalar_function(name, body)
-        elif kind == "table_function":
-            self.stub(name, body, "DataFrame", "multi-statement table function", positional=True)
-        elif kind == "procedure":
-            self.stub(name, body, "None", "procedure", positional=False)
-        elif kind == "trigger":
-            self.stub(name, body, "None", "trigger", positional=True, extra=["inserted", "deleted"])
-        elif kind == "query_batch":
-            self.batches(body)
-        else:
-            raise ValueError(f"{a.identity}: a {kind} is not generated")
+        handler = BODIES.by_kind.get(a.body.kind)
+        if handler is None:
+            raise ValueError(f"{a.identity}: a {a.artefact_type} is not generated")
+        handler(self, name, a.body)
         require_accounted(self.findings, self.draft.manual, a)
         return self.assemble(path)
 
@@ -196,22 +238,26 @@ class Generator:
         """The parameter nodes, each with its Python name; a default is the caller's to pass (reported)."""
         declared = body.children_with("parameter")
         for p in declared:
-            name = p.attrs["name"]
-            python = python_name(name.lstrip("@"), self.draft.taken)
-            self.params[name.casefold()] = python
-            spark = spark_types.mapping(p.type) if p.type is not None else None
-            if spark is not None and spark.companion_column:
-                self.requirement(f"parameter {name}", spark)
-            self.parameters.append({"name": name, "python_name": python, "direction": p.attrs["direction"],
-                                    "readonly": p.attrs["readonly"], "default": p.attrs["default"],
-                                    "type": p.type.to_json() if p.type is not None else None,
-                                    "spark_type": spark.ddl if spark else None})
-            if p.attrs["default"] is not None:
-                self.draft.assumptions.append(
-                    f"{self.artefact.identity}: parameter {name} has the default {p.attrs['default']} in the source; "
-                    f"the generated function takes it as an argument the caller must pass, so the default is not "
-                    f"applied")
+            PARAMETERS.of(p)(self, p)
         return declared
+
+    @PARAMETERS("declare_parameter")
+    def declare_parameter(self, p: Node) -> None:
+        name = p.attrs["name"]
+        python = python_name(name.lstrip("@"), self.draft.taken)
+        self.params[name.casefold()] = python
+        spark = spark_types.mapping(p.type) if p.type is not None else None
+        if spark is not None and spark.companion_column:
+            self.requirement(f"parameter {name}", spark)
+        self.parameters.append({"name": name, "python_name": python, "direction": p.attrs["direction"],
+                                "readonly": p.attrs["readonly"], "default": p.attrs["default"],
+                                "type": p.type.to_json() if p.type is not None else None,
+                                "spark_type": spark.ddl if spark else None})
+        if p.attrs["default"] is not None:
+            self.draft.assumptions.append(
+                f"{self.artefact.identity}: parameter {name} has the default {p.attrs['default']} in the source; "
+                f"the generated function takes it as an argument the caller must pass, so the default is not "
+                f"applied")
 
     def requirement(self, what: str, found: spark_types.SparkType) -> None:
         """A requirement on the target tables that the type's representation makes, listed in the report."""
@@ -238,6 +284,26 @@ class Generator:
             emit(f"    ss.{ANSI_PIN}")
 
     # ------------------------------------------------------------------ views and table functions
+
+    @BODIES("view_body")
+    def view_body(self, name: str, body: Node) -> None:
+        self.function_returning_dataframe(name, body, "view")
+
+    @BODIES("table_function_body")
+    def table_function_body(self, name: str, body: Node) -> None:
+        """Inline and multi-statement table functions share a body kind: the artefact tells them apart."""
+        if self.artefact.artefact_type == "inline_function":
+            self.function_returning_dataframe(name, body, "table function")
+        else:
+            self.stub(name, body, "DataFrame", "multi-statement table function", positional=True)
+
+    @BODIES("procedure_body")
+    def procedure_body(self, name: str, body: Node) -> None:
+        self.stub(name, body, "None", "procedure", positional=False)
+
+    @BODIES("trigger_body")
+    def trigger_body(self, name: str, body: Node) -> None:
+        self.stub(name, body, "None", "trigger", positional=True, extra=["inserted", "deleted"])
 
     def function_returning_dataframe(self, name: str, body: Node, noun: str) -> None:
         a, emit = self.artefact, self.draft.emit
@@ -286,10 +352,12 @@ class Generator:
 
     # ------------------------------------------------------------------ scalar functions
 
+    @BODIES("scalar_function_body")
     def scalar_function(self, name: str, body: Node) -> None:
-        a, emit = self.artefact, self.draft.emit
+        a = self.artefact
         statements = body.children_with("statement")
-        simple = len(statements) == 1 and statements[0].kind == "return" and statements[0].children_with("argument")
+        simple = (len(statements) == 1 and statements[0].kind in STATEMENTS.by_kind
+                  and statements[0].children_with("argument"))
         if not simple:
             self.stub(name, body, "Column", "scalar function", positional=True)
             return
@@ -298,14 +366,17 @@ class Generator:
                            f"The scalar function {prose(a.identity)}, a column expression.", declared, reads_tables=False,
                            owner=body)
         self.draft.comments(body, "    ")
-        ret = statements[0]
         self.result = "column"
+        STATEMENTS.of(statements[0])(self, statements[0], body)
+
+    @STATEMENTS("return")
+    def return_statement(self, ret: Node, body: Node) -> None:
         code = self.draft.attempt(lambda: self.expr(ret.child("argument"), {}), replaces=ret)
         if isinstance(code, GivenUp):
             self.fail_function(code, ret, body)
         else:
-            emit(f"    # source {ret.span}")
-            emit(f"    return {code}", [ret])
+            self.draft.emit(f"    # source {ret.span}")
+            self.draft.emit(f"    return {code}", [ret])
 
     # ------------------------------------------------------------------ procedural artefacts: reported, not generated
 
@@ -316,7 +387,8 @@ class Generator:
                            f"The {noun} {prose(self.artefact.identity)}.", declared, reads_tables=False, owner=body)
         self.report_block(body, body.children_with("statement"), name, noun, [body])
 
-    def batches(self, body: Node) -> None:
+    @BODIES("batch_script_body")
+    def batches(self, module_name: str, body: Node) -> None:
         names = []
         for number, batch in enumerate(body.children_with("batch"), start=1):
             name = python_name(f"batch_{number}", self.draft.taken)
@@ -392,29 +464,35 @@ class Generator:
         """Emit the statements for one plan step and return the variable holding it."""
         self.refuse_detected(node)
         for definition in node.children_with("definition"):
-            raise Unsupported(definition, untranslatable.reason_for_kind(definition.kind) or "not generated",
-                              untranslatable.waits_for_kind(definition.kind))
-        if node.kind == "read_table":
-            return self.read_table(node)
-        if node.kind == "join":
-            if node.attrs["kind"] == "cross" or not node.children_with("condition"):
-                raise Unsupported(node, "a cross join has no PySpark generation yet")
-            left, right = self.plan(node.child("left")), self.plan(node.child("right"))
-            condition = self.expr(node.child("condition"), {})
-            var = python_name("joined", self.draft.taken)
-            self.step(node, f'{var} = {left}.join({right}, {condition}, "{node.attrs["kind"]}")')
-            return var
-        if node.kind == "filter":
-            source = self.plan(node.child("input"))
-            var = python_name("filtered", self.draft.taken)
-            self.step(node, f"{var} = {source}.filter({self.expr(node.child('condition'), {})})")
-            return var
-        if node.kind == "project":
-            return self.project(node)
-        if node.kind == "aggregate":
-            return self.aggregate(node)
-        raise Unsupported(node, untranslatable.reason_for_kind(node.kind) or f"{node.kind} has no PySpark generation yet",
-                          untranslatable.waits_for_kind(node.kind))
+            raise Unsupported(definition, untranslatable.reason_for_kind(definition.kind, self.handled) or "not generated",
+                              untranslatable.waits_for_kind(definition.kind, self.handled))
+        handler = PLAN_STEPS.by_kind.get(node.kind)
+        if handler is None:
+            raise self.no_handler(node)
+        return handler(self, node)
+
+    def no_handler(self, node: Node) -> Unsupported:
+        """Refusing a node of a kind this role has no handler for: detection's reason for the kind, or the plain one."""
+        return Unsupported(node, untranslatable.reason_for_kind(node.kind, self.handled)
+                           or f"{node.kind} has no PySpark generation yet",
+                           untranslatable.waits_for_kind(node.kind, self.handled))
+
+    @PLAN_STEPS("join")
+    def join(self, node: Node) -> str:
+        if node.attrs["kind"] == "cross" or not node.children_with("condition"):
+            raise Unsupported(node, "a cross join has no PySpark generation yet")
+        left, right = self.plan(node.child("left")), self.plan(node.child("right"))
+        condition = self.expr(node.child("condition"), {})
+        var = python_name("joined", self.draft.taken)
+        self.step(node, f'{var} = {left}.join({right}, {condition}, "{node.attrs["kind"]}")')
+        return var
+
+    @PLAN_STEPS("filter")
+    def filter_step(self, node: Node) -> str:
+        source = self.plan(node.child("input"))
+        var = python_name("filtered", self.draft.taken)
+        self.step(node, f"{var} = {source}.filter({self.expr(node.child('condition'), {})})")
+        return var
 
     def refuse_detected(self, node: Node) -> None:
         """A node detected before generation as untranslatable is never generated, whatever else is known of it."""
@@ -423,6 +501,7 @@ class Generator:
             raise Unsupported(node, "; ".join(f.reason for f in found),
                               tuple(sorted({w for f in found for w in f.waits_for})))
 
+    @PLAN_STEPS("read_table")
     def read_table(self, node: Node) -> str:
         if node.attrs.get("named_query"):
             raise Unsupported(node, "reading a named query has no PySpark generation yet")
@@ -463,6 +542,7 @@ class Generator:
         self.draft.emit(f"    # source {node.span}")
         self.draft.emit(f"    {code}", [node] if node.kind == "read_table" else [_shallow(node)])
 
+    @PLAN_STEPS("project")
     def project(self, node: Node) -> str:
         source = self.plan(node.child("input"))
         var = python_name("projected", self.draft.taken)
@@ -474,6 +554,7 @@ class Generator:
         self.draft.emit("    )", [_shallow(node)])
         return var
 
+    @PLAN_STEPS("aggregate")
     def aggregate(self, node: Node) -> str:
         if node.children_with("having"):
             raise Unsupported(node, "HAVING has no PySpark generation yet")
@@ -548,107 +629,173 @@ class Generator:
         return code
 
     def expression(self, node: Node, grouped: dict) -> str:
+        handler = EXPRESSIONS.by_kind.get(node.kind)
+        if handler is None:
+            raise self.no_handler(node)
+        return handler(self, node, grouped)
+
+    @staticmethod
+    def arguments(node: Node) -> list[Node]:
+        return node.children_with("argument")
+
+    def operands(self, node: Node, grouped: dict) -> tuple[str, str]:
+        """The code of a binary expression's two arguments, the left generated first."""
+        a, b = (self.expr(x, grouped) for x in self.arguments(node))
+        return a, b
+
+    @EXPRESSIONS("column")
+    def expr_column(self, node: Node, grouped: dict) -> str:
+        ref = (node.attrs["relation"], node.attrs["column"])
+        if grouped:
+            if ref not in grouped:
+                raise Unsupported(node, "a column outside an aggregate that is not a grouping key")
+            return f'F.col("{grouped[ref]}")'
+        return f'F.col("{ref[0]}.{ref[1]}")'
+
+    @EXPRESSIONS("variable")
+    def expr_variable(self, node: Node, grouped: dict) -> str:
+        return self.parameter_value(node)
+
+    @EXPRESSIONS("null")
+    def expr_null(self, node: Node, grouped: dict) -> str:
+        found = spark_types.mapping(node.value_type)
+        if found is None:
+            raise Unsupported(node, f"a NULL of type {node.type} has no Spark type to cast to")
+        return f'F.lit(None).cast("{found.ddl}")'
+
+    @EXPRESSIONS("literal")
+    def expr_literal(self, node: Node, grouped: dict) -> str:
+        if "secret_setting" in node.attrs:
+            return self.secret(node)
+        if node.value_type.name not in ("integer", "boolean", "string"):
+            raise Unsupported(node, f"a literal of type {node.type} has no PySpark generation yet")
+        return f"F.lit({node.attrs['value']!r})"
+
+    @EXPRESSIONS("call_scalar_function")
+    def expr_call_scalar_function(self, node: Node, grouped: dict) -> str:
+        function = node.attrs["function"]
+        if function not in self.dependencies.generated:
+            raise Unsupported(node, f"{function} is a function that is not generated in this project, so there "
+                                    "is nothing to import")
+        local = self.callee(function, "scalar_function")
+        return f"{local}({', '.join(['ss'] + [self.expr(x, grouped) for x in self.arguments(node)])})"
+
+    @EXPRESSIONS("implicit_convert")
+    def expr_implicit_convert(self, node: Node, grouped: dict) -> str:
+        args = self.arguments(node)
+        source = args[0].value_type
+        if node.attrs.get("fits"):
+            raise Unsupported(node, "a store that cuts or rounds its value is reproduced by the support "
+                                    "library's typed assignment, which is not built yet")
+        if source.name in ("integer", "boolean") and node.value_type.name == "integer":
+            # A bit converts to 1 or 0, as a boolean cast does; an integer to a wider or narrower integer casts.
+            return f'{self.expr(args[0], grouped)}.cast("{spark_type(node.value_type, node)}")'
+        raise Unsupported(node, f"the conversion of {source} to {node.type} has no PySpark generation yet")
+
+    def refuse_money(self, node: Node) -> NoReturn:
+        """The target has no money type yet: money arithmetic is manual work, whatever the node's own type."""
+        raise Unsupported(node, f"{self.differences.difference(MONEY)}; {MONEY_NOT_BUILT}",
+                          (untranslatable.NUMBER_HELPERS,))
+
+    def refuse_money_typed(self, node: Node) -> None:
+        """A sum, an average or a sum of two values of type money is money arithmetic too."""
+        if node.type is not None and node.type.name == "money":
+            self.refuse_money(node)
+
+    @EXPRESSIONS("money_multiply", "money_divide")
+    def expr_money_arithmetic(self, node: Node, grouped: dict) -> str:
+        self.refuse_money(node)
+
+    @EXPRESSIONS("add", "subtract")
+    def expr_add_subtract(self, node: Node, grouped: dict) -> str:
+        self.refuse_money_typed(node)
+        return self.integer_arithmetic(node, grouped)
+
+    @EXPRESSIONS("multiply", "modulo")
+    def expr_multiply_modulo(self, node: Node, grouped: dict) -> str:
+        return self.integer_arithmetic(node, grouped)
+
+    def integer_arithmetic(self, node: Node, grouped: dict) -> str:
         k = node.kind
-        args = node.children_with("argument")
-        if k == "column":
-            ref = (node.attrs["relation"], node.attrs["column"])
-            if grouped:
-                if ref not in grouped:
-                    raise Unsupported(node, "a column outside an aggregate that is not a grouping key")
-                return f'F.col("{grouped[ref]}")'
-            return f'F.col("{ref[0]}.{ref[1]}")'
-        if k == "variable":
-            return self.parameter_value(node)
-        if k == "null":
-            found = spark_types.mapping(node.value_type)
-            if found is None:
-                raise Unsupported(node, f"a NULL of type {node.type} has no Spark type to cast to")
-            return f'F.lit(None).cast("{found.ddl}")'
-        if k == "literal":
-            if "secret_setting" in node.attrs:
-                return self.secret(node)
-            if node.value_type.name not in ("integer", "boolean", "string"):
-                raise Unsupported(node, f"a literal of type {node.type} has no PySpark generation yet")
-            return f"F.lit({node.attrs['value']!r})"
-        if k == "case":
-            return self.case(node)
-        if k == "call_scalar_function":
-            function = node.attrs["function"]
-            if function not in self.dependencies.generated:
-                raise Unsupported(node, f"{function} is a function that is not generated in this project, so there "
-                                        "is nothing to import")
-            local = self.callee(function, "scalar_function")
-            return f"{local}({', '.join(['ss'] + [self.expr(x, grouped) for x in args])})"
-        if k == "implicit_convert":
-            source = args[0].value_type
-            if node.attrs.get("fits"):
-                raise Unsupported(node, "a store that cuts or rounds its value is reproduced by the support "
-                                        "library's typed assignment, which is not built yet")
-            if source.name in ("integer", "boolean") and node.value_type.name == "integer":
-                # A bit converts to 1 or 0, as a boolean cast does; an integer to a wider or narrower integer casts.
-                return f'{self.expr(args[0], grouped)}.cast("{spark_type(node.value_type, node)}")'
-            raise Unsupported(node, f"the conversion of {source} to {node.type} has no PySpark generation yet")
-        if k in ("money_multiply", "money_divide") or (node.type is not None and node.type.name == "money"
-                                                       and k in ("add", "subtract", "sum", "average")):
-            raise Unsupported(node, f"{self.differences.difference(MONEY)}; {MONEY_NOT_BUILT}",
+        if node.value_type.name != "integer":
+            raise Unsupported(node, f"{k} on {node.type} has no PySpark generation yet")
+        op = {"add": "+", "subtract": "-", "multiply": "*", "modulo": "%"}[k]
+        a, b = self.operands(node, grouped)
+        return f'({a} {op} {b}).cast("{spark_type(node.value_type, node)}")'
+
+    @EXPRESSIONS("integer_divide")
+    def expr_integer_divide(self, node: Node, grouped: dict) -> str:
+        if node.value_type.param("bits") == 64:
+            raise Unsupported(node, "bigint division needs an exact integer-division helper, not built yet",
                               (untranslatable.NUMBER_HELPERS,))
-        if k in ("add", "subtract", "multiply", "modulo"):
-            if node.value_type.name != "integer":
-                raise Unsupported(node, f"{k} on {node.type} has no PySpark generation yet")
-            op = {"add": "+", "subtract": "-", "multiply": "*", "modulo": "%"}[k]
-            a, b = (self.expr(x, grouped) for x in args)
-            return f'({a} {op} {b}).cast("{spark_type(node.value_type, node)}")'
-        if k == "integer_divide":
-            if node.value_type.param("bits") == 64:
-                raise Unsupported(node, "bigint division needs an exact integer-division helper, not built yet",
-                              (untranslatable.NUMBER_HELPERS,))
-            a, b = (self.expr(x, grouped) for x in args)
-            # A quotient of integers within int is exact in a double, so the cast truncates
-            # toward zero exactly as SQL Server does; dividing by zero raises in both.
-            return f'({a} / {b}).cast("{spark_type(node.value_type, node)}")'
-        if k == "count_values":
-            if node.attrs.get("rule"):
-                raise Unsupported(node, f"COUNT(DISTINCT) over strings: {STRING_COMPARISON}",
-                                  (untranslatable.STRING_HELPERS,))
-            fn = "F.count_distinct" if node.attrs.get("distinct") else "F.count"
-            return f'{fn}({self.expr(args[0], {})}).cast("int")'
-        if k == "count_rows":
-            return 'F.count(F.lit(1)).cast("int")'
-        if k in ("sum", "average"):
-            if node.value_type.param("bits") != 32:
-                raise Unsupported(node, f"{k} returning {node.type} is not generated yet")
-            a = self.expr(args[0], {})
-            self.draft.caveats[node.id] = SUM_INT
-            if k == "sum":
-                return f'F.sum({a}).cast("int")'
-            # AVG over int is the int sum divided by the count of values, truncated toward zero.
-            return f'(F.sum({a}).cast("int") / F.count({a})).cast("int")'
-        if k in ("minimum", "maximum"):
-            if node.attrs.get("rule"):
-                raise Unsupported(node, f"{k} over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
-            return f"F.{'min' if k == 'minimum' else 'max'}({self.expr(args[0], {})})"
-        if k == "null_replacement":
-            a, b = (self.expr(x, grouped) for x in args)
-            return f'F.coalesce({a}, {b}.cast("{spark_type(node.value_type, node)}"))'
-        if k == "null_if_equal":
-            if node.attrs.get("rule"):
-                raise Unsupported(node, f"NULLIF over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
-            a, b = (self.expr(x, grouped) for x in args)
-            return f"F.nullif({a}, {b})"
-        if k == "compare":
-            if node.attrs.get("rule"):
-                raise Unsupported(node, STRING_COMPARISON, (untranslatable.STRING_HELPERS,))
-            a, b = (self.expr(x, grouped) for x in args)
-            return f"({a} {COMPARE[node.attrs['operator']]} {b})"
-        if k in ("and", "or"):
-            a, b = (self.expr(x, grouped) for x in args)
-            return f"({a} {'&' if k == 'and' else '|'} {b})"
-        if k == "not":
-            return f"(~{self.expr(args[0], grouped)})"
-        if k == "is_null":
-            return f"{self.expr(args[0], grouped)}.isNull()"
-        raise Unsupported(node, untranslatable.reason_for_kind(k) or f"{k} has no PySpark generation yet",
-                          untranslatable.waits_for_kind(k))
+        a, b = self.operands(node, grouped)
+        # A quotient of integers within int is exact in a double, so the cast truncates
+        # toward zero exactly as SQL Server does; dividing by zero raises in both.
+        return f'({a} / {b}).cast("{spark_type(node.value_type, node)}")'
+
+    @EXPRESSIONS("count_values")
+    def expr_count_values(self, node: Node, grouped: dict) -> str:
+        if node.attrs.get("rule"):
+            raise Unsupported(node, f"COUNT(DISTINCT) over strings: {STRING_COMPARISON}",
+                              (untranslatable.STRING_HELPERS,))
+        fn = "F.count_distinct" if node.attrs.get("distinct") else "F.count"
+        return f'{fn}({self.expr(self.arguments(node)[0], {})}).cast("int")'
+
+    @EXPRESSIONS("count_rows")
+    def expr_count_rows(self, node: Node, grouped: dict) -> str:
+        return 'F.count(F.lit(1)).cast("int")'
+
+    @EXPRESSIONS("sum", "average")
+    def expr_sum_average(self, node: Node, grouped: dict) -> str:
+        k = node.kind
+        self.refuse_money_typed(node)
+        if node.value_type.param("bits") != 32:
+            raise Unsupported(node, f"{k} returning {node.type} is not generated yet")
+        a = self.expr(self.arguments(node)[0], {})
+        self.draft.caveats[node.id] = SUM_INT
+        if k == "sum":
+            return f'F.sum({a}).cast("int")'
+        # AVG over int is the int sum divided by the count of values, truncated toward zero.
+        return f'(F.sum({a}).cast("int") / F.count({a})).cast("int")'
+
+    @EXPRESSIONS("minimum", "maximum")
+    def expr_minimum_maximum(self, node: Node, grouped: dict) -> str:
+        k = node.kind
+        if node.attrs.get("rule"):
+            raise Unsupported(node, f"{k} over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        return f"F.{'min' if k == 'minimum' else 'max'}({self.expr(self.arguments(node)[0], {})})"
+
+    @EXPRESSIONS("null_replacement")
+    def expr_null_replacement(self, node: Node, grouped: dict) -> str:
+        a, b = self.operands(node, grouped)
+        return f'F.coalesce({a}, {b}.cast("{spark_type(node.value_type, node)}"))'
+
+    @EXPRESSIONS("null_if_equal")
+    def expr_null_if_equal(self, node: Node, grouped: dict) -> str:
+        if node.attrs.get("rule"):
+            raise Unsupported(node, f"NULLIF over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        a, b = self.operands(node, grouped)
+        return f"F.nullif({a}, {b})"
+
+    @EXPRESSIONS("compare")
+    def expr_compare(self, node: Node, grouped: dict) -> str:
+        if node.attrs.get("rule"):
+            raise Unsupported(node, STRING_COMPARISON, (untranslatable.STRING_HELPERS,))
+        a, b = self.operands(node, grouped)
+        return f"({a} {COMPARE[node.attrs['operator']]} {b})"
+
+    @EXPRESSIONS("and", "or")
+    def expr_and_or(self, node: Node, grouped: dict) -> str:
+        a, b = self.operands(node, grouped)
+        return f"({a} {'&' if node.kind == 'and' else '|'} {b})"
+
+    @EXPRESSIONS("not")
+    def expr_not(self, node: Node, grouped: dict) -> str:
+        return f"(~{self.expr(self.arguments(node)[0], grouped)})"
+
+    @EXPRESSIONS("is_null")
+    def expr_is_null(self, node: Node, grouped: dict) -> str:
+        return f"{self.expr(self.arguments(node)[0], grouped)}.isNull()"
 
     def parameter_value(self, node: Node) -> str:
         """A function's parameter read as a column: `F.lit` of a value, or of a column, which it returns as it is."""
@@ -669,7 +816,8 @@ class Generator:
             return code
         return f'{code}.cast("{spark_type(node.value_type, node)}")'
 
-    def case(self, node: Node) -> str:
+    @EXPRESSIONS("case")
+    def case(self, node: Node, grouped: dict) -> str:
         children = node.children
         code = ""
         otherwise = None

@@ -12,21 +12,11 @@ it is never generated as if its scope were certain.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Set as AbstractSet
 
 from ...core import vocabulary
 from ...core.ir import Artefact, Node
 
-# The node kinds this target has a handler for. A handler may still decline a particular node with its own
-# reason (a money product, a string compared by a collation): that is the generator's report, made at the node.
-GENERATED_KINDS = frozenset({
-    "view_body", "table_function_body", "scalar_function_body", "procedure_body", "trigger_body",
-    "batch_script_body", "declare_parameter", "return",
-    "read_table", "join", "filter", "project", "aggregate",
-    "column", "literal", "variable", "null", "case", "implicit_convert",
-    "add", "subtract", "multiply", "modulo", "integer_divide", "money_multiply", "money_divide",
-    "count_values", "count_rows", "sum", "average", "minimum", "maximum",
-    "null_replacement", "null_if_equal", "compare", "and", "or", "not", "is_null", "call_scalar_function",
-})
 # What a construct waits for, as `waits_for` names it (never in a reason, which a client may read).
 PROCEDURAL = "#50"             # procedural generation
 LOWERING_ASSIST = "#63"        # lowering assist
@@ -50,9 +40,10 @@ def procedural_reason(kind: str) -> str:
             "calls and session options) is not built yet, so it is reported as manual work")
 
 
-def reason_for_kind(kind: str) -> str | None:
-    """Why a node kind the target has no handler for is manual work. None for a kind it handles."""
-    if kind in GENERATED_KINDS:
+def reason_for_kind(kind: str, handled: AbstractSet[str]) -> str | None:
+    """Why a node kind the target has no handler for is manual work. None for a kind it handles. `handled` is the
+    generator's own answer to which kinds those are (`generator.handled_kinds()`): there is no list of them here."""
+    if kind in handled:
         return None
     if kind == "dynamic_sql_execution":
         return ("dynamic SQL is not generated: the statement is assembled at run time, so it is manual work (spec "
@@ -68,31 +59,32 @@ def reason_for_kind(kind: str) -> str | None:
     return f"{kind} has no PySpark generation yet"
 
 
-def waits_for_kind(kind: str) -> tuple[str, ...]:
+def waits_for_kind(kind: str, handled: AbstractSet[str]) -> tuple[str, ...]:
     """What a node kind the target has no handler for waits for: procedural generation, or lowering assist. Dynamic
     SQL, schema and permission changes are manual work for good, and so are kinds nothing is planned for."""
     if kind == "opaque_fragment":
         return (LOWERING_ASSIST,)
-    if kind not in GENERATED_KINDS and (vocabulary.part_of(kind) == "procedural" or kind == "batch"):
+    if kind not in handled and (vocabulary.part_of(kind) == "procedural" or kind == "batch"):
         return (PROCEDURAL,)
     return ()
 
 
-def detect(artefact: Artefact) -> list[Finding]:
-    """Every node the target cannot translate, in tree order."""
+def detect(artefact: Artefact, handled: AbstractSet[str]) -> list[Finding]:
+    """Every node the target cannot translate, in tree order: those of a kind it has no handler for (`handled`), and
+    those it has one for but must not generate as they are."""
     found: list[Finding] = []
     for node in artefact.nodes():
-        found += _findings(node)
+        found += _findings(node, handled)
     return found
 
 
-def _findings(node: Node) -> list[Finding]:
+def _findings(node: Node, handled: AbstractSet[str]) -> list[Finding]:
     out: list[Finding] = []
-    reason = reason_for_kind(node.kind)
+    reason = reason_for_kind(node.kind, handled)
     if reason is not None:
         if node.kind == "opaque_fragment":
             reason = f"{node.attrs.get('reason', 'lowering could not express it')}; {reason}"
-        out.append(Finding(node.id, node.kind, reason, waits_for_kind(node.kind)))
+        out.append(Finding(node.id, node.kind, reason, waits_for_kind(node.kind, handled)))
     if node.type is not None and node.type.name == UNSUPPORTED_TYPE:
         out.append(Finding(node.id, UNSUPPORTED_TYPE,
                            f"its type {node.type.param('source_name')} has no neutral meaning, so anything touching "

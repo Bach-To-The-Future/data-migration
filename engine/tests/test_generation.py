@@ -278,19 +278,19 @@ def test_untranslatable_constructs_are_detected_before_generation_and_reported_w
         "GRANT SELECT ON sales.[Order] TO PUBLIC;\nCREATE INDEX IX ON sales.[Order] (OrderId);\n"
         "BEGIN TRY SET @n = 2; END TRY BEGIN CATCH SET @n = 3; END CATCH;\nEND", kind="procedure", name="uspTest")
 
-    found = untranslatable.detect(artefact)
+    found = generator.detect(artefact)
 
     by_kind = {f.kind: f for f in found}
     assert {"dynamic_sql_execution", "permission_change", "schema_change", "opaque_fragment"} <= set(by_kind)
     assert "dynamic SQL" in by_kind["dynamic_sql_execution"].reason and "manual" in by_kind["dynamic_sql_execution"].reason
     assert all(f.reason and f.node for f in found)
-    assert found == untranslatable.detect(artefact)                                  # deterministic
+    assert found == generator.detect(artefact)                                       # deterministic
 
 
 def test_every_operation_the_generator_does_not_handle_is_detected(corpus_snapshot):
+    handled = generator.handled_kinds()
     for kind in sorted(vocabulary.operations() | vocabulary.node_kinds()):
-        handled = kind in untranslatable.GENERATED_KINDS
-        assert handled or untranslatable.reason_for_kind(kind), kind
+        assert kind in handled or untranslatable.reason_for_kind(kind, handled), kind
 
 
 def test_a_construct_detected_but_found_nowhere_in_the_file_is_refused_not_dropped(corpus_snapshot):
@@ -334,6 +334,6 @@ def test_a_conversion_that_cuts_or_rounds_is_detected_before_generation(corpus_s
     artefact, _ = lower_text(corpus_snapshot, "CREATE PROCEDURE sales.uspTest AS BEGIN\nDECLARE @s varchar(5);\n"
                              "SET @s = 'abcdefghij';\nEND", kind="procedure", name="uspTest")
 
-    found = untranslatable.detect(artefact)
+    found = generator.detect(artefact)
 
     assert any(f.kind == "implicit_convert" and "cuts or rounds" in f.reason for f in found)
