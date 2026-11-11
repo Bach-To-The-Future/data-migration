@@ -11,7 +11,8 @@ import dataclasses
 import json
 from typing import Any
 
-FORMAT_VERSION = "ir-0.3"   # 0.2: secret_settings. 0.3: hints; the plan and expression conventions of issue #42
+FORMAT_VERSION = "ir-0.4"   # 0.2: secret_settings. 0.3: hints; the plan and expression conventions of issue #42.
+#                             0.4: procedural bodies, a `scope` on every statement, opaque `touches` (issue #43)
 DETERMINISTIC = "deterministic"
 
 

@@ -4,14 +4,17 @@ intermediate representation, whoever made the change.
 It verifies that every node is in the vocabulary and has a source position, that every name
 resolves to the catalog or to something in scope, that types agree, and that every opaque
 fragment is accounted for. It checks the shape of the plan and the types of the operations
-lowering produces for views and functions; later tickets extend it to the procedural part.
+lowering produces for views and functions, and the procedural part (issue #43): every statement's scope is
+derived again and compared with the one lowering wrote, every variable, table variable and temp table a node
+reads is in the scope of its statement, every jump has its label, and every opaque statement either says what it
+touches or is a scope barrier.
 """
 from __future__ import annotations
 
 import dataclasses
 from typing import Callable
 
-from . import vocabulary
+from . import scopes, vocabulary
 from .ir import Artefact, Node
 
 # Operations whose operands must be of one type family.
@@ -26,14 +29,17 @@ PLAN_ROLES = {
     "intersect": {"left", "right"}, "except": {"left", "right"}, "named_query": {"query"},
     "pivot": {"input", "argument", "key"}, "shred_xml": {"argument"}, "exists": {"query"}, "scalar_query": {"query"},
     "in_query": {"argument", "query"}, "window": {"function"},
+    "if": {"condition"}, "while": {"condition"}, "assign": {"argument"}, "assign_from_rows": {"query"},
+    "emit_result_set": {"query"}, "insert_rows": {"source"}, "update_rows": {"input"}, "delete_rows": {"input"},
 }
 # Operations that compare strings by a comparison rule, and where the rule goes.
 RULED = {"compare", "between", "in_list", "like", "null_if_equal", "minimum", "maximum", "position_of",
          "replace_text", "in_query"}
 OUTPUT = "(output)"       # the relation a sort key reads a select-list column through
 SOURCES = ("read_table", "named_query", "call_table_function", "read_values", "shred_xml", "pivot",
-           "external_reference")
-CALLS = ("call_table_function", "call_scalar_function")
+           "external_reference", "read_changed_rows")
+CALLS = ("call_table_function", "call_scalar_function", "call_procedure")
+STATEMENT_KINDS_WITH_SCOPE = scopes.STATEMENT_ROLES
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,6 +66,10 @@ def _family(node: Node) -> tuple:
     if t.name == "float":
         return ("float", t.param("bits"))
     return (t.name,)
+
+
+def _family_of(t) -> tuple:
+    return _family(Node("type", None, t))
 
 
 def plan_columns(node: Node) -> list[str] | None:
@@ -102,11 +112,44 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
             aliases.setdefault(n.attrs["name"], []).append(n)
     definitions = {n.attrs["name"]: n for n in artefact.nodes() if n.kind == "named_query" and n.role == "definition"}
     parameters = {n.attrs["name"].casefold() for n in artefact.nodes() if n.kind == "declare_parameter"}
+    declared_types = {n.attrs["name"].casefold(): n.type for n in artefact.nodes()
+                      if n.kind in ("declare_parameter", "declare_variable") and n.type is not None}
+    labels = {n.attrs["name"].casefold() for n in artefact.nodes() if n.kind == "declare_label"}
+    scope_for: dict[int, dict] = {}
+    for statement, scope in scopes.derive(artefact.body):
+        if statement.attrs.get("scope") != scope:
+            fail(statement, "its recorded scope differs from the scope derived from the statements before it")
+        for inner in statement.walk():
+            scope_for[id(inner)] = scope           # a nested statement is derived after, and takes its own
+
+    def in_scope(node: Node, name: str, *, row_set: bool = False) -> bool:
+        scope = scope_for.get(id(node))
+        if scope is None:                        # a view or an inline function: only its parameters exist
+            return not row_set and name.casefold() in parameters
+        return scopes.known(scope, name, row_set=row_set)
+
+    def temp_in_scope(node: Node, name: str) -> bool:
+        scope = scope_for.get(id(node))
+        return scope is not None and scopes.temp_table_known(scope, name)
+
     for node in artefact.nodes():
         if not vocabulary.is_known(node.kind):
             fail(node, f"{node.kind} is not in the operation vocabulary")
         if node.span is None:
             fail(node, "has no source position")
+        if node.kind == "opaque_fragment" and node.role in scopes.STATEMENT_ROLES and not node.attrs.get("scope_barrier"):
+            touches = node.attrs.get("touches")
+            if touches is None:
+                fail(node, "an opaque statement that is not a scope barrier must say what it touches")
+            else:
+                undeclared = {n.casefold() for n in touches.get("undeclared", [])}
+                for name in touches["variables"]:
+                    if name.casefold() not in undeclared and not in_scope(node, name) \
+                            and not in_scope(node, name, row_set=True):
+                        fail(node, f"touches {name}, which is not in scope")
+                for name in touches["temp_tables"]:
+                    if name.casefold() not in undeclared and not temp_in_scope(node, name):
+                        fail(node, f"touches {name}, which is not in scope")
         if node.kind in ("opaque_fragment", "dynamic_sql_execution", "schema_change", "permission_change"):
             if node.kind == "opaque_fragment" and (not node.attrs.get("reason") or not node.attrs.get("text")):
                 fail(node, "an opaque fragment needs its reason and its verbatim text")
@@ -122,12 +165,48 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
             if node.attrs.get("named_query"):
                 if node.attrs["named_query"] not in {n.attrs["name"] for n in artefact.nodes() if n.kind == "named_query"}:
                     fail(node, f"reads the named query {node.attrs['named_query']}, which is not defined")
+            elif node.attrs.get("temp_table"):
+                if not temp_in_scope(node, node.attrs["temp_table"]):
+                    fail(node, f"reads the temp table {node.attrs['temp_table']}, which is not in scope")
+            elif node.attrs.get("row_set"):
+                if not in_scope(node, node.attrs["row_set"], row_set=True):
+                    fail(node, f"reads the table variable {node.attrs['row_set']}, which is not in scope")
             elif node.attrs["table"] not in artefact.dependencies:
                 fail(node, f"reads {node.attrs['table']}, which is not among the dependencies")
-        if node.kind in CALLS and node.attrs["function"] not in artefact.dependencies:
-            fail(node, f"calls {node.attrs['function']}, which is not among the dependencies")
-        if node.kind == "variable" and node.attrs["name"].casefold() not in parameters:
-            fail(node, f"{node.attrs['name']} is not a declared parameter")
+        if node.kind in ("insert_rows", "update_rows", "delete_rows"):
+            target, target_kind = node.attrs["target"], node.attrs["target_kind"]
+            if target_kind == "temp_table" and not temp_in_scope(node, target):
+                fail(node, f"writes the temp table {target}, which is not in scope")
+            elif target_kind == "row_set" and not in_scope(node, target, row_set=True):
+                fail(node, f"writes the table variable {target}, which is not in scope")
+            elif target_kind == "table" and target not in artefact.dependencies:
+                fail(node, f"writes {target}, which is not among the dependencies")
+        if node.kind in CALLS:
+            called = node.attrs["procedure"] if node.kind == "call_procedure" else node.attrs["function"]
+            if called not in artefact.dependencies:
+                fail(node, f"calls {called}, which is not among the dependencies")
+        if node.kind == "variable" and not in_scope(node, node.attrs["name"]):
+            fail(node, f"{node.attrs['name']} is not in scope: it is neither a parameter nor a variable declared "
+                       "before this point")
+        written: list[str] = []
+        if node.kind == "assign":
+            written = [node.attrs["variable"]]
+        elif node.kind == "assign_from_rows":
+            written = list(node.attrs["variables"])
+        elif node.kind == "call_procedure" and node.attrs.get("return_variable"):
+            written = [node.attrs["return_variable"]]
+        for name in written:
+            if not in_scope(node, name):
+                fail(node, f"assigns {name}, which is not in scope")
+        if node.kind == "jump" and node.attrs["label"].casefold() not in labels:
+            fail(node, f"jumps to the label {node.attrs['label']}, which is not declared")
+        if node.kind in ("assign", "declare_variable"):
+            value = node.children_with("argument" if node.kind == "assign" else "initial")
+            variable = node.attrs["variable"] if node.kind == "assign" else node.attrs["name"]
+            target_type = declared_types.get(variable.casefold())
+            if value and target_type is not None and value[0].kind not in ("opaque_fragment", "null") \
+                    and value[0].type is not None and _family(value[0]) != _family_of(target_type):
+                fail(node, f"stores a {value[0].type} value in a {target_type} variable without converting it")
         if node.kind == "column":
             relation = node.attrs["relation"]
             if relation == OUTPUT:
@@ -187,9 +266,22 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
                 fail(child, f"a string {child.role} key of {node.kind} names no comparison rule")
         if node.kind in ("and", "or", "not") and any(c.type is None or c.type.name != "boolean" for c in arguments):
             fail(node, f"{node.kind} needs boolean operands")
+    # A result set sent to the caller, the rows an INSERT reads and the rows EXISTS tests (`SELECT *` over a join
+    # repeats names) may repeat a column name; a view, a derived table or a named query may not.
+    repeating = set()
+    for node in artefact.nodes():
+        if node.kind in ("emit_result_set", "assign_from_rows", "exists", "insert_rows"):
+            found = node.children_with("source" if node.kind == "insert_rows" else "query")
+            if not found:
+                continue
+            plan = found[0]
+            while plan.kind in ("union", "intersect", "except") or (
+                    plan.kind not in ("project", "aggregate") and plan.children_with("input")):
+                plan = plan.child("left" if plan.kind in ("union", "intersect", "except") else "input")
+            repeating.add(id(plan))
     for node in artefact.nodes():
         outputs = [c.attrs["output_name"] for c in node.children_with("output")]
-        if len(outputs) != len({o.casefold() for o in outputs}):
+        if id(node) not in repeating and len(outputs) != len({o.casefold() for o in outputs}):
             fail(node, f"output names are not unique: {outputs}")
     return findings
 

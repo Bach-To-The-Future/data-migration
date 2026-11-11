@@ -30,11 +30,13 @@ class Queries(Expressions):
     def __init__(self, *args):
         super().__init__(*args)
         self.ctes: list[dict[str, Relation]] = []
+        self.trigger_table: str | None = None       # set while lowering a trigger: `inserted` and `deleted` read it
 
     # ------------------------------------------------------------------ statements and query expressions
 
-    def select_statement(self, select) -> tuple[Node, list[tuple[str, VType]]]:
-        """A SELECT statement with its common table expressions, XML namespaces and query hints."""
+    def select_statement(self, select, *, into: bool = False) -> tuple[Node, list[tuple[str, VType]]]:
+        """A SELECT statement with its common table expressions, XML namespaces and query hints. `into` lets the
+        caller take the INTO clause (a temp table), which is otherwise refused."""
         with_ = select.WithCtesAndXmlNamespaces
         self.ctes.append({})
         namespaces = self.xml_namespaces
@@ -45,7 +47,7 @@ class Queries(Expressions):
                     self.xml_namespaces = [self.text_of(x) for x in with_.XmlNamespaces.XmlNamespacesElements]
                 for cte in with_.CommonTableExpressions:
                     definitions.append(self.common_table_expression(cte))
-            if select.Into is not None:
+            if select.Into is not None and not into:
                 raise Opaque(select, "SELECT INTO creates a table: it is not lowered")
             plan, outputs = self.query_expression(select.QueryExpression)
         finally:
@@ -194,6 +196,8 @@ class Queries(Expressions):
         kind = type_name(item)
         if kind == "SelectStarExpression":
             return self.star(item)
+        if kind == "SelectSetVariable":
+            return [self.assigned_item(item)]
         if kind != "SelectScalarExpression":
             raise Opaque(item, f"{kind} is not lowered yet")
         expression = item.Expression
@@ -211,6 +215,23 @@ class Queries(Expressions):
         node.role = "output"
         node.attrs = dict(node.attrs, output_name=name)
         return [node]
+
+    def assigned_item(self, item) -> Node:
+        """`@v = expression` in a select list: an output named by the variable, converted to its type."""
+        if str(item.AssignmentKind) != "Equals":
+            raise Opaque(item, "a compound assignment in a SELECT list is not lowered yet")
+        name = str(item.Variable.Name)
+        found = self.variables.get(name.casefold())
+        if found is None:
+            raise Opaque(item, f"{name} is not a parameter or a variable declared before this point in its batch")
+        try:
+            node = self.convert_toward(self.expression(item.Expression), found[1])
+        except Opaque as opaque:
+            node = self.opaque(item.Expression, opaque.reason)
+        node.span = self.span(item)
+        node.role = "output"
+        node.attrs = dict(node.attrs, output_name=found[0])
+        return node
 
     def star(self, item) -> list[Node]:
         if item.Qualifier is not None:
@@ -300,7 +321,7 @@ class Queries(Expressions):
         if obj.ServerIdentifier is not None:
             return self.external(ref, ".".join(parts), "a linked server", alias)
         if parts[-1].startswith("#"):
-            raise Opaque(ref, "temp tables are lowered by ticket 08a (#43)")
+            return self.temp_table_reference(ref, parts, alias)
         if ref.TemporalClause is not None or ref.TableSampleClause is not None:
             raise Opaque(ref, "FOR SYSTEM_TIME and TABLESAMPLE are not lowered yet")
         if len(parts) == 1:
@@ -311,6 +332,8 @@ class Queries(Expressions):
                     attrs: dict = {"named_query": relation.alias, "alias": alias}
                     hints = self.hints_of(ref.TableHints)
                     return Node("read_table", self.span(ref), None, dict(attrs, **({"hints": hints} if hints else {})))
+        if len(parts) == 1 and self.trigger_table and parts[0].casefold() in ("inserted", "deleted"):
+            return self.changed_rows(ref, parts[0].casefold(), alias)
         context = dict(self.name_context, kinds={"table", "view"})
         try:
             table = self.reader.resolve(parts, context)
@@ -330,6 +353,45 @@ class Queries(Expressions):
         if hints:
             attrs["hints"] = hints
         return Node("read_table", self.span(ref), None, attrs)
+
+    def temp_table_reference(self, ref, parts: tuple[str, ...], alias: str) -> Node:
+        base = parts[-1]
+        if base.startswith("##"):
+            raise Opaque(ref, "a global temp table is not lowered yet: it is visible to every session")
+        found = self.temp_tables.get(base.casefold()) if len(parts) == 1 else None
+        if found is None:
+            raise Opaque(ref, f"the temp table {'.'.join(parts)} is not in scope here: no statement before this one "
+                              "in its batch creates it (a table made by a calling procedure is not visible to "
+                              "lowering)")
+        name, columns = found
+        self.register(ref, Relation(alias, dict(columns), None))
+        attrs: dict = {"temp_table": name, "alias": alias, "columns": list(columns), "source": "temp_table"}
+        hints = self.hints_of(ref.TableHints)
+        if hints:
+            attrs["hints"] = hints
+        return Node("read_table", self.span(ref), None, attrs)
+
+    def t_VariableTableReference(self, ref) -> Node:
+        name = str(ref.Variable.Name)
+        found = self.row_sets.get(name.casefold())
+        if found is None:
+            raise Opaque(ref, f"{name} is not a table variable declared before this point in its batch")
+        declared, columns = found
+        alias = str(ref.Alias.Value) if ref.Alias is not None else declared
+        self.register(ref, Relation(alias, dict(columns), None))
+        return Node("read_table", self.span(ref), None, {"row_set": declared, "alias": alias,
+                                                         "columns": list(columns), "source": "row_set"})
+
+    def changed_rows(self, ref, which: str, alias: str) -> Node:
+        """`inserted` and `deleted` in a trigger: the rows after, or before, the statement that fired it."""
+        table = str(self.trigger_table)
+        self.register(ref, Relation(alias, self.table_columns(table), table))
+        return Node("read_changed_rows", self.span(ref), None, {"rows": which, "table": table, "alias": alias})
+
+    def table_columns(self, identity: str) -> dict[str, VType]:
+        kind = self.reader.kind_of(identity)
+        shape = self.reader.value(identity, "columns" if kind == "table" else "result_shape")
+        return {c["name"]: T.from_column(c) for c in shape}
 
     def t_JoinParenthesisTableReference(self, ref) -> Node:
         return self.table_reference(ref.Join)

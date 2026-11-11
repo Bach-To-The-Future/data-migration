@@ -15,7 +15,7 @@ This is the first list of what the intermediate representation can say: its type
 
 ## Size
 
-- 18 types, 12 node kinds, 7 annotations.
+- 18 types, 13 node kinds, 7 annotations.
 - 177 operations, of which the hand conversion in `prototype/hand-conversion/` exercised 85. The other 92 are on paper only.
 
 ## How to read the tables
@@ -60,6 +60,7 @@ A type carries the behaviour that matters, not the source's name for it. The sou
 | `table_function_body` | Either one query (inline) or a statement list that fills a declared row set (multi-statement). |  |  |  |
 | `trigger_body` | The table, the timing (after or instead of), the events, and a statement list that can read the inserted and deleted rows. | `TRIGGER` |  | ✓ |
 | `batch_script_body` | An ordered list of batches. Variables do not survive from one batch to the next. | `USE` |  | ✓ |
+| `batch` | One batch of a script, a statement list of its own. Its variables and table variables end with it; temp tables do not. Added by ticket 08a (#43). | `GO` |  |  |
 | `opaque_fragment` | Source kept verbatim because lowering could not express it, with its position and the reason. It records what it reads and writes in scope where detectable, and is otherwise a scope barrier. |  |  |  |
 | `dynamic_sql_execution` | Execution of SQL text built at run time. The expressions that build the text are lowered; the text itself is not. Always a scope barrier, always manual. | `EXECUTE(`, `EXEC(`, `SP_EXECUTESQL` | 15 |  |
 | `schema_change` | A statement that creates, alters or drops a permanent object. Schema migration is out of scope, so it is recorded and manual. Temp tables are not schema changes. | `ALTER`, `DROP`, `INDEX`, `STATISTICS`, `SEQUENCE`, `SYNONYM`, `TYPE` | 10 |  |

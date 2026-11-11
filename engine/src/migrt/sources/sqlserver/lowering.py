@@ -1,43 +1,39 @@
-"""Lowering for SQL Server views and functions (spec sections 4 and 5).
+"""Lowering for SQL Server views, functions, procedures, triggers and batches (spec sections 4 and 5).
 
 Deterministic and faithful: every node gets the vocabulary operation that means exactly what the
-T-SQL means, typed from the catalog, with its source position (expressions.py and queries.py hold
-the rules). What lowering cannot express is kept verbatim as an opaque fragment with its reason,
-never dropped: the whole query when its shape is not handled, otherwise the one select item.
+T-SQL means, typed from the catalog, with its source position (expressions.py, queries.py and
+procedural.py hold the rules). What lowering cannot express is kept verbatim as an opaque fragment
+with its reason, never dropped: the whole query when its shape is not handled, otherwise the one
+select item or the one statement.
 
 Artefacts handled here: a view (`view_body`, one query), an inline table-valued function
-(`table_function_body`, one query), and the outer record, parameters and `RETURN` of a scalar or
-multi-statement function. The procedural statements of a function body (DECLARE, SET, IF, WHILE,
-INSERT into a table variable) are lowered by ticket 08a (#43): until then each is an opaque fragment
-that is a scope barrier, and dynamic SQL has its own node kind.
+(`table_function_body`, one query), a scalar or multi-statement function, a procedure (`procedure_body`),
+a trigger (`trigger_body`, with the table, timing and events the catalog holds) and a script of batches
+(`batch_script_body`, one `batch` per GO). The statements of the last four are lowered by procedural.py;
+what it does not lower yet (cursors, transactions, TRY/CATCH, errors and messages are ticket 08b) is an
+opaque fragment, and dynamic SQL has its own node kind. Every statement carries its scope (core.scopes).
 """
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from ...core import vocabulary
+from ...core import scopes, vocabulary
 from ...core.catalog import CatalogReader
 from ...core.ir import Artefact, Node
-from . import names
+from . import collations, names
 from . import types as T
 from .expressions import Opaque, as_role, type_name
 from .parser import Parsed, walk
-from .queries import Queries
+from .procedural import Procedural
 
 VIEWS = {"CreateViewStatement", "CreateOrAlterViewStatement", "AlterViewStatement"}
 FUNCTIONS = {"CreateFunctionStatement", "CreateOrAlterFunctionStatement", "AlterFunctionStatement"}
-PERMISSIONS = {"GrantStatement", "RevokeStatement", "DenyStatement", "RevertStatement"}
-SCHEMA_CHANGES = {"CreateTableStatement", "AlterTableStatement", "DropTableStatement", "CreateIndexStatement",
-                  "DropIndexStatement", "AlterIndexStatement", "CreateSchemaStatement", "DropSchemaStatement",
-                  "CreateSequenceStatement", "AlterSequenceStatement", "DropSequenceStatement",
-                  "CreateViewStatement", "DropViewStatement", "AlterViewStatement", "CreateProcedureStatement",
-                  "DropProcedureStatement", "AlterProcedureStatement", "CreateSynonymStatement",
-                  "DropSynonymStatement", "TruncateTableStatement"}
-PROCEDURAL = ("the statement is lowered by ticket 08a (#43), procedural lowering: until then it is kept as written, "
-              "and everything it might have touched is unknown from here on")
+PROCEDURES = {"CreateProcedureStatement", "CreateOrAlterProcedureStatement", "AlterProcedureStatement"}
+TRIGGERS = {"CreateTriggerStatement", "CreateOrAlterTriggerStatement", "AlterTriggerStatement"}
+FUNCTION_TYPES = ("scalar_function", "inline_function", "table_function")
 
 
-class Lowering(Queries):
+class Lowering(Procedural):
     def __init__(self, reader: CatalogReader, identity: str, parsed: Parsed):
         super().__init__(reader, identity, parsed)
         self.opaque_dependencies: set[str] = set()
@@ -45,16 +41,24 @@ class Lowering(Queries):
     # ------------------------------------------------------------------ artefact
 
     def lower(self) -> Artefact:
-        [batch] = list(self.parsed.tree.Batches)
-        [statement] = list(batch.Statements)
-        kind = type_name(statement)
         artefact_type = self.reader.kind_of(self.identity)
-        if kind in VIEWS and artefact_type == "view":
-            body = self.view(statement)
-        elif kind in FUNCTIONS and artefact_type in ("scalar_function", "inline_function", "table_function"):
-            body = self.function(statement, artefact_type)
+        batches = list(self.parsed.tree.Batches)
+        if artefact_type == "query_batch":
+            body = self.batch_script(batches)
         else:
-            raise ValueError(f"{self.identity} is a {artefact_type}, but its text is a {kind}")
+            [batch] = batches
+            [statement] = list(batch.Statements)
+            kind = type_name(statement)
+            if kind in VIEWS and artefact_type == "view":
+                body = self.view(statement)
+            elif kind in FUNCTIONS and artefact_type in FUNCTION_TYPES:
+                body = self.function(statement, artefact_type)
+            elif kind in PROCEDURES and artefact_type == "procedure":
+                body = self.procedure(statement)
+            elif kind in TRIGGERS and artefact_type == "trigger":
+                body = self.trigger(statement)
+            else:
+                raise ValueError(f"{self.identity} is a {artefact_type}, but its text is a {kind}")
         artefact = Artefact(self.identity, artefact_type, self.parsed.text, body, dependencies=self.dependencies(body),
                             vocabulary_version=vocabulary.version())
         for n in body.walk():
@@ -64,13 +68,17 @@ class Lowering(Queries):
         artefact.secret_settings = sorted(self.settings)
         artefact.assumptions = sorted(self.assumptions)
         artefact.number_nodes()
+        scopes.annotate(body)
         artefact.hints = self.hints(body)
         return artefact
 
     def stored_settings(self, statement) -> dict:
-        options = [self.text_of(o) for o in (getattr(statement, "ViewOptions", None) or getattr(statement, "Options", None) or [])]
-        if getattr(statement, "WithCheckOption", False):
-            options.append("WITH CHECK OPTION")
+        options = []
+        if statement is not None:
+            options = [self.text_of(o) for o in (getattr(statement, "ViewOptions", None)
+                                                 or getattr(statement, "Options", None) or [])]
+            if getattr(statement, "WithCheckOption", False):
+                options.append("WITH CHECK OPTION")
         return {"options": options,
                 "ansi_nulls": bool(self.reader.value(self.identity, "ansi_nulls", "sqlserver")),
                 "quoted_identifier": bool(self.reader.value(self.identity, "quoted_identifier", "sqlserver"))}
@@ -117,8 +125,16 @@ class Lowering(Queries):
             attrs.update(form="multi_statement", return_variable=str(declared.VariableName.Value))
             attrs["returns"] = [{"name": str(c.ColumnIdentifier.Value), "type": self.data_type(c.DataType).to_json()}
                                 for c in declared.Definition.ColumnDefinitions]
+            self.declare_return_variable(declared)
             children += self.statements(statement)
         return Node(body, self.span(statement), None, attrs, children)
+
+    def declare_return_variable(self, declared) -> None:
+        """The row set `RETURNS @t TABLE (...)` declares is a table variable of the function's body."""
+        label = collations.Label(self.reader.value(self.database, "collation"), collations.COLUMN)
+        _, types, _ = self.table_definition(declared.Definition, label)
+        name = str(declared.VariableName.Value)
+        self.row_sets[name.casefold()] = (name, types)
 
     def parameters(self, statement) -> list[Node]:
         declared = {p["name"].casefold(): p for p in self.reader.value(self.identity, "parameters")}
@@ -129,100 +145,61 @@ class Lowering(Queries):
             if fact is None:
                 raise ValueError(f"{self.identity}: parameter {name} is not in the catalog")
             t = T.from_column(fact, default=self.default_label)
-            self.variables[name.casefold()] = (fact["name"], t)
             default = self.text_of(p.Value) if p.Value is not None else None
             attrs = {"name": fact["name"], "direction": fact["direction"], "readonly": fact["readonly"],
                      "default": default}
+            if fact["system_type"] == "table":
+                attrs["row_set"] = True               # a table-valued parameter is read as a table variable is
+                self.row_sets[fact["name"].casefold()] = (fact["name"], self.table_type_columns(fact["declared_type"]))
+            else:
+                self.variables[name.casefold()] = (fact["name"], t)
             out.append(Node("declare_parameter", self.span(p), t, attrs, role="parameter"))
         return out
 
+    def table_type_columns(self, declared_type: str) -> dict:
+        found = [o for o in self.reader.snapshot.objects if o.kind == "table_type"
+                 and o.identity.split(".")[0] == self.database
+                 and o.identity.split(".")[-1].casefold() == declared_type.casefold()]
+        if len(found) != 1:
+            return {}
+        return {c["name"]: T.from_column(c, default=self.default_label) for c in found[0].fact("columns").value}
+
     def statements(self, statement) -> list[Node]:
         listed = list(statement.StatementList.Statements) if statement.StatementList is not None else []
-        if len(listed) == 1 and type_name(listed[0]) == "BeginEndBlockStatement":
-            listed = list(listed[0].StatementList.Statements)
-        return [as_role(self.body_statement(s), "statement") for s in listed]
+        return self.statement_list(listed, "statement")
 
-    def body_statement(self, s) -> Node:
-        kind = type_name(s)
-        if kind == "ReturnStatement":
-            children = []
-            if s.Expression is not None:
-                try:
-                    value = self.expression(s.Expression)
-                except Opaque as opaque:
-                    value = self.opaque(s.Expression, opaque.reason)
-                children.append(as_role(value, "argument"))
-            return Node("return", self.span(s), None, {}, children)
-        if kind == "ExecuteStatement":
-            dynamic = self.dynamic_sql(s)
-            if dynamic is not None:
-                return dynamic
-        if kind in PERMISSIONS:
-            return Node("permission_change", self.span(s), None,
-                        {"text": self.text_of(s), "manual": True, "scope_barrier": False})
-        if kind in SCHEMA_CHANGES and not self.temp_target(s):
-            return Node("schema_change", self.span(s), None,
-                        {"text": self.text_of(s), "manual": True, "scope_barrier": False})
-        return self.opaque(s, f"{kind}: {PROCEDURAL}", barrier=True)
+    # ------------------------------------------------------------------ procedures, triggers, batches
 
-    def temp_target(self, statement) -> bool:
-        found = []
+    def procedure(self, statement) -> Node:
+        children = self.parameters(statement) + self.statements(statement)
+        return Node("procedure_body", self.span(statement), None, dict(self.stored_settings(statement), name=self.identity),
+                    children)
 
-        def visit(f):
-            if type_name(f) == "SchemaObjectName" and f.BaseIdentifier is not None \
-                    and str(f.BaseIdentifier.Value).startswith("#"):
-                found.append(f)
-        walk(statement, visit)
-        return bool(found)
+    def trigger(self, statement) -> Node:
+        table = str(self.reader.value(self.identity, "table"))
+        self.trigger_table = table
+        attrs = dict(self.stored_settings(statement), name=self.identity, table=table,
+                     timing=self.reader.value(self.identity, "timing"),
+                     events=list(self.reader.value(self.identity, "events")))
+        return Node("trigger_body", self.span(statement), None, attrs, self.statements(statement))
 
-    def dynamic_sql(self, statement) -> Node | None:
-        """EXEC (string) and sp_executesql: the expressions that build the text are lowered; the statement is a
-        scope barrier and always manual work."""
-        spec = statement.ExecuteSpecification
-        entity = spec.ExecutableEntity
-        children, form = [], None
-        if type_name(entity) == "ExecutableStringList":
-            form = "execute string"
-            children = [as_role(self.joined_text(entity), "text")]
-        elif type_name(entity) == "ExecutableProcedureReference" and entity.ProcedureReference is not None \
-                and entity.ProcedureReference.ProcedureReference is not None \
-                and str(entity.ProcedureReference.ProcedureReference.Name.BaseIdentifier.Value).lower() == "sp_executesql":
-            form = "sp_executesql"
-            params = [p.ParameterValue for p in entity.Parameters]
-            if not params:
-                return None
-            children = [as_role(self.lowered_or_opaque(params[0]), "text")]
-            children += [as_role(self.lowered_or_opaque(p), "parameter") for p in params[1:]]
-        if form is None:
-            return None
-        return Node("dynamic_sql_execution", self.span(statement), None,
-                    {"form": form, "scope_barrier": True, "manual": True}, children)
-
-    def joined_text(self, entity) -> Node:
-        """EXEC (a + b + ...) runs the pieces joined as strings are joined with +."""
-        try:
-            pieces = [self.expression(x) for x in entity.Strings]
-            text = pieces[0]
-            for piece in pieces[1:]:
-                text = self.concatenate(entity, text, piece)
-            return text
-        except Opaque as opaque:
-            return self.opaque(entity, opaque.reason)
-
-    def lowered_or_opaque(self, fragment) -> Node:
-        try:
-            return self.expression(fragment)
-        except Opaque as opaque:
-            return self.opaque(fragment, opaque.reason)
+    def batch_script(self, batches) -> Node:
+        """One `batch` per GO. Variables and table variables end with their batch; temp tables do not."""
+        out = []
+        for batch in batches:
+            self.variables, self.row_sets = {}, {}
+            statements = self.statement_list(list(batch.Statements), "statement")
+            out.append(Node("batch", self.span(batch), None, {}, statements, role="batch"))
+        return Node("batch_script_body", self.parsed.span(self.parsed.tree), None,
+                    dict(self.stored_settings(None), name=self.identity), out)
 
     # ------------------------------------------------------------------ comments, hints, dependencies
 
     def attach_comments(self, body: Node) -> None:
         """A comment annotates the nearest node: the one that ends before it on its own line, if there is one
         (a comment after a select item), otherwise the next one (a comment on a line of its own)."""
-        anchors = sorted((n for n in body.walk() if n.role in ("output", "input", "left", "right", "query", "statement",
-                                                               "definition", "parameter")),
-                         key=lambda n: n.position.offset)
+        roles = ("output", "input", "left", "right", "query", "definition", "parameter", "batch") + scopes.STATEMENT_ROLES
+        anchors = sorted((n for n in body.walk() if n.role in roles), key=lambda n: n.position.offset)
         for comment in self.parsed.comments:
             line = self.parsed.text.count("\n", 0, comment.offset) + 1
             same_line = [n for n in anchors if n.position.end_line == line
@@ -242,11 +219,17 @@ class Lowering(Queries):
 
     def dependencies(self, body: Node) -> list[str]:
         found = set(self.opaque_dependencies)
+        if body.kind == "trigger_body":
+            found.add(body.attrs["table"])
         for n in body.walk():
             if n.kind == "read_table" and n.attrs.get("table"):
                 found.add(n.attrs["table"])
             elif n.kind in ("call_table_function", "call_scalar_function"):
                 found.add(n.attrs["function"])
+            elif n.kind == "call_procedure":
+                found.add(n.attrs["procedure"])
+            elif n.kind in ("insert_rows", "update_rows", "delete_rows") and n.attrs["target_kind"] == "table":
+                found.add(n.attrs["target"])
         if self.reader.has_fact(self.identity, "references"):
             found |= {r["resolved"] for r in self.reader.value(self.identity, "references") if r.get("resolved")}
         found.discard(self.identity)
@@ -283,9 +266,8 @@ class Lowering(Queries):
 
 
 def lower_artefact(reader: CatalogReader, identity: str, parsed: Parsed) -> Artefact:
-    """Lower a view or function (by its catalog kind) into the intermediate representation."""
+    """Lower a view, function, procedure, trigger or batch script (by its catalog kind) into the representation."""
     return Lowering(reader, identity, parsed).lower()
-
 
 
 def columns_of(reader: CatalogReader) -> Callable[[str], set[str]]:
@@ -294,4 +276,3 @@ def columns_of(reader: CatalogReader) -> Callable[[str], set[str]]:
         fact = "columns" if reader.kind_of(identity) == "table" else "result_shape"
         return {c["name"] for c in reader.value(identity, fact)}
     return names_of
-

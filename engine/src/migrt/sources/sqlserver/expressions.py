@@ -74,7 +74,10 @@ def as_role(node: Node, role: str) -> Node:
 class Expressions:
     def __init__(self, reader: CatalogReader, identity: str, parsed: Parsed):
         self.reader, self.identity, self.parsed = reader, identity, parsed
-        self.database, schema, _name = identity.split(".")
+        if identity.startswith("batch:"):            # a script file: its database is a fact, its schema dbo
+            self.database, schema = str(reader.value(identity, "database")), "dbo"
+        else:
+            self.database, schema, _name = identity.split(".")
         collation = reader.value(self.database, "collation")
         self.case_sensitive = names.identifiers_case_sensitive(collation)
         self.name_context = {"database": self.database, "schemas": [schema, "dbo"],
@@ -86,7 +89,9 @@ class Expressions:
         self.settings: set[str] = set()
         self.assumptions: set[str] = set()
         self.scopes: list[dict[str, Relation]] = []      # the relations of each enclosing query, innermost last
-        self.variables: dict[str, tuple[str, VType]] = {}
+        self.variables: dict[str, tuple[str, VType]] = {}     # parameters and declared variables, by folded name
+        self.row_sets: dict[str, tuple[str, dict[str, VType]]] = {}       # table variables
+        self.temp_tables: dict[str, tuple[str, dict[str, VType]]] = {}   # temp tables that may exist here
         self.xml_namespaces: list[str] = []
 
     # ------------------------------------------------------------------ helpers
@@ -302,8 +307,10 @@ class Expressions:
         name = str(e.Name)
         found = self.variables.get(name.casefold())
         if found is None:
-            raise Opaque(e, f"{name} is not a parameter: variables are declared by statements lowered by ticket "
-                            "08a (#43)")
+            if name.casefold() in self.row_sets:
+                raise Opaque(e, f"{name} is a table variable, not a value")
+            raise Opaque(e, f"{name} is not a parameter or a variable declared before this point in its batch: it may "
+                            "have been declared by a statement kept as written, or in another batch")
         return self.node("variable", e, found[1], {"name": found[0]})
 
     def literal(self, e, type_: VType, value) -> Node:
@@ -367,7 +374,10 @@ class Expressions:
         op = BINARY.get(str(e.BinaryExpressionType))
         if op is None:
             raise Opaque(e, f"{e.BinaryExpressionType} is not lowered yet")
-        left, right = self.expression(e.FirstExpression), self.expression(e.SecondExpression)
+        return self.arithmetic(e, op, self.expression(e.FirstExpression), self.expression(e.SecondExpression))
+
+    def arithmetic(self, e, op: str, left: Node, right: Node) -> Node:
+        """`left op right` for already lowered operands: the operation T-SQL's types make it (also `SET @x += y`)."""
         if op == "add" and T.is_string(left.type) and T.is_string(right.type):
             return self.concatenate(e, left, right)
         if left.kind == "null" and right.kind == "null":
@@ -474,6 +484,12 @@ class Expressions:
         kind = type_name(reference)
         if kind == "XmlDataTypeReference":
             return VType.of("xml")
+        if kind == "UserDataTypeReference" and reference.Name.SchemaIdentifier is None:
+            base = str(reference.Name.BaseIdentifier.Value).casefold()
+            if base == "sysname":                  # nvarchar(128), not null
+                return T.declared("nvarchar", [128], label or self.default_label)
+            if base in ("geography", "geometry", "hierarchyid"):
+                return VType.of("unsupported_type", source_name=base)
         if kind != "SqlDataTypeReference":
             raise Opaque(reference, f"the type {self.text_of(reference)} is not lowered yet")
         arguments = [("max" if type_name(p) == "MaxLiteral" else int(str(p.Value))) for p in reference.Parameters]

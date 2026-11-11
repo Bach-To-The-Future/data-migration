@@ -465,18 +465,17 @@ def test_a_scalar_function_lowers_its_parameters_and_returned_expression(corpus_
     assert ret.child("argument").children_with("argument")[0].kind == "variable"
 
 
-def test_procedural_statements_in_a_function_body_are_scope_barriers_for_the_next_ticket(corpus_snapshot):
+def test_procedural_statements_in_a_function_body_are_lowered_by_ticket_43(corpus_snapshot):
     artefact, reader = lower_text(
         corpus_snapshot,
         "CREATE FUNCTION sales.fnTest (@n int) RETURNS int AS BEGIN DECLARE @x int = @n; SET @x += 1; RETURN @x END",
         kind="scalar_function", parameters=[PARAM_INT], returns=RETURNS_INT)
 
     assert checked(artefact, reader) == []
-    barriers = [n for n in of_kind(artefact, "opaque_fragment") if n.role == "statement"]
-    assert len(barriers) == 2 and all(b.attrs["scope_barrier"] for b in barriers)
-    assert all("procedural" in b.attrs["reason"] and "#43" in b.attrs["reason"] for b in barriers)
+    assert [n.kind for n in artefact.body.children_with("statement")] == ["declare_variable", "assign", "return"]
+    assert not of_kind(artefact, "opaque_fragment")
     [ret] = of_kind(artefact, "return")
-    assert ret.child("argument").kind == "opaque_fragment"      # @x was declared by a barrier
+    assert ret.child("argument").kind == "variable"      # @x is a declared variable
 
 
 def test_dynamic_sql_has_its_own_node_kind_with_its_text_expression_lowered(corpus_snapshot):
@@ -510,7 +509,7 @@ def test_an_inline_table_function_is_one_query_and_a_multi_statement_one_declare
     assert checked(multi, reader) == []
     assert multi.body.attrs["form"] == "multi_statement"
     assert [c["name"] for c in multi.body.attrs["returns"]] == ["A", "B"]
-    assert [n.kind for n in multi.body.children_with("statement")] == ["opaque_fragment", "return"]
+    assert [n.kind for n in multi.body.children_with("statement")] == ["insert_rows", "return"]
 
 
 # ---------------------------------------------------------------- the checker

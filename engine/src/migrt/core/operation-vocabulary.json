@@ -225,6 +225,15 @@
       "detect": ""
     },
     {
+      "name": "batch",
+      "meaning": "One batch of a script, a statement list of its own. Its variables and table variables end with it; temp tables do not. Added by ticket 08a (#43).",
+      "tsql": [
+        "GO"
+      ],
+      "x": false,
+      "detect": ""
+    },
+    {
       "name": "opaque_fragment",
       "meaning": "Source kept verbatim because lowering could not express it, with its position and the reason. It records what it reads and writes in scope where detectable, and is otherwise a scope barrier.",
       "tsql": [],

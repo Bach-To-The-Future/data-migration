@@ -121,7 +121,10 @@ A piece of source kept verbatim, with its position and the reason, because lower
 _Avoid_: Flagged fragment (which is target code), unparsed block
 
 **Scope barrier**:
-An opaque fragment whose effect on what is in scope cannot be determined, so that everything it might have touched is treated as unknown from that point on.
+An opaque fragment whose effect on what is in scope cannot be determined, so that everything it might have touched is treated as unknown from that point on. An opaque statement that can change nothing but what it names records those names (`touches`) instead and is not a barrier.
+
+**Scope**:
+What is in force at a point of a procedural artefact: its parameters, variables, table variables and temp tables, and the position of the last scope barrier before it. Every statement of the representation states it; the core derives it from the statements and the checker derives it again and refuses a difference. A variable is declared for the rest of its batch, not its block; a temp table made or dropped in a branch or a loop "may exist" after it.
 
 **Generated description**:
 A natural-language account of an artefact rendered by fixed rules from its intermediate representation, and so always faithful to it.

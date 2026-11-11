@@ -11,14 +11,22 @@ P = Provenance("server", "test: a synthetic module")
 
 def lower_text(snapshot: Snapshot, sql: str, kind: str = "view", database: str = "RetailSample",
                schema: str = "sales", name: str = "vTest", ansi_nulls: bool = True, parameters=(),
-               returns=None) -> tuple[Artefact, CatalogReader]:
-    identity = f"{database}.{schema}.{name}"
+               returns=None, table: str = "RetailSample.sales.Order", timing: str = "AFTER",
+               events=("INSERT", "UPDATE", "DELETE")) -> tuple[Artefact, CatalogReader]:
+    """`kind` is the catalog kind: view, the functions, procedure, trigger (on `table`, with its timing and
+    events) or query_batch (a file, whose identity is `batch:<name>.sql`)."""
+    identity = f"batch:{name}.sql" if kind == "query_batch" else f"{database}.{schema}.{name}"
     facts = [Fact("skeleton", "source_text", sql, P), Fact("skeleton", "extractable", True, P),
              Fact("skeleton", "secrets", _secrets(sql), P),
              Fact(extractor.SOURCE, "ansi_nulls", ansi_nulls, P), Fact(extractor.SOURCE, "quoted_identifier", True, P),
              Fact(extractor.SOURCE, "schema_bound", False, P)]
-    if kind != "view":
+    if kind in ("scalar_function", "inline_function", "table_function", "procedure"):
         facts.append(Fact("skeleton", "parameters", list(parameters), P))
+    if kind == "trigger":
+        facts += [Fact("skeleton", "table", table, P), Fact("skeleton", "timing", timing, P),
+                  Fact("skeleton", "events", list(events), P)]
+    if kind == "query_batch":
+        facts.append(Fact("skeleton", "database", database, P))
     if returns is not None:
         facts.append(Fact("skeleton", "returns", returns, P))
     module = CatalogObject(identity, kind, tuple(facts))
@@ -43,3 +51,11 @@ def kinds(node) -> list[str]:
 
 def of_kind(artefact: Artefact, kind: str):
     return [n for n in artefact.nodes() if n.kind == kind]
+
+
+def parameter(name: str, type_: str = "int", *, direction: str = "input", length: int = 0, readonly: bool = False,
+              default=None) -> dict:
+    """A procedure parameter fact as the extractor reads it (an int, or a varchar of `length`)."""
+    shape = {"int": (4, 10, 0), "varchar": (length, 0, 0), "datetime": (8, 23, 3)}[type_]
+    return {"name": name, "declared_type": type_, "system_type": type_, "max_length": shape[0], "precision": shape[1],
+            "scale": shape[2], "direction": direction, "readonly": readonly, "nullable": True, "default": default}
