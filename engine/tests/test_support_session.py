@@ -160,3 +160,31 @@ def test_the_error_being_handled_is_visible_inside_the_handler_only(duo):
             assert ss.error is not None and ss.error.number == 547
         assert ss.error is err
     assert ss.error is None
+
+
+def test_a_spark_session_that_already_marks_its_commits_for_another_run_is_refused(duo):
+    spark = duo.spark.newSession()
+    first = lib.SessionState.open(spark, job="a", run="r1", state_table=duo.state_table,
+                                  config=lib.Config(scratch_schema=duo.schema, database=duo.database))
+    with pytest.raises(ValueError, match="own session"):
+        lib.SessionState.open(spark, job="a", run="r2", state_table=duo.state_table,
+                              config=lib.Config(scratch_schema=duo.schema, database=duo.database))
+    first.close()
+
+
+def test_the_default_collation_of_the_database_comes_from_the_settings_file(duo, tmp_path):
+    duo.table("Names", [C("Id", "int"), C("Name", "varchar(10)")], uniques=(lib.Unique("UQ_Names", ("Name",)),))
+    settings = json.loads(settings_file(tmp_path).read_text(encoding="utf-8"))
+    settings["semantic"]["databases"] = {duo.database: {"default_collation": {"value": "Latin1_General_CS_AS", "origin": "read"}}}
+    ss = duo.session(settings=settings)
+    assert ss.default_collation == "Latin1_General_CS_AS"
+    ss.insert_values(duo.target("Names"), [{"Id": 1, "Name": "a"}, {"Id": 2, "Name": "A"}])      # distinct when case-sensitive
+    assert duo.delta_rows("Names", ["Id"], "Id") == [(1,), (2,)]
+
+
+def test_a_failed_heartbeat_is_raised_when_the_run_ends_even_if_it_never_wrote_again(duo):
+    ss = duo.session()
+    assert ss._heartbeat is not None
+    ss._heartbeat.error = RuntimeError("the state table could not be reached")
+    with pytest.raises(lib.LeaseLost, match="heartbeat failed"):
+        ss.close()

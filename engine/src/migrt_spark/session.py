@@ -1,7 +1,7 @@
-"""Session state (spec sections 6 and 7): what converted code carries in place of the legacy database session, and the one way
+"""Session state (spec sections 6 and 7): what generated code carries in place of the legacy database session, and the one way
 it writes.
 
-Every converted function takes it as its first argument. It carries temp tables, the open transaction, `@@ROWCOUNT`,
+Every generated function takes it as its first argument. It carries temp tables, the open transaction, `@@ROWCOUNT`,
 `@@ERROR`, the last identity value, the error being handled, messages and session values. Its write wrappers enforce the
 catalog's constraints and foreign-key actions, fire triggers, assign identity and row-version values from counters in the
 state table, take a write lease on every table before the first write to it, register the write with the open transaction,
@@ -17,6 +17,7 @@ import functools
 import re
 import threading
 import time
+import warnings
 from typing import Any, Callable, Iterable, Iterator
 
 from delta import DeltaTable
@@ -101,14 +102,23 @@ class SessionState:
         self._scratch_targets: set[str] = set()
         self._heartbeat: _Heartbeat | None = None
         self._closed = False
+        self.startup: recovery.Report = recovery.Report()      # what recovery on start did, and what it left for a person
 
     @classmethod
     def open(cls, spark: SparkSession, *, job: str, run: str, state_table: str, tables: Iterable[TableSpec] = (),
              settings=None, config: Config = Config()) -> "SessionState":
         """Start a run: recover what earlier runs left unfinished before any other work, then start the heartbeat."""
         ss = cls(spark, job=job, run=run, state_table=state_table, tables=tables, settings=settings, config=config)
-        spark.conf.set(deltaops.MARKER_CONF, deltaops.marker(job, run))
-        recovery.start_up(spark, ss.state, config, job, run)
+        mine = deltaops.marker(job, run)
+        owner = spark.conf.get(deltaops.MARKER_CONF, None)
+        if owner not in (None, "", mine):
+            raise ValueError(f"This Spark session already writes commits as {owner!r}: the job run id marks every commit "
+                             f"the session makes, so give each run its own session (spark.newSession()).")
+        spark.conf.set(deltaops.MARKER_CONF, mine)
+        ss.startup = recovery.start_up(spark, ss.state, config, job, run)
+        if ss.startup.refused:
+            warnings.warn("Recovery on start left unfinished transactions for manual reconciliation; writes to their tables "
+                          "will fail until a person has reconciled them: " + " | ".join(ss.startup.refused), stacklevel=2)
         ss._heartbeat = _Heartbeat(ss)
         ss._heartbeat.start()
         return ss
@@ -131,6 +141,13 @@ class SessionState:
     @property
     def semantic(self) -> dict:
         return self.settings.semantic
+
+    @property
+    def default_collation(self) -> str:
+        """The database's default collation: the settings file's (read from the source server) when it names the database,
+        else the configured one."""
+        entry = self.settings.semantic.get("databases", {}).get(self.config.database)
+        return entry["default_collation"]["value"] if entry else self.config.default_collation
 
     # ------------------------------------------------------------------ small state
 
@@ -353,7 +370,7 @@ class SessionState:
     def insert(self, table: str, df: DataFrame, *, identity_insert: bool = False) -> None:
         """INSERT ... SELECT."""
         spec = self._spec(table)
-        self._statement(spec, "insert", lambda: self._run_insert(spec, df, identity_insert), "INSERT")
+        self._statement(spec, "insert", lambda: self._run_insert(spec, df, identity_insert))
 
     def insert_values(self, table: str, rows: list[dict], *, identity_insert: bool = False) -> None:
         """INSERT ... VALUES: one dictionary per row, by column name; a column left out takes its default."""
@@ -370,7 +387,7 @@ class SessionState:
                 raise TsqlError(207, 16, 1, f"Invalid column name '{k}'.")
         schema = ", ".join(f"`{spec.column(k).name}` {spec.column(k).type}" for k in names)
         df = self.spark.createDataFrame([tuple(r.get(k) for k in names) for r in rows], schema)
-        self._statement(spec, "insert", lambda: self._run_insert(spec, df, identity_insert), "INSERT")
+        self._statement(spec, "insert", lambda: self._run_insert(spec, df, identity_insert))
 
     def update(self, table: str, *, set: dict[str, Any], where: "str | SparkColumn | None" = None) -> None:
         """UPDATE ... SET ... WHERE."""
@@ -392,7 +409,7 @@ class SessionState:
                                       ).cast(c.type).alias(f"n_{c.name}") for c in spec.columns])
             return self._run_update(spec, pairs, touched, fast=(assignments, cond))
 
-        self._statement(spec, "update", body, "UPDATE", touched=touched)
+        self._statement(spec, "update", body, touched=touched)
 
     def delete(self, table: str, *, where: "str | SparkColumn | None" = None) -> None:
         """DELETE ... WHERE."""
@@ -404,9 +421,9 @@ class SessionState:
             old = base.where(F.coalesce(cond, F.lit(False))) if cond is not None else base
             return self._run_delete(spec, old, fast=(cond,))
 
-        self._statement(spec, "delete", body, "DELETE")
+        self._statement(spec, "delete", body)
 
-    def _statement(self, spec: TableSpec, event: str, body: Callable[[], int], verb: str, touched=None) -> None:
+    def _statement(self, spec: TableSpec, event: str, body: Callable[[], int], touched=None) -> None:
         multi = self._writes_several_tables(spec, event, touched)
         try:
             with (self._tx.begin_statement() if multi else contextlib.nullcontext()):
@@ -462,7 +479,7 @@ class SessionState:
                     (F.lit(first) + F.col("__n")).cast("bigint")), 16, "0")))
             new = numbered.select(*spec.names)
             if n:
-                default = self.config.default_collation
+                default = self.default_collation
                 constraints.check_not_null(spec, new, "INSERT")
                 constraints.check_checks(spec, new, "INSERT")
                 existing = self._read(spec)
@@ -489,7 +506,7 @@ class SessionState:
 
     def _identity_condition(self, spec: TableSpec, left: str, right: str, right_prefix: str = "") -> SparkColumn:
         columns = list(spec.row_identity or spec.names)
-        return functools.reduce(lambda a, b: a & b, [F.col(f"{left}.`{c}`").eqNullSafe(F.col(f"{right}.`{right_prefix}{c}`"))
+        return constraints.all_of([F.col(f"{left}.`{c}`").eqNullSafe(F.col(f"{right}.`{right_prefix}{c}`"))
                                                      for c in columns])
 
     def _rest(self, spec: TableSpec, pairs: DataFrame) -> DataFrame:
@@ -553,7 +570,7 @@ class SessionState:
 
     def _check_update(self, spec: TableSpec, pairs: DataFrame, new: DataFrame, touched: set[str]) -> None:
         low = {t.lower() for t in touched}
-        default = self.config.default_collation
+        default = self.default_collation
         relevant = dataclasses.replace(
             spec,
             columns=tuple(c if c.name.lower() in low else dataclasses.replace(c, nullable=True) for c in spec.columns),
@@ -577,7 +594,7 @@ class SessionState:
 
     def _lost_keys(self, spec: TableSpec, fk: ForeignKey, pairs: DataFrame, final: DataFrame) -> DataFrame:
         """The old key values of the parent rows that no longer exist after the statement."""
-        default = self.config.default_collation
+        default = self.default_collation
         parent_columns = [spec.column(c) for c in fk.ref_columns]
         old = pairs.select(*[constraints.normalised(spec, c, F.col(f"`o_{c.name}`"), default).alias(f"k{i}")
                              for i, c in enumerate(parent_columns)],
@@ -585,14 +602,14 @@ class SessionState:
                            *[F.col(f"`n_{c.name}`").alias(f"w{i}") for i, c in enumerate(parent_columns)])
         keys = final.select(*[constraints.normalised(spec, c, F.col(f"`{c.name}`"), default).alias(f"k{i}")
                               for i, c in enumerate(parent_columns)])
-        cond = functools.reduce(lambda a, b: a & b, [F.col(f"a.k{i}").eqNullSafe(F.col(f"f.k{i}")) for i in range(len(parent_columns))])
+        cond = constraints.all_of([F.col(f"a.k{i}").eqNullSafe(F.col(f"f.k{i}")) for i in range(len(parent_columns))])
         return old.alias("a").join(keys.alias("f"), cond, "left_anti")
 
     def _children(self, spec: TableSpec, child: TableSpec, fk: ForeignKey, lost: DataFrame, rest: DataFrame) -> DataFrame:
         """The child rows that reference a lost key."""
-        default = self.config.default_collation
+        default = self.default_collation
         rows = rest if child.target == spec.target else self._read(child)
-        cond = functools.reduce(lambda a, b: a & b, [
+        cond = constraints.all_of([
             constraints.normalised(spec, spec.column(rc), F.col(f"c.`{c}`"), default) == F.col(f"l.k{i}")
             for i, (c, rc) in enumerate(zip(fk.columns, fk.ref_columns))])
         return rows.alias("c").join(lost.alias("l"), cond, "inner")
@@ -604,17 +621,17 @@ class SessionState:
                               f"needs cannot be told apart. This write is manual work.")
         source = pairs.select(*[F.col(f"`o_{c}`") for c in (spec.row_identity or spec.names)],
                               *[F.col(f"`n_{c.name}`") for c in spec.columns if c.name in touched]).distinct()
-        cond = functools.reduce(lambda a, b: a & b, [F.col(f"t.`{c}`").eqNullSafe(F.col(f"s.`o_{c}`"))
+        cond = constraints.all_of([F.col(f"t.`{c}`").eqNullSafe(F.col(f"s.`o_{c}`"))
                                                      for c in (spec.row_identity or spec.names)])
         deltaops.retrying(lambda: DeltaTable.forName(self.spark, spec.target).alias("t").merge(source.alias("s"), cond)
                           .whenMatchedUpdate(set={c.name: F.col(f"s.`n_{c.name}`") for c in spec.columns if c.name in touched})
                           .execute())
 
     def _cascade_update(self, spec: TableSpec, child: TableSpec, fk: ForeignKey, pairs: DataFrame) -> None:
-        default = self.config.default_collation
+        default = self.default_collation
         changed_cond = functools.reduce(lambda a, b: a | b, [~F.col(f"`o_{c}`").eqNullSafe(F.col(f"`n_{c}`")) for c in fk.ref_columns])
         changed = pairs.where(changed_cond)
-        cond = functools.reduce(lambda a, b: a & b, [
+        cond = constraints.all_of([
             constraints.normalised(spec, spec.column(rc), F.col(f"c.`{c}`"), default)
             == constraints.normalised(spec, spec.column(rc), F.col(f"p.`o_{rc}`"), default)
             for c, rc in zip(fk.columns, fk.ref_columns)])
@@ -689,7 +706,7 @@ class SessionState:
     def _write_delete_merge(self, spec: TableSpec, old: DataFrame) -> None:
         columns = list(spec.row_identity or spec.names)
         source = old.select(*[F.col(f"`{c}`").alias(f"o_{c}") for c in columns]).distinct()
-        cond = functools.reduce(lambda a, b: a & b, [F.col(f"t.`{c}`").eqNullSafe(F.col(f"s.`o_{c}`")) for c in columns])
+        cond = constraints.all_of([F.col(f"t.`{c}`").eqNullSafe(F.col(f"s.`o_{c}`")) for c in columns])
         deltaops.retrying(lambda: DeltaTable.forName(self.spark, spec.target).alias("t").merge(source.alias("s"), cond)
                           .whenMatchedDelete().execute())
 
@@ -762,3 +779,5 @@ class SessionState:
                         self.spark.sql(f"DROP TABLE IF EXISTS {self.scratch_schema}.{t.name}")
             self.state.delete(f"run = {lit(self.run)} AND kind IN ('lease', 'tx', 'scratch')")
             self._closed = True
+        if self._heartbeat and self._heartbeat.error:                      # a run that never wrote again must hear of it too
+            raise LeaseLost(f"This run's heartbeat failed ({self._heartbeat.error}), so its leases may have expired while it ran.")

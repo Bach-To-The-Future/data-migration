@@ -168,6 +168,21 @@ def test_a_version_removed_by_vacuum_fails_loudly_and_restores_nothing(duo):
     assert {r.status for r in flagged} == {"needs manual reconciliation"}
 
 
+def test_when_the_up_front_check_cannot_run_a_late_refusal_names_what_was_already_restored(duo, monkeypatch):
+    from migrt_spark import deltaops
+
+    monkeypatch.setattr(deltaops, "missing_files", lambda *a: [])        # no JVM to ask, as under Spark Connect
+    ss = two_tables(duo)
+    with pytest.raises(lib.VersionVacuumed, match=f"Already restored before it was found: {duo.target('T2')}"):
+        with ss.transaction() as tx:
+            ss.update(duo.target("T2"), set={"V": 1})
+            ss.update(duo.target("T1"), set={"V": 0})
+            duo.spark.sql(f"VACUUM {duo.target('T1')} RETAIN 0 HOURS")
+            tx.rollback()
+    assert duo.delta_rows("T2", ["Id", "V"], "Id") == [(1, 10)]
+    assert {r.status for r in duo.spark.table(duo.state_table).where("kind = 'tx'").collect()} == {"needs manual reconciliation"}
+
+
 def test_a_foreign_commit_in_the_history_refuses_the_restore_and_marks_the_transaction(duo):
     ss = two_tables(duo)
     with pytest.raises(lib.RestoreRefused, match=duo.target("T1")) as refused:

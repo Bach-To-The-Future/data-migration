@@ -49,6 +49,10 @@ def normalised(spec: TableSpec, column: Column, expr: SparkColumn, default: str)
     return F.lower(value) if "CI" in tokens else value
 
 
+def all_of(conditions: list[SparkColumn]) -> SparkColumn:
+    return functools.reduce(lambda a, b: a & b, conditions)
+
+
 def fmt(value) -> str:
     if value is None:
         return "<NULL>"
@@ -118,7 +122,7 @@ def check_unique(spec: TableSpec, new: DataFrame, rest: DataFrame, default: str)
         if dup:
             raise unique_error(spec, u, [dup[0][f"r{i}"] for i in range(n)])
         old = _keyed(spec, u.columns, rest, u.where, default).select(*keys)
-        cond = functools.reduce(lambda a, b: a & b, [F.col(f"n.k{i}").eqNullSafe(F.col(f"e.k{i}")) for i in range(n)])
+        cond = all_of([F.col(f"n.k{i}").eqNullSafe(F.col(f"e.k{i}")) for i in range(n)])
         clash = fresh.alias("n").join(old.alias("e"), cond, "left_semi").limit(1).collect()
         if clash:
             raise unique_error(spec, u, [clash[0][f"r{i}"] for i in range(n)])
@@ -133,12 +137,12 @@ def check_foreign_keys(spec: TableSpec, new: DataFrame, final: DataFrame, verb: 
     for fk in spec.foreign_keys:
         parent = lookup(fk.references)
         parent_rows = final if parent.target == spec.target else read(parent)
-        present = functools.reduce(lambda a, b: a & b, [F.col(f"`{c}`").isNotNull() for c in fk.columns])
+        present = all_of([F.col(f"`{c}`").isNotNull() for c in fk.columns])
         child = new.where(present).select(*[normalised(parent, parent.column(rc), F.col(f"`{c}`"), default).alias(f"k{i}")
                                             for i, (c, rc) in enumerate(zip(fk.columns, fk.ref_columns))])
         keys = parent_rows.select(*[normalised(parent, parent.column(rc), F.col(f"`{rc}`"), default).alias(f"k{i}")
                                     for i, rc in enumerate(fk.ref_columns)])
-        cond = functools.reduce(lambda a, b: a & b, [F.col(f"c.k{i}") == F.col(f"p.k{i}") for i in range(len(fk.columns))])
+        cond = all_of([F.col(f"c.k{i}") == F.col(f"p.k{i}") for i in range(len(fk.columns))])
         if child.alias("c").join(keys.alias("p"), cond, "left_anti").limit(1).count():
             raise TsqlError(547, 16, 0, f'The {verb} statement conflicted with the FOREIGN KEY constraint "{fk.name}". The '
                                         f'conflict occurred in database "{parent.database}", table "{parent.qualified}", '

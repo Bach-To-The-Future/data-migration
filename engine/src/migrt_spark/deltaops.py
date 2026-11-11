@@ -72,7 +72,9 @@ def missing_files(spark, table: str, to_version: int) -> list[str]:
                 found.append(f.rsplit("/", 1)[-1])
         return found
     except (AttributeError, NotImplementedError):
-        return []                      # no JVM access (Spark Connect): the restore itself will refuse a missing file
+        # No JVM access (Spark Connect): the up-front check cannot run. The restore itself still refuses a missing file, and
+        # `restore_all` then names the tables it had already restored; the transaction is flagged either way.
+        return []
 
 
 def restore(spark, table: str, to_version: int) -> None:

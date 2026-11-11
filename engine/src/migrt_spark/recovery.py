@@ -28,6 +28,7 @@ class Report:
     skipped_live: list[str] = dataclasses.field(default_factory=list)        # tables under a live lease, left alone
     forced: list[tuple[str, str]] = dataclasses.field(default_factory=list)  # (job, run) whose live lease was forced
     needs_manual: list[str] = dataclasses.field(default_factory=list)        # tables a restore refused to touch
+    refused: list[str] = dataclasses.field(default_factory=list)             # why, for each refusal
 
 
 @dataclasses.dataclass(frozen=True)
@@ -89,7 +90,12 @@ def recover_dead(spark: SparkSession, state: StateTable, config: Config, me: str
     now = config.clock() if now is None else now
     for run, rows in sorted(entries_by_run(state).items()):
         if run != me and not is_live(rows, now, config.lease_expiry_seconds):
-            recover_run(spark, state, run, rows, report)
+            try:
+                recover_run(spark, state, run, rows, report)
+            except (RestoreRefused, VersionVacuumed) as refused:
+                # Its entries stay, flagged for a person. This run goes on: only a writer that wants one of those tables
+                # is stopped, when it takes the lease over and meets the same refusal.
+                report.refused.append(str(refused))
     return report
 
 

@@ -1,5 +1,5 @@
 """What the write wrappers know about a table, from the catalog (ADR 0003): columns, keys, checks, foreign keys and
-triggers. The delivered project holds one description per table the converted code writes."""
+triggers. The delivered project holds one description per table the generated code writes."""
 from __future__ import annotations
 
 import dataclasses

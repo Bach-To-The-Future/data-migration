@@ -1,6 +1,6 @@
 """migrt_spark: the support library of the PySpark target (spec section 7).
 
-Converted code imports it to reproduce what SQL Server does and Spark does not: session state with its write wrappers,
+Generated code imports it to reproduce what SQL Server does and Spark does not: session state with its write wrappers,
 transactions, constraint and foreign-key enforcement, triggers, identity and row-version counters, write leases and
 recovery on start."""
 from .config import VERSION, Config

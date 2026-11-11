@@ -5,11 +5,10 @@ state table too (so a crash can be recovered), and `ROLLBACK` restores those ver
 checks every table: it refuses if a commit since the start version was not made by this job run, and fails loudly if VACUUM
 removed what the version needs. Nothing is restored unless every table can be.
 
-This is not isolation. It rests on the single-writer assumption, which write leases enforce among converted jobs."""
+This is not isolation. It rests on the single-writer assumption, which write leases enforce among generated jobs."""
 from __future__ import annotations
 
 import itertools
-import uuid
 from typing import TYPE_CHECKING
 
 from . import deltaops
@@ -27,16 +26,23 @@ def restore_all(spark, versions: dict[str, int], mine: str) -> list[str]:
     moved = {t: v for t, v in versions.items() if deltaops.version(spark, t) != v}
     for table, to in moved.items():
         deltaops.check_restorable(spark, table, to, mine)
+    done: list[str] = []
     for table, to in moved.items():
-        deltaops.restore(spark, table, to)
+        try:
+            deltaops.restore(spark, table, to)
+        except VersionVacuumed as exc:
+            if done:                  # the up-front check could not run here, so this is found late: say what was done
+                exc.args = (f"{exc.args[0]} Already restored before it was found: {', '.join(done)}.",)
+            raise
+        done.append(table)
     return sorted(moved)
 
 
 class _Real:
     """The one transaction SQL Server has however many times it was begun."""
 
-    def __init__(self, implicit: bool):
-        self.id = uuid.uuid4().hex[:12]
+    def __init__(self, implicit: bool, id: str):
+        self.id = id
         self.versions: dict[str, int] = {}
         self.saves: dict[str, dict[str, int]] = {}
         self.created: list[str] = []         # temp tables created inside it, dropped if it is rolled back
@@ -89,11 +95,14 @@ class TxManager:
     def trancount(self) -> int:
         return self.real.depth if self.real else 0
 
+    def _new(self, implicit: bool) -> _Real:
+        return _Real(implicit, f"{self.ss.run}-{next(self._frames)}")       # no randomness: a run's ids are its own sequence
+
     # ------------------------------------------------------------------ explicit transactions
 
     def begin(self) -> _Real:
         if self.real is None:
-            self.real = _Real(implicit=False)
+            self.real = self._new(implicit=False)
         self.real.depth += 1
         self.real.implicit = False
         return self.real
@@ -131,7 +140,7 @@ class TxManager:
         """Statement-level atomicity for a write that fires triggers or cascades: if it fails, all of it is undone."""
         implicit = self.real is None
         if implicit:
-            self.real = _Real(implicit=True)
+            self.real = self._new(implicit=True)
             self.real.depth = 1
         real = self.real
         assert real is not None

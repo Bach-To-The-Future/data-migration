@@ -37,7 +37,7 @@ class CounterNotInitialised(SupportLibraryError):
 
     def __init__(self, table: str):
         super().__init__(f"The identity counter of {table} was never initialised and the table holds rows. Run the "
-                         f"counter initialisation command before any converted job writes to it.")
+                         f"counter initialisation command before any generated job writes to it.")
         self.table = table
 
 
@@ -83,14 +83,14 @@ def when(epoch: float) -> str:
 
 
 class LeaseHeld(SupportLibraryError):
-    """A second converted writer found a live lease."""
+    """A second generated writer found a live lease."""
 
     def __init__(self, table: str | None, holder_job: str, holder_run: str, expires_at: float, now: float):
         what = f"table {table}" if table else "its tables"
         super().__init__(
             f"Cannot write {what}: the job '{holder_job}' (run '{holder_run}') holds a live write lease on it. The lease "
             f"expires at {when(expires_at)}, {max(0.0, expires_at - now):.0f} seconds from now, unless the holder's "
-            f"heartbeat continues. Run converted jobs that share a table one after another.")
+            f"heartbeat continues. Run generated jobs that share a table one after another.")
         self.table, self.holder_job, self.holder_run, self.expires_at = table, holder_job, holder_run, expires_at
 
 

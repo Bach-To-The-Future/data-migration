@@ -140,6 +140,20 @@ def test_an_expired_lease_is_taken_over_after_recovering_the_crashed_runs_transa
     assert not [t for t in duo.spark.catalog.listTables(duo.schema) if "r1" in t.name]
 
 
+def test_a_recovery_that_a_restore_refuses_stops_only_writers_of_that_table_and_warns_the_run_that_starts(duo):
+    tables(duo)
+    crashed_mid_transaction(duo, job="nightly", run="r1")
+    duo.spark.sql(f"INSERT INTO {duo.target('T1')} VALUES (9, 90)")          # another writer's commit since the start version
+    duo.clock.skip(EXPIRY + 1)
+    with pytest.warns(UserWarning, match="manual reconciliation"):
+        other = duo.session(job="other", run="r2", config=config(duo))      # it starts all the same
+    assert other.startup.refused
+    other.update(duo.target("T2"), set={"V": 5})                              # a table the crashed run never touched
+    with pytest.raises(lib.RestoreRefused, match=duo.target("T1")):
+        other.update(duo.target("T1"), set={"V": 7})                          # the table needing a person
+    assert {r.status for r in duo.spark.table(duo.state_table).where("kind = 'tx'").collect()} == {"needs manual reconciliation"}
+
+
 def test_a_start_up_recovery_leaves_alone_everything_under_a_live_lease_and_recovers_what_has_expired(duo):
     tables(duo)
     crashed_mid_transaction(duo)
