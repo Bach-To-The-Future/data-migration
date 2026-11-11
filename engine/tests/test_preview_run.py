@@ -157,4 +157,7 @@ def test_hints_assumptions_and_string_comparisons_reach_the_report_data(engageme
     assert "CONCAT_NULL_YIELDS_NULL" in item["degradations"][0]["text"]
     manual = [(c["operation"], c["reason"]) for c in item["constructs"] if c["status"] == "manual work"]
     assert any("comparing strings by a named rule" in reason for op, reason in manual), manual
-    assert data["schema_version"] == "report-data/0.6"
+    waiting = [c for c in item["constructs"] if c["status"] == "manual work" and "waits_for" in c]
+    assert waiting and all(c["waits_for"] == ["#47"] for c in waiting), waiting      # the comparison helpers
+    assert all("#" not in c["reason"] for c in waiting)                          # a reason may reach a client
+    assert data["schema_version"] == "report-data/0.7"

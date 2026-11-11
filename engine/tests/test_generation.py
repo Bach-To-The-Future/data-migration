@@ -196,7 +196,8 @@ def test_a_multi_statement_table_function_is_manual_work_statement_by_statement(
 
     assert generated.layer1.passed, generated.layer1.failures
     assert "def fnSplit(ss, List) -> DataFrame:" in generated.text
-    assert "#50" in manual_text(generated)
+    assert "procedural generation" in manual_text(generated) and "#" not in manual_text(generated)
+    assert {w for m in generated.file.manual_items for w in m.waits_for} == {"#50"}
 
 
 # ---------------------------------------------------------------- procedures, triggers, batches
@@ -211,7 +212,8 @@ def test_a_procedure_keeps_its_parameters_and_reports_every_statement(corpus_sna
     assert generated.layer1.passed, generated.layer1.failures
     assert "def uspTest(ss, *, n, name) -> None:" in generated.text
     assert "set_session_option" in manual_text(generated) and "emit_result_set" in manual_text(generated)
-    assert "procedural generation" in manual_text(generated) and "#50" in manual_text(generated)
+    assert "procedural generation" in manual_text(generated) and "#" not in manual_text(generated)
+    assert generated.file.manual_items and all(m.waits_for == ("#50",) for m in generated.file.manual_items)
     assert {n.id for n in generated.artefact.nodes() if n.kind != "declare_parameter" and vocabulary.part_of(n.kind)} \
         <= covered(generated)
 

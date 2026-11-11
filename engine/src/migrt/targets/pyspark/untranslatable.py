@@ -27,7 +27,11 @@ GENERATED_KINDS = frozenset({
     "count_values", "count_rows", "sum", "average", "minimum", "maximum",
     "null_replacement", "null_if_equal", "compare", "and", "or", "not", "is_null", "call_scalar_function",
 })
-PROCEDURAL_ISSUE = 50
+# What a construct waits for, as `waits_for` names it (never in a reason, which a client may read).
+PROCEDURAL = "#50"             # procedural generation
+LOWERING_ASSIST = "#63"        # lowering assist
+NUMBER_HELPERS = "#87"         # the support library's number, date and time helpers
+STRING_HELPERS = "#47"         # the support library's comparison, collation and string helpers
 SPECIAL = ("opaque_fragment", "dynamic_sql_execution", "schema_change", "permission_change", "external_reference")
 STALE = "scope_may_be_stale"
 UNSUPPORTED_TYPE = "unsupported_type"
@@ -38,12 +42,12 @@ class Finding:
     node: str          # the node's id
     kind: str          # the node's kind, or the cause (`scope_may_be_stale`, `unsupported_type`)
     reason: str
+    waits_for: tuple[str, ...] = ()    # what it is manual work for want of, if anything (see `Unsupported`)
 
 
 def procedural_reason(kind: str) -> str:
     return (f"{kind} is procedural code: procedural generation (variables, control flow, temp tables, writes, "
-            f"calls and session options) is built by issue #{PROCEDURAL_ISSUE}, until then it is reported as "
-            "manual work")
+            "calls and session options) is not built yet, so it is reported as manual work")
 
 
 def reason_for_kind(kind: str) -> str | None:
@@ -58,10 +62,20 @@ def reason_for_kind(kind: str) -> str | None:
     if kind == "permission_change":
         return "a permission change is not generated: it is manual work (spec section 4, item 6)"
     if kind == "opaque_fragment":
-        return "kept as written by lowering, which could not express it: lowering assist (issue #63) is not built yet"
+        return "kept as written by lowering, which could not express it: lowering assist is not built yet"
     if vocabulary.part_of(kind) == "procedural" or kind == "batch":
         return procedural_reason(kind)
     return f"{kind} has no PySpark generation yet"
+
+
+def waits_for_kind(kind: str) -> tuple[str, ...]:
+    """What a node kind the target has no handler for waits for: procedural generation, or lowering assist. Dynamic
+    SQL, schema and permission changes are manual work for good, and so are kinds nothing is planned for."""
+    if kind == "opaque_fragment":
+        return (LOWERING_ASSIST,)
+    if kind not in GENERATED_KINDS and (vocabulary.part_of(kind) == "procedural" or kind == "batch"):
+        return (PROCEDURAL,)
+    return ()
 
 
 def detect(artefact: Artefact) -> list[Finding]:
@@ -78,15 +92,17 @@ def _findings(node: Node) -> list[Finding]:
     if reason is not None:
         if node.kind == "opaque_fragment":
             reason = f"{node.attrs.get('reason', 'lowering could not express it')}; {reason}"
-        out.append(Finding(node.id, node.kind, reason))
+        out.append(Finding(node.id, node.kind, reason, waits_for_kind(node.kind)))
     if node.type is not None and node.type.name == UNSUPPORTED_TYPE:
         out.append(Finding(node.id, UNSUPPORTED_TYPE,
                            f"its type {node.type.param('source_name')} has no neutral meaning, so anything touching "
                            "it is manual work (spec section 6)"))
     if node.kind == "implicit_convert" and node.attrs.get("fits"):
+        # A string is cut or padded to its length, a decimal rounded to its scale: each type's own helpers do it.
+        helpers = STRING_HELPERS if node.type is not None and node.type.name == "string" else NUMBER_HELPERS
         out.append(Finding(node.id, node.kind,
                            "a store that cuts or rounds its value is reproduced by the support library's typed "
-                           "assignment, which is not built yet"))
+                           "assignment, which is not built yet", (helpers,)))
     if STALE in node.attrs:
         out.append(Finding(node.id, STALE,
                            f"the scope entries it depends on may be stale after the scope barrier at "

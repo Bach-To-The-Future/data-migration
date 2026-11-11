@@ -28,6 +28,9 @@ class SparkType:
     # Why a cast to this type is not exact by itself (a range, a padding or a length the support library
     # enforces), or None where `cast(...)` does it.
     inexact_cast: str | None = None
+    # The tickets that make the cast exact, such as ("#87",): a manual column of this type waits for them. Empty
+    # for a cast that nothing planned will make exact (xml is held as a string, the offset needs a companion column).
+    waits_for: tuple[str, ...] = ()
 
 
 def _timestamp_rule(rounding: str) -> str:
@@ -52,7 +55,7 @@ def mapping(t: VType) -> SparkType | None:
         if not t.param("signed"):
             return SparkType("smallint", "Range 0-255 enforced",
                              inexact_cast="tinyint values are SMALLINT in Spark with their 0 to 255 range enforced "
-                                          "by the support library, which is not built yet")
+                                          "by the support library, which is not built yet", waits_for=("#87",))
         return SparkType({16: "smallint", 32: "int", 64: "bigint"}[bits])
     if name == "decimal":
         return SparkType(f"decimal({t.param('precision')},{t.param('scale')})")
@@ -64,26 +67,29 @@ def mapping(t: VType) -> SparkType | None:
         return SparkType("date")
     if name == "local_timestamp":
         rule = _timestamp_rule(t.str_param("rounding"))
-        return SparkType("timestamp_ntz", rule, inexact_cast=f"{rule[0].lower()}{rule[1:]}")
+        seven_digits = t.str_param("rounding") == "7 digits"      # Spark holds microseconds: no helper changes that
+        return SparkType("timestamp_ntz", rule, inexact_cast=f"{rule[0].lower()}{rule[1:]}",
+                         waits_for=() if seven_digits else ("#87",))
     if name == "timestamp_with_offset":
         return SparkType("timestamp", "The offset is kept in a companion column, a target-table requirement listed "
                                       "in the report; seven fractional digits are kept as for a local timestamp",
                          companion_column="offset", inexact_cast="the offset lives in a companion column")
     if name == "time_of_day":
         return SparkType("string", "Fixed-width, zero-padded HH:MM:SS.fffffff, so text order is time order", True,
-                         inexact_cast="a time is a fixed-width string")
+                         inexact_cast="a time is a fixed-width string", waits_for=("#87",))
     if name == "string":
         unit = "UTF-16 units" if t.param("unit") == "utf16_units" else "bytes"
         if t.length() == "unlimited":
-            return SparkType("string", inexact_cast="a string is compared by its collation")
+            return SparkType("string", inexact_cast="a string is compared by its collation", waits_for=("#47",))
         padding = "Padded with spaces to the declared length; " if t.flag("fixed") else ""
         rule = f"{padding}{'l' if padding else 'L'}ength enforced with the source's truncation error, counted in {unit}"
-        return SparkType("string", rule, inexact_cast="a string's length is enforced by the support library")
+        return SparkType("string", rule, inexact_cast="a string's length is enforced by the support library",
+                         waits_for=("#47",))
     if name == "binary":
         return SparkType("binary")
     if name == "guid":
         return SparkType("string", "Compared and ordered through the byte-order helper",
-                         inexact_cast="a guid is compared by the source's byte order")
+                         inexact_cast="a guid is compared by the source's byte order", waits_for=("#47",))
     if name == "xml":
         return SparkType("string", None, True, inexact_cast="xml is a string")
     return None

@@ -30,8 +30,13 @@ T = TypeVar("T")
 
 
 class Unsupported(Exception):
-    def __init__(self, node: Node, reason: str):
-        self.node, self.reason = node, reason
+    """The target cannot generate `node` exactly. `reason` is plain English and may reach a client's report, so it
+    names no ticket. `waits_for` names what the construct waits for, in references such as `"#87"`, when it is
+    manual work only for want of something not built yet: a release gate and the ticket that builds it search by
+    it. A construct that is manual work for good waits for nothing."""
+
+    def __init__(self, node: Node, reason: str, waits_for: Sequence[str] = ()):
+        self.node, self.reason, self.waits_for = node, reason, tuple(waits_for)
         super().__init__(reason)
 
 
@@ -43,6 +48,7 @@ class ManualItem:
     reason: str
     source_position: str
     replaces: str             # the root of the subtree whose code the file replaces with a failure
+    waits_for: tuple[str, ...] = ()   # the tickets it is manual work for want of, such as ("#87",); empty for good
 
 
 @dataclasses.dataclass(frozen=True)
@@ -115,16 +121,19 @@ class Draft(Lines):
             where = unsupported.node.span
             return GivenUp(self._record(f"{unsupported.reason} (source {where})", output or unsupported.node,
                                      output.id if output else None, str(where),
-                                     (output or replaces or unsupported.node).id))
+                                     (output or replaces or unsupported.node).id, unsupported.waits_for))
 
-    def manual_item_at(self, node: Node, reason: str) -> ManualItem:
+    def manual_item_at(self, node: Node, reason: str, waits_for: Sequence[str] = ()) -> ManualItem:
         """A manual item for a construct that was never attempted, such as a statement of a procedure."""
         text = " ".join(reason.split())
-        return self._record(f"{node.kind}: {text} (source {node.span})", node, None, str(node.span), node.id)
+        return self._record(f"{node.kind}: {text} (source {node.span})", node, None, str(node.span), node.id,
+                            waits_for)
 
-    def _record(self, what: str, node: Node, output: str | None, source_position: str, replaces: str) -> ManualItem:
+    def _record(self, what: str, node: Node, output: str | None, source_position: str, replaces: str,
+                waits_for: Sequence[str]) -> ManualItem:
         number = len(self.manual) + 1
-        item = ManualItem(f"M{number}", node.id, output, f"Manual work {number}: {what}", source_position, replaces)
+        item = ManualItem(f"M{number}", node.id, output, f"Manual work {number}: {what}", source_position, replaces,
+                          tuple(waits_for))
         self.manual.append(item)
         return item
 

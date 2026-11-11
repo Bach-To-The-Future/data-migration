@@ -484,7 +484,9 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
         entry = {"node": node.id, "operation": node.kind, "source_position": str(node.span),
                  "status": report.CONSTRUCT_MANUAL if manual else report.CONSTRUCT_NOT_RECONCILED}
         if manual:
-            entry["reason"], entry["manual_item"] = manual
+            entry["reason"], entry["manual_item"], waits_for = manual
+            if waits_for:       # manual work only for want of something not built yet; the release gate looks here
+                entry["waits_for"] = list(waits_for)
         if "scope_may_be_stale" in node.attrs:      # shown at the construct (spec section 4, item 5)
             entry["scope_may_be_stale"] = f"a scope barrier at {node.attrs['scope_may_be_stale']} comes before it"
         if node.id in generated.differences:
@@ -508,16 +510,18 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
     return _Generated(artefact, reader, generated, checks, item)
 
 
-def _manual_by_node(artefact: Artefact, items: list[generator.ManualItem]) -> dict[str, tuple[str, str]]:
-    """node id -> (reason, manual item id), for every node whose code the file does not hold. A node under the one
-    that failed gets that item's reason; a node the failure replaced elsewhere in the query is reported as not
-    generated because of it. The most specific item wins."""
+def _manual_by_node(artefact: Artefact,
+                    items: list[generator.ManualItem]) -> dict[str, tuple[str, str, tuple[str, ...]]]:
+    """node id -> (reason, manual item id, what the item waits for), for every node whose code the file does not
+    hold. A node under the one that failed gets that item's reason; a node the failure replaced elsewhere in the
+    query is reported as not generated because of it, and waits for what the item waits for. The most specific item
+    wins."""
     nodes = {n.id: n for n in artefact.nodes()}
-    found: dict[str, tuple[str, str]] = {}
+    found: dict[str, tuple[str, str, tuple[str, ...]]] = {}
     for item in sorted(items, key=lambda m: -sum(1 for _ in nodes[m.replaces].walk())):
         for n in nodes[item.replaces].walk():
             found[n.id] = (f"its code is not generated, because of manual work {item.id[1:]} ({item.source_position})",
-                           item.id)
+                           item.id, item.waits_for)
         for n in nodes[item.node].walk():
-            found[n.id] = (item.reason, item.id)
+            found[n.id] = (item.reason, item.id, item.waits_for)
     return found

@@ -44,6 +44,7 @@ COMPARE = {"=": "==", "<>": "!=", ">": ">", "<": "<", ">=": ">=", "<=": "<="}
 MONEY = "3.11"                # silent difference: money arithmetic
 MONEY_NOT_BUILT = "it needs the support library's money type, which is not built yet"
 SUM_INT = "3.14"              # silent difference: a running integer total that leaves int
+UDF_FALLBACK = "#64"          # raising a scalar function to one expression, and the Python UDF fallback
 STRING_COMPARISON = "comparing strings by a named rule needs the support library's comparison helpers (not built yet)"
 PROJECT_PACKAGE = "converted"
 DESCRIPTIONS = {"view": "a view", "inline_function": "an inline table-valued function",
@@ -92,7 +93,7 @@ def spark_type(t: VType, node: Node) -> str:
     if found is None:
         raise Unsupported(node, f"no PySpark type mapping for {t} yet")
     if found.inexact_cast:
-        raise Unsupported(node, found.inexact_cast)
+        raise Unsupported(node, found.inexact_cast, found.waits_for)
     return found.ddl
 
 
@@ -345,19 +346,24 @@ class Generator:
             special = [f for f in causes if f.kind in SPECIAL_CAUSES]
             if node.id not in wanted and not special:
                 continue
-            reasons = [f.reason for f in causes] or [self.statement_reason(container, node)]
-            items.append((node, self.draft.manual_item_at(node, "; ".join(reasons))))
+            if causes:
+                reasons, waits_for = [f.reason for f in causes], sorted({w for f in causes for w in f.waits_for})
+            else:
+                reason, waits_for = self.statement_reason(container, node)
+                reasons = [reason]
+            items.append((node, self.draft.manual_item_at(node, "; ".join(reasons), waits_for)))
         for node, item in items:
             self.draft.comments(node, "    ")
             self.draft.emit(f"    # {item.reason}")
         self.draft.fail_when_called(self.stub_message(name, noun, len(items)), link)
 
     @staticmethod
-    def statement_reason(container: Node, node: Node) -> str:
+    def statement_reason(container: Node, node: Node) -> tuple[str, tuple[str, ...]]:
+        """Why a statement no finding covers is manual work, and what it waits for."""
         if container.kind == "scalar_function_body":
             return ("this function is more than one expression, so it is not a column expression; raising it to "
-                    "one and the Python UDF fallback are not built yet (issue #64)")
-        return untranslatable.procedural_reason(node.kind)
+                    "one and the Python UDF fallback are not built yet", (UDF_FALLBACK,))
+        return untranslatable.procedural_reason(node.kind), (untranslatable.PROCEDURAL,)
 
     @staticmethod
     def stub_message(name: str, noun: str, count: int) -> str:
@@ -386,7 +392,8 @@ class Generator:
         """Emit the statements for one plan step and return the variable holding it."""
         self.refuse_detected(node)
         for definition in node.children_with("definition"):
-            raise Unsupported(definition, untranslatable.reason_for_kind(definition.kind) or "not generated")
+            raise Unsupported(definition, untranslatable.reason_for_kind(definition.kind) or "not generated",
+                              untranslatable.waits_for_kind(definition.kind))
         if node.kind == "read_table":
             return self.read_table(node)
         if node.kind == "join":
@@ -406,19 +413,22 @@ class Generator:
             return self.project(node)
         if node.kind == "aggregate":
             return self.aggregate(node)
-        raise Unsupported(node, untranslatable.reason_for_kind(node.kind) or f"{node.kind} has no PySpark generation yet")
+        raise Unsupported(node, untranslatable.reason_for_kind(node.kind) or f"{node.kind} has no PySpark generation yet",
+                          untranslatable.waits_for_kind(node.kind))
 
     def refuse_detected(self, node: Node) -> None:
         """A node detected before generation as untranslatable is never generated, whatever else is known of it."""
         found = self.detected.get(node.id)
         if found:
-            raise Unsupported(node, "; ".join(f.reason for f in found))
+            raise Unsupported(node, "; ".join(f.reason for f in found),
+                              tuple(sorted({w for f in found for w in f.waits_for})))
 
     def read_table(self, node: Node) -> str:
         if node.attrs.get("named_query"):
             raise Unsupported(node, "reading a named query has no PySpark generation yet")
         if node.attrs.get("temp_table") or node.attrs.get("row_set"):
-            raise Unsupported(node, f"reading a temp table or a table variable is procedural code (issue #{untranslatable.PROCEDURAL_ISSUE})")
+            raise Unsupported(node, "reading a temp table or a table variable is procedural code, which is not "
+                                    "generated yet", (untranslatable.PROCEDURAL,))
         table, alias = node.attrs["table"], node.attrs["alias"]
         var = python_name(alias, self.draft.taken)
         kind = self.dependencies.kinds.get(table, "table")
@@ -476,7 +486,7 @@ class Generator:
             if key.kind != "column":
                 raise Unsupported(key, "grouping by an expression is not generated yet")
             if key.attrs.get("rule"):
-                raise Unsupported(key, f"grouping by strings: {STRING_COMPARISON}")
+                raise Unsupported(key, f"grouping by strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
             ref = (key.attrs["relation"], key.attrs["column"])
             exact = [o.attrs["output_name"] for o in outputs if o.kind == "column"
                      and (o.attrs["relation"], o.attrs["column"]) == ref]
@@ -580,7 +590,8 @@ class Generator:
             raise Unsupported(node, f"the conversion of {source} to {node.type} has no PySpark generation yet")
         if k in ("money_multiply", "money_divide") or (node.type is not None and node.type.name == "money"
                                                        and k in ("add", "subtract", "sum", "average")):
-            raise Unsupported(node, f"{self.differences.difference(MONEY)}; {MONEY_NOT_BUILT}")
+            raise Unsupported(node, f"{self.differences.difference(MONEY)}; {MONEY_NOT_BUILT}",
+                              (untranslatable.NUMBER_HELPERS,))
         if k in ("add", "subtract", "multiply", "modulo"):
             if node.value_type.name != "integer":
                 raise Unsupported(node, f"{k} on {node.type} has no PySpark generation yet")
@@ -589,14 +600,16 @@ class Generator:
             return f'({a} {op} {b}).cast("{spark_type(node.value_type, node)}")'
         if k == "integer_divide":
             if node.value_type.param("bits") == 64:
-                raise Unsupported(node, "bigint division needs an exact integer-division helper, not built yet")
+                raise Unsupported(node, "bigint division needs an exact integer-division helper, not built yet",
+                              (untranslatable.NUMBER_HELPERS,))
             a, b = (self.expr(x, grouped) for x in args)
             # A quotient of integers within int is exact in a double, so the cast truncates
             # toward zero exactly as SQL Server does; dividing by zero raises in both.
             return f'({a} / {b}).cast("{spark_type(node.value_type, node)}")'
         if k == "count_values":
             if node.attrs.get("rule"):
-                raise Unsupported(node, f"COUNT(DISTINCT) over strings: {STRING_COMPARISON}")
+                raise Unsupported(node, f"COUNT(DISTINCT) over strings: {STRING_COMPARISON}",
+                                  (untranslatable.STRING_HELPERS,))
             fn = "F.count_distinct" if node.attrs.get("distinct") else "F.count"
             return f'{fn}({self.expr(args[0], {})}).cast("int")'
         if k == "count_rows":
@@ -612,19 +625,19 @@ class Generator:
             return f'(F.sum({a}).cast("int") / F.count({a})).cast("int")'
         if k in ("minimum", "maximum"):
             if node.attrs.get("rule"):
-                raise Unsupported(node, f"{k} over strings: {STRING_COMPARISON}")
+                raise Unsupported(node, f"{k} over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
             return f"F.{'min' if k == 'minimum' else 'max'}({self.expr(args[0], {})})"
         if k == "null_replacement":
             a, b = (self.expr(x, grouped) for x in args)
             return f'F.coalesce({a}, {b}.cast("{spark_type(node.value_type, node)}"))'
         if k == "null_if_equal":
             if node.attrs.get("rule"):
-                raise Unsupported(node, f"NULLIF over strings: {STRING_COMPARISON}")
+                raise Unsupported(node, f"NULLIF over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
             a, b = (self.expr(x, grouped) for x in args)
             return f"F.nullif({a}, {b})"
         if k == "compare":
             if node.attrs.get("rule"):
-                raise Unsupported(node, STRING_COMPARISON)
+                raise Unsupported(node, STRING_COMPARISON, (untranslatable.STRING_HELPERS,))
             a, b = (self.expr(x, grouped) for x in args)
             return f"({a} {COMPARE[node.attrs['operator']]} {b})"
         if k in ("and", "or"):
@@ -634,7 +647,8 @@ class Generator:
             return f"(~{self.expr(args[0], grouped)})"
         if k == "is_null":
             return f"{self.expr(args[0], grouped)}.isNull()"
-        raise Unsupported(node, untranslatable.reason_for_kind(k) or f"{k} has no PySpark generation yet")
+        raise Unsupported(node, untranslatable.reason_for_kind(k) or f"{k} has no PySpark generation yet",
+                          untranslatable.waits_for_kind(k))
 
     def parameter_value(self, node: Node) -> str:
         """A function's parameter read as a column: `F.lit` of a value, or of a column, which it returns as it is."""

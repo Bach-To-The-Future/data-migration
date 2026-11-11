@@ -18,6 +18,7 @@ from migrt.targets.pyspark import differences as target_differences, generator
 
 TABLE = "RetailSample.sales.Order"
 VIEW = "RetailSample.sales.vTest"
+PROCEDURE = "RetailSample.sales.uspTest"
 FUNCTION = "RetailSample.ref.fnDouble"
 INT = VType.of("integer", bits=32, signed=True)
 STRING = VType.of("string", length=20, unit="bytes", fixed=False, collation="any", origin="column")
@@ -56,11 +57,18 @@ def view(*steps: Node) -> Artefact:
     body = node("view_body", "", query)
     artefact = Artefact(VIEW, "view", "", body, dependencies=[TABLE, FUNCTION])
     artefact.secret_settings = [f"{VIEW}.secret_1"]
-    _position(artefact)
+    position(artefact)
     return artefact
 
 
-def _position(artefact: Artefact) -> None:
+def routine(artefact_type: str, *children: Node, identity: str = PROCEDURE) -> Artefact:
+    """A procedure, trigger or function whose body holds the nodes given (statements, parameters)."""
+    artefact = Artefact(identity, artefact_type, "", node(f"{artefact_type}_body", "", *children), dependencies=[TABLE])
+    position(artefact)
+    return artefact
+
+
+def position(artefact: Artefact) -> None:
     artefact.number_nodes()
     for n in artefact.nodes():
         offset = int(n.id[1:]) * 10
@@ -87,7 +95,7 @@ class Result:
 
 
 def generate(artefact: Artefact) -> Result:
-    objects = {artefact.identity: "view", TABLE: "table", FUNCTION: "scalar_function"}
+    objects = {artefact.identity: artefact.artefact_type, TABLE: "table", FUNCTION: "scalar_function"}
     names = names_for(types.SimpleNamespace(objects=[]), objects)
     dependencies = generator.Dependencies(kinds={TABLE: "table", FUNCTION: "scalar_function"}, generated={FUNCTION})
     differences = Catalogue(source_differences.half(), target_differences.half())

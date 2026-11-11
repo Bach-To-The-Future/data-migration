@@ -119,5 +119,24 @@ def test_anything_but_unsupported_is_not_swallowed():
         draft.attempt(lambda: {}["missing"])
 
 
-def _fail(reason: str):
-    raise Unsupported(construct(), reason)
+def _fail(reason: str, waits_for: tuple[str, ...] = ()):
+    raise Unsupported(construct(), reason, waits_for)
+
+
+def test_a_give_up_carries_the_tickets_the_construct_waits_for_and_the_reason_stays_plain():
+    draft = Draft()
+
+    one = draft.attempt(lambda: _fail("it needs the money type, which is not built yet", waits_for=("#87",)))
+    two = draft.attempt(lambda: _fail("it needs a thing that is not built yet"))
+
+    assert isinstance(one, GivenUp) and isinstance(two, GivenUp)
+    assert one.item.waits_for == ("#87",) and two.item.waits_for == ()
+    assert "#87" not in one.item.reason
+
+
+def test_an_item_made_for_a_construct_never_attempted_can_wait_too():
+    draft = Draft()
+
+    item = draft.manual_item_at(construct("if"), "procedural code", waits_for=("#50",))
+
+    assert item.waits_for == ("#50",) and "#50" not in item.reason
