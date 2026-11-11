@@ -157,4 +157,4 @@ def test_hints_assumptions_and_string_comparisons_reach_the_report_data(engageme
     assert "CONCAT_NULL_YIELDS_NULL" in item["degradations"][0]["text"]
     manual = [(c["operation"], c["reason"]) for c in item["constructs"] if c["status"] == "manual work"]
     assert any("comparing strings by a named rule" in reason for op, reason in manual), manual
-    assert data["schema_version"] == "report-data/0.5"
+    assert data["schema_version"] == "report-data/0.6"

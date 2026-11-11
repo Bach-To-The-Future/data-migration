@@ -2,11 +2,11 @@
 from here, with structured results. Front ends, such as the command line, hold no
 conversion logic and call only this module.
 
-First cut: a preview run (reconciliation off) of views, through every layer: extraction
+A preview run (reconciliation off) of views, functions, procedures, triggers and query batches, through every layer: extraction
 from one SQL Server (its self-check first), folders of files, or both; an immutable
 snapshot in the engagement's control database with the name adjustments it extends;
-lowering, the checker, generation, layer-1 checks and the report data, which lists every
-SSIS package and SQL Agent job as manual work.
+lowering, the checker, generation, layer-1 checks, the delivered project (layout, manifest, settings,
+representation rules) and the report data, which lists every SSIS package and SQL Agent job as manual work.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import os
 import pathlib
 import uuid
 from typing import Sequence
@@ -29,7 +30,8 @@ from .sources.sqlserver.extractor import (ExtractorPermissionError, SettingsRequ
                                           UnsupportedServer)
 from .sources.sqlserver.folders import DuplicateCreate, FolderExtractionError
 from .sources.sqlserver.shapes import SandboxUnavailable
-from .targets.pyspark import differences as target_differences, generator, layer1
+from .targets.pyspark import differences as target_differences, generator, project
+from .targets.pyspark.layer1 import Layer1Result
 from .targets.pyspark import names as target_names
 
 __all__ = ["Engagement", "SqlServerSource", "Sandbox", "Folder", "FolderSettings", "ArtefactResult", "RunResult",
@@ -119,16 +121,16 @@ class ArtefactResult:
     identity: str
     status: str
     file: pathlib.Path
-    layer1: layer1.Layer1Result
+    layer1: Layer1Result
     manual_items: list[generator.ManualItem]
 
 
 @dataclasses.dataclass(frozen=True)
-class _ConvertedView:
+class _Converted:
     ir: Artefact
     reads: CatalogReader
     file: generator.GeneratedFile
-    layer1: layer1.Layer1Result
+    layer1: Layer1Result
     report_item: dict
 
 
@@ -187,8 +189,15 @@ def _folder_inputs(given: Sequence[Folder]) -> list[folder_source.FolderInput]:
 
 
 def _name_parts(snapshot: Snapshot) -> dict[str, tuple[str, str, str, str]]:
-    """identity -> (database, schema, name, kind), for every object named in a schema."""
-    return {o.identity: (*o.fact("name_parts").value, o.kind) for o in snapshot.objects if o.has_fact("name_parts")}
+    """identity -> (database, schema, name, kind), for every object named in a schema, and for every query batch
+    read from a folder: it has no schema, and is named by its file's path inside the database's folder, without
+    the extension (the target's name rules say how that becomes a module name)."""
+    found = {o.identity: (*o.fact("name_parts").value, o.kind) for o in snapshot.objects if o.has_fact("name_parts")}
+    for o in snapshot.objects:
+        if o.kind == "query_batch":
+            database, label = str(o.fact("database").value), str(o.fact("file").value)
+            found[o.identity] = (database, "", os.path.splitext(label.removeprefix(f"{database}/"))[0], o.kind)
+    return found
 
 
 def name_adjustments(engagement: Engagement) -> dict[tuple[str, str], dict[str, str]]:
@@ -246,14 +255,13 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
     adjusted = control_db.name_adjustments(dsn)
     parts = {identity: value[:3] for identity, value in _name_parts(snapshot).items()}
 
-    results, report_items, run_rows = [], [], []
+    results, report_items, run_rows, units = [], [], [], []
+    project_kinds = _project_kinds(snapshot, artefacts)
     for identity in artefacts:
-        converted = _convert_view(snapshot, identity, differences, target_names.Names(adjusted, parts))
-        path = out_dir / converted.file.relative_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(converted.file.text, encoding="utf-8", newline="\n")
-        results.append(ArtefactResult(identity, report.NOT_RECONCILED, path, converted.layer1,
-                                      converted.file.manual_items))
+        converted = _convert(snapshot, identity, differences, target_names.Names(adjusted, parts), project_kinds)
+        units.append(project.Unit(converted.ir, converted.file))
+        results.append(ArtefactResult(identity, report.NOT_RECONCILED, out_dir / converted.file.relative_path,
+                                      converted.layer1, converted.file.manual_items))
         report_items.append(converted.report_item)
         run_rows.append({
             "run_id": run_id, "identity": identity, "ir_format_version": FORMAT_VERSION,
@@ -265,6 +273,8 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
             "links": json.dumps(converted.file.links), "layer1": json.dumps(converted.layer1.to_json()),
             "status": report.NOT_RECONCILED,
         })
+    written = project.write(out_dir, engagement=engagement.name, snapshot_id=snapshot.id, tool_version=TOOL_VERSION,
+                            semantic=_semantic_settings(snapshot), units=units)
 
     server = next(o for o in snapshot.objects if o.kind == "server")
     findings = extraction_findings(snapshot)
@@ -273,6 +283,7 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
                     for name, check in sorted(findings["dependency_cross_check"]["databases"].items())
                     if check["status"] == "skipped"]
     degradations += _extraction_degradations(findings)
+    degradations.append(SETTINGS_ASSUMPTION)
     finished = _now()
     data = report.preview_report(
         engagement=engagement.name,
@@ -286,6 +297,9 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
         artefacts=report_items,
         recognised=recognised_artefacts(snapshot),
         extraction=findings,
+        project={"manifest": "manifest.json", "settings": "settings.json",
+                 "representation_rules": "representation-rules.md", "entry_points": len(units),
+                 "files": written},
         degradations=degradations + [{"kind": "skipped check", "where": "every artefact",
                        "text": "Preview run: layers 2 to 6 of the testing module and final validation did not run."},
                       {"kind": "skipped check", "where": "every artefact",
@@ -366,60 +380,135 @@ def _shape_degradations(found: dict) -> list[dict]:
     return out
 
 
-def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue,
-                  adjusted_names: target_names.Names) -> _ConvertedView:
-    """Lower, check, generate and run layer 1 for one view."""
-    reader = CatalogReader(snapshot, names.resolve)
+CONVERTED_KINDS = {"view", "scalar_function", "inline_function", "table_function", "procedure", "trigger",
+                   "query_batch"}
+# Kinds another generated artefact can import: a function of session state returning a DataFrame or a Column.
+CALLABLE_KINDS = {"view", "scalar_function", "inline_function", "table_function"}
+SETTINGS_ASSUMPTION = {
+    "kind": "assumption", "where": "settings.json",
+    "text": "DATEFIRST, DATEFORMAT and the language were not read from the server (the extractor does not read "
+            "them): the settings file holds SQL Server's defaults for us_english, marked as assumed. Set them to the "
+            "client's values before verifying; changing a semantic setting means generating and verifying again."}
+
+
+def _resolve(reader: CatalogReader, snapshot: Snapshot, identity: str) -> str:
+    """The catalog identity of an artefact named as database.schema.name, or batch:<database>/<file>."""
+    if identity.startswith("batch:"):
+        if not snapshot.has(identity):
+            raise KeyError(f"{identity} is not in snapshot {snapshot.id}")
+        return identity
     database = identity.split(".", 1)[0]
     case_sensitive = names.identifiers_case_sensitive(reader.value(database, "collation"))
     found = reader.resolve(tuple(identity.split(".")), {"database": database, "case_sensitive": case_sensitive})
     if found is None:
         raise KeyError(f"{identity} is not in snapshot {snapshot.id}")
-    if reader.kind_of(found) != "view":
-        raise ValueError(f"{found} is a {reader.kind_of(found)}; only views are converted so far")
+    return found
+
+
+def _project_kinds(snapshot: Snapshot, artefacts: list[str]) -> dict[str, str]:
+    """The catalog kind of each artefact the run generates, which is what a dependency between them needs."""
+    reader = CatalogReader(snapshot, names.resolve)
+    found = {}
+    for identity in artefacts:
+        resolved = _resolve(reader, snapshot, identity)
+        found[resolved] = reader.kind_of(resolved)
+    return found
+
+
+def _origin(fact) -> str:
+    kind = fact.provenance.kind
+    if kind == "server":
+        return "read from the server"
+    return f"{'read from' if kind == 'file' else kind}: {fact.provenance.detail}"
+
+
+def _semantic_settings(snapshot: Snapshot) -> dict:
+    """The semantic settings the catalog snapshot and the engagement give (spec section 7), each with where it
+    came from: read from the server, from a file, or assumed."""
+    server = next(o for o in snapshot.objects if o.kind == "server")
+    zone = server.fact("time_zone")
+    databases = {}
+    for o in sorted((o for o in snapshot.objects if o.kind == "database"), key=lambda o: o.identity):
+        collation, level = o.fact("collation"), o.fact("compatibility_level", extractor.SOURCE)
+        databases[o.identity] = {"default_collation": {"value": collation.value, "origin": _origin(collation)},
+                                 "compatibility_level": {"value": level.value, "origin": _origin(level)}}
+    not_read = "assumed: not read from the server; SQL Server's default for the us_english language"
+    return {
+        "databases": databases,
+        "time_zone": {"value": zone.value, "origin": _origin(zone)},
+        "datefirst": {"value": 7, "origin": not_read},
+        "dateformat": {"value": "mdy", "origin": not_read},
+        "language": {"value": "us_english", "origin": not_read},
+        "transaction_mechanism": {"value": "compensating restore", "origin": "default (ADR 0002)"},
+        "identity_mechanism": {"value": "write wrapper counters", "origin": "default (spec section 6)"},
+    }
+
+
+def _convert(snapshot: Snapshot, identity: str, differences: Catalogue, adjusted_names: target_names.Names,
+             project_kinds: dict[str, str]) -> _Converted:
+    """Lower, check, generate and run layer 1 for one artefact."""
+    reader = CatalogReader(snapshot, names.resolve)
+    found = _resolve(reader, snapshot, identity)
+    kind = reader.kind_of(found)
+    if kind not in CONVERTED_KINDS:
+        raise ValueError(f"{found} is a {kind}; only {', '.join(sorted(CONVERTED_KINDS))} are converted so far")
     if not reader.value(found, "extractable"):
         raise ValueError(f"{found} is encrypted or unreadable: manual work, not handled yet")
+    database = str(reader.value(found, "database")) if kind == "query_batch" else found.split(".", 1)[0]
     parsed = parser.parse(found, reader.value(found, "source_text"),
                           reader.value(database, "compatibility_level", extractor.SOURCE),
                           reader.value(found, "quoted_identifier", extractor.SOURCE))
     artefact = lowering.lower_artefact(reader, found, parsed)
     checker.require(artefact, lowering.columns_of(reader))
-    generated = generator.generate(artefact, snapshot.id, TOOL_VERSION, differences, adjusted_names)
-    spans = {n.id: (str(n.span) if n.span else None) for n in artefact.nodes()}
-    checks = layer1.run(generated.text, links=generated.links, node_spans=spans,
-                        manual_items=[m.id for m in generated.manual_items],
-                        escape_hatch_uses=generated.escape_hatch_uses)
+    dependencies = generator.Dependencies(
+        kinds={dep: reader.kind_of(dep) for dep in artefact.dependencies if snapshot.has(dep)},
+        generated={i for i, k in project_kinds.items() if k in CALLABLE_KINDS and i != found})
+    generated = generator.generate(artefact, snapshot.id, TOOL_VERSION, differences, adjusted_names, dependencies)
+    checks = generator.check(artefact, generated)
 
-    manual_nodes = {n.id: m for m in generated.manual_items for n in _subtree(artefact, m.node)}
+    manual_nodes = _manual_by_node(artefact, generated.manual_items)
     constructs = []
     for node in artefact.nodes():
         if vocabulary.part_of(node.kind) is None and node.kind not in REPORTED_KINDS:
             continue  # node kinds such as the view body are not constructs
-        item = manual_nodes.get(node.id)
+        manual = manual_nodes.get(node.id)
         entry = {"node": node.id, "operation": node.kind, "source_position": str(node.span),
-                 "status": report.CONSTRUCT_MANUAL if item else report.CONSTRUCT_NOT_RECONCILED}
-        if item:
-            entry["reason"] = item.reason
+                 "status": report.CONSTRUCT_MANUAL if manual else report.CONSTRUCT_NOT_RECONCILED}
+        if manual:
+            entry["reason"], entry["manual_item"] = manual
         if "scope_may_be_stale" in node.attrs:      # shown at the construct (spec section 4, item 5)
             entry["scope_may_be_stale"] = f"a scope barrier at {node.attrs['scope_may_be_stale']} comes before it"
         if node.id in generated.differences:
             entry["difference"] = generated.differences[node.id]
             entry["caveat"] = differences.difference(entry["difference"])
         constructs.append(entry)
+    area = found.split(".")[1] if kind != "query_batch" else "batches"
+    reads_setting = ("A likely secret in the source. Generated code shows this named setting in its place and "
+                     "reads its value from the project's settings file, to be filled in at deployment.")
+    unread_setting = ("A likely secret in the source. Generated code shows this named setting in its place; no "
+                      "generated code needs its value, but the settings file lists it.")
     item = report.preview_artefact(
-        name=found, artefact_type="view", area=found.split(".")[1], output=generated.relative_path,
+        name=found, artefact_type=kind, area=area, output=generated.relative_path,
         layer1=checks.to_json(), constructs=constructs,
-        degradations=[{"kind": "assumption", "where": found, "text": text} for text in artefact.assumptions],
+        degradations=[{"kind": "assumption", "where": found, "text": text}
+                      for text in [*artefact.assumptions, *generated.assumptions]],
         hints=[{**h, "status": report.HINT_NOT_APPLICABLE} for h in artefact.hints],
-        secrets=[{"setting": name, "text": "A likely secret in the source. Generated code shows this named setting "
-                                            "in its place; nothing reads settings yet (the settings file, issue #44)."}
+        secrets=[{"setting": name, "text": reads_setting if name in generated.settings_used else unread_setting}
                  for name in artefact.secret_settings],
         name_adjustments=generated.name_adjustments)
-    return _ConvertedView(artefact, reader, generated, checks, item)
+    return _Converted(artefact, reader, generated, checks, item)
 
 
-def _subtree(artefact, node_id: str):
-    for node in artefact.nodes():
-        if node.id == node_id:
-            return list(node.walk())
-    return []
+def _manual_by_node(artefact: Artefact, items: list[generator.ManualItem]) -> dict[str, tuple[str, str]]:
+    """node id -> (reason, manual item id), for every node whose code the file does not hold. A node under the one
+    that failed gets that item's reason; a node the failure replaced elsewhere in the query is reported as not
+    generated because of it. The most specific item wins."""
+    nodes = {n.id: n for n in artefact.nodes()}
+    found: dict[str, tuple[str, str]] = {}
+    for item in sorted(items, key=lambda m: -sum(1 for _ in nodes[m.replaces].walk())):
+        for n in nodes[item.replaces].walk():
+            found[n.id] = (f"its code is not generated, because of manual work {item.id[1:]} ({item.source_position})",
+                           item.id)
+        for n in nodes[item.node].walk():
+            found[n.id] = (item.reason, item.id)
+    return found

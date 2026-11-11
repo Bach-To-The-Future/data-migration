@@ -13,8 +13,8 @@ import json
 # 0.3: the extraction section; secrets and name adjustments per artefact. 0.4: recognised
 # artefacts as manual work; the extraction section's completeness summary, assumed
 # collations, skipped cross-checks and folders. 0.5: the hints of each artefact, reported as not applicable on
-# the target.
-SCHEMA_VERSION = "report-data/0.5"
+# the target. 0.6: the delivered project's files, and every kind of artefact (issue #44).
+SCHEMA_VERSION = "report-data/0.6"
 PREVIEW_BANNER = ("Preview run: reconciliation was off. Nothing in this report was checked against the "
                   "original, and nothing in it is converted.")
 NOT_RECONCILED = "Not reconciled"
@@ -78,8 +78,8 @@ def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, l
 
 
 def preview_report(*, engagement: str, snapshot: str, source: dict, target: dict, versions: dict,
-                   artefacts: list[dict], recognised: list[dict], extraction: dict, degradations: list[dict],
-                   run_specific: dict) -> dict:
+                   artefacts: list[dict], recognised: list[dict], extraction: dict, project: dict,
+                   degradations: list[dict], run_specific: dict) -> dict:
     groups = {PREVIEW_GROUP: [a["name"] for a in artefacts]}
     if recognised:
         groups[MANUAL_GROUP] = sorted(r["name"] for r in recognised)
@@ -98,6 +98,7 @@ def preview_report(*, engagement: str, snapshot: str, source: dict, target: dict
         "artefacts": sorted(artefacts, key=lambda a: a["name"]),
         "recognised_artefacts": sorted(recognised, key=lambda a: a["name"]),
         "extraction": extraction,
+        "project": project,
         "degradations": degradations,
         "run_specific": run_specific,
     }

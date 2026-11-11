@@ -3,11 +3,13 @@ layers", and section 17: layer 1's checks belong to the target).
 
 Each check reads the generated file and what generation declared about it (its links to
 the representation, its manual items, its escape-hatch uses); none of them runs the code.
-The check that every linked expression is one self-contained span is later work.
+A linked expression is one self-contained span (spec section 5, "Generation"): the generated file records where
+each expression's code sits, and the span check reads exactly that code alone.
 """
 from __future__ import annotations
 
 import ast
+import builtins
 import dataclasses
 import re
 import sys
@@ -23,6 +25,14 @@ LINT_MESSAGES = (pyflakes.messages.UndefinedName, pyflakes.messages.UnusedVariab
                  pyflakes.messages.RedefinedWhileUnused, pyflakes.messages.ImportStarUsed)
 WRITE_METHODS = {"write", "writeTo", "saveAsTable", "insertInto", "writeStream"}
 MANUAL_MARK = re.compile(r"Manual work (\d+):")
+
+
+@dataclasses.dataclass(frozen=True)
+class Span:
+    """Where one expression's code sits in the file: the 1-based line, and the columns [start, end) on it."""
+    line: int
+    start: int
+    end: int
 
 
 @dataclasses.dataclass(frozen=True)
@@ -49,11 +59,13 @@ class Layer1Result:
 
 
 def run(text: str, *, links: dict[int, list[str]], node_spans: dict[str, str | None],
-        manual_items: list[str], escape_hatch_uses: list[str], library_module: str | None = None,
+        manual_items: list[str], escape_hatch_uses: list[str], expressions: dict[str, Span],
+        expression_nodes: list[str], library_module: str | None = None,
         project_package: str = "converted") -> Layer1Result:
     """links: generated line -> node ids; node_spans: every node id in the artefact's
     representation -> its source position (None if it has none); manual_items: the ids
-    ('M1', ...) generation declared."""
+    ('M1', ...) generation declared; expressions: the span of the code of each expression generation
+    emitted; expression_nodes: every expression node whose code is in the file, each of which must have one."""
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
@@ -67,6 +79,7 @@ def run(text: str, *, links: dict[int, list[str]], node_spans: dict[str, str | N
         _escape_hatch(tree, escape_hatch_uses),
         _positions(tree, text, links, node_spans),
         _manual(text, manual_items),
+        _expressions(tree, text, expressions, expression_nodes, node_spans),
     ))
 
 
@@ -195,3 +208,67 @@ def _manual(text: str, declared: list[str]) -> Check:
     ok = marked == expected
     return Check("manual items accounted for", ok,
                  "" if ok else f"the file marks {marked}; generation declared {expected}")
+
+
+def _bound_names(tree: ast.Module) -> set[str]:
+    """Names the module binds at its top level: imports, functions and classes."""
+    bound: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+    return bound
+
+
+def _free_names(expression: ast.expr) -> set[str]:
+    """Names an expression reads that it does not bind itself (a lambda's or a comprehension's own)."""
+    bound = {n.id for n in ast.walk(expression) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    bound |= {a.arg for n in ast.walk(expression) if isinstance(n, ast.Lambda)
+              for a in n.args.args + n.args.kwonlyargs}
+    return {n.id for n in ast.walk(expression) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)} - bound
+
+
+def _expressions(tree: ast.Module, text: str, spans: dict[str, Span], expected: list[str],
+                 node_spans: dict[str, str | None]) -> Check:
+    """Each linked expression is one contiguous span that evaluates alone: it parses as an expression and
+    reads nothing but the module's imports and its function's parameters, never a local variable. Two spans
+    nest or stand apart, never cross."""
+    problems = [f"expression node {node} has no span" for node in expected if node not in spans]
+    lines = text.splitlines()
+    module_names = _bound_names(tree) | set(dir(builtins))
+    functions = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+    for node, span in sorted(spans.items()):
+        if node not in node_spans:
+            problems.append(f"expression node {node} is not in the representation")
+            continue
+        if not 1 <= span.line <= len(lines) or not 0 <= span.start < span.end <= len(lines[span.line - 1]):
+            problems.append(f"expression node {node}: its span is not on a line of the file")
+            continue
+        code = lines[span.line - 1][span.start:span.end]
+        owner = next((f for f in functions if f.body and f.lineno < span.line <= (f.end_lineno or f.lineno)), None)
+        if owner is None:
+            problems.append(f"expression node {node}: its span (line {span.line}) is in no function")
+            continue
+        try:
+            parsed = ast.parse(code, mode="eval")
+        except SyntaxError:
+            problems.append(f"expression node {node}: line {span.line} columns {span.start}-{span.end} are not one "
+                            f"complete expression")
+            continue
+        if code != code.strip():
+            problems.append(f"expression node {node}: its span has surrounding whitespace")
+        allowed = module_names | {a.arg for a in owner.args.args + owner.args.kwonlyargs}
+        outside = sorted(_free_names(parsed.body) - allowed)
+        if outside:
+            problems.append(f"expression node {node} reads {', '.join(outside)}, which only the function defines "
+                            f"locally, so it cannot be evaluated alone")
+    ordered = sorted((s.line, s.start, -s.end, n) for n, s in spans.items())
+    for i, (line, start, negative_end, node) in enumerate(ordered):
+        end = -negative_end
+        for line2, start2, negative_end2, other in ordered[i + 1:]:
+            if line2 != line or start2 >= end:
+                break
+            if -negative_end2 > end:
+                problems.append(f"expression nodes {node} and {other} overlap without one holding the other")
+    return Check("linked expressions are self-contained spans", not problems, "; ".join(problems))

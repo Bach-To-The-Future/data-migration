@@ -9,6 +9,11 @@ letters, digits and `_`, not starting with a digit, never a keyword, compared ig
 
 Scopes: catalogs (one per source database) on the server, schemas in a catalog, and tables
 and views in a schema; folders for databases and schemas, and modules in a kind's folder.
+
+A query batch read from a folder has no schema and no name parts: it is generated into `batches` under its
+database's folder, and its module is named from the file's path inside the database's folder, without the
+extension, each refused character (the path separator among them) becoming `_`: `batches/load.sql` is the module
+`batches_load`. The name is recorded like the others, in the scope `<database>.batches`.
 """
 from __future__ import annotations
 
@@ -26,8 +31,9 @@ def _python(name: str) -> str:
     return "_" + out if out[0].isdigit() else out
 
 
-# Names every generated module imports at module level, which a function of that name would shadow.
-GENERATED_IMPORTS = {"f", "dataframe"}
+# Names every generated module imports at module level, or binds in its functions, which a function of that name
+# would shadow; and the folder a database holds its query batches in, which a schema of that name would share.
+GENERATED_IMPORTS = {"f", "dataframe", "column", "ss", "spark", "batches"}
 PYTHON_MODULE = Rule("python-module", _python, str.casefold,
                      lambda name: keyword.iskeyword(name) or name.casefold() in GENERATED_IMPORTS)
 
@@ -35,6 +41,7 @@ RULES = {rule.name: rule for rule in (UNITY_CATALOG, PYTHON_MODULE)}
 # Artefact types generated into files, and their folders (spec section 6: converted/<Database>/<schema>/<kind>/<Name>.py).
 KIND_FOLDERS = {"view": "views", "procedure": "procedures", "scalar_function": "functions",
                 "inline_function": "functions", "table_function": "functions", "trigger": "triggers"}
+BATCH_KIND, BATCH_FOLDER = "query_batch", "batches"
 # What Unity Catalog holds by name: tables and views share a schema's namespace.
 UC_KINDS = {"table", "view"}
 
@@ -52,6 +59,9 @@ def scopes(objects: list[tuple[str, str, str, str]]) -> dict[tuple[str, str], se
             add(UNITY_CATALOG, "", database)
             add(UNITY_CATALOG, database, schema)
             add(UNITY_CATALOG, f"{database}.{schema}", name)
+        if kind == BATCH_KIND:
+            add(PYTHON_MODULE, "", database)
+            add(PYTHON_MODULE, f"{database}.{BATCH_FOLDER}", name)
         if kind in KIND_FOLDERS:
             add(PYTHON_MODULE, "", database)
             add(PYTHON_MODULE, database, schema)
@@ -93,6 +103,9 @@ class Names:
     def module(self, identity: str, kind: str) -> tuple[str, str]:
         """The file an artefact is generated into, and its function name."""
         database, schema, name = self._split(identity)
+        if kind == BATCH_KIND:
+            module = self._get(PYTHON_MODULE, f"{database}.{BATCH_FOLDER}", name)
+            return f"converted/{self._get(PYTHON_MODULE, '', database)}/{BATCH_FOLDER}/{module}.py", module
         folder = KIND_FOLDERS[kind]
         module = self._get(PYTHON_MODULE, f"{database}.{schema}.{folder}", name)
         path = (f"converted/{self._get(PYTHON_MODULE, '', database)}/{self._get(PYTHON_MODULE, database, schema)}"
