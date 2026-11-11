@@ -510,3 +510,45 @@ def test_an_artefact_made_only_of_these_constructs_lowers_with_no_statement_kept
             lowered_clean.append(module.identity)
     assert gaps == {}
     assert len(lowered_clean) >= 10
+
+
+# ---------------------------------------------------------------- review follow-ups
+
+def test_a_string_too_long_for_its_variable_is_cut_and_the_cut_is_written_out(corpus_snapshot):
+    artefact = lowered(corpus_snapshot, "DECLARE @s varchar(5);\nSET @s = 'abcdefghij';")
+
+    _, assign = statements(artefact)
+    value = assign.child("argument")
+    # SQL Server cuts the string without an error; the vocabulary says so on `assign`
+    assert value.kind == "implicit_convert" and value.attrs.get("fits") is True
+    assert value.type is not None and value.type.param("length") == 5
+
+
+def test_a_decimal_stored_with_fewer_digits_is_rounded_and_it_is_written_out(corpus_snapshot):
+    artefact = lowered(corpus_snapshot, "DECLARE @d decimal(5, 1);\nSET @d = 12.345;")
+
+    _, assign = statements(artefact)
+    assert assign.child("argument").kind == "implicit_convert" and assign.child("argument").attrs.get("fits") is True
+
+
+def test_a_scalar_function_returns_its_declared_type(corpus_snapshot):
+    artefact, reader = lower_text(
+        corpus_snapshot, "CREATE FUNCTION sales.fnTest (@n int) RETURNS bigint AS BEGIN RETURN @n END",
+        kind="scalar_function", parameters=[parameter("@n")],
+        returns={"declared_type": "bigint", "system_type": "bigint", "max_length": 8, "precision": 19, "scale": 0})
+
+    assert checked(artefact, reader) == []
+    [ret] = of_kind(artefact, "return")
+    assert ret.child("argument").kind == "implicit_convert"
+
+
+def test_break_and_continue_outside_a_loop_are_checker_findings(corpus_snapshot):
+    artefact, reader = proc(corpus_snapshot, "BREAK;")
+    assert any("outside every loop" in f.message for f in checked(artefact, reader))
+
+
+def test_dropping_a_temp_and_a_permanent_table_together_is_kept_as_written_not_forgotten(corpus_snapshot):
+    artefact = lowered(corpus_snapshot, "CREATE TABLE #a (Id int);\nDROP TABLE #a, sales.Nothing;")
+
+    _, drop = statements(artefact)
+    assert drop.kind == "opaque_fragment" and drop.attrs["scope_barrier"] is True

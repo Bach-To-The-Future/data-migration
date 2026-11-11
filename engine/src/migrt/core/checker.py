@@ -39,7 +39,6 @@ OUTPUT = "(output)"       # the relation a sort key reads a select-list column t
 SOURCES = ("read_table", "named_query", "call_table_function", "read_values", "shred_xml", "pivot",
            "external_reference", "read_changed_rows")
 CALLS = ("call_table_function", "call_scalar_function", "call_procedure")
-STATEMENT_KINDS_WITH_SCOPE = scopes.STATEMENT_ROLES
 
 
 @dataclasses.dataclass(frozen=True)
@@ -115,6 +114,9 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
     declared_types = {n.attrs["name"].casefold(): n.type for n in artefact.nodes()
                       if n.kind in ("declare_parameter", "declare_variable") and n.type is not None}
     labels = {n.attrs["name"].casefold() for n in artefact.nodes() if n.kind == "declare_label"}
+    in_loop: set[int] = set()
+    for loop in (n for n in artefact.nodes() if n.kind == "while"):
+        in_loop |= {id(n) for n in loop.walk()}
     scope_for: dict[int, dict] = {}
     for statement, scope in scopes.derive(artefact.body):
         if statement.attrs.get("scope") != scope:
@@ -198,6 +200,8 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
         for name in written:
             if not in_scope(node, name):
                 fail(node, f"assigns {name}, which is not in scope")
+        if node.kind in ("break", "continue") and id(node) not in in_loop:
+            fail(node, f"{node.kind} is outside every loop")
         if node.kind == "jump" and node.attrs["label"].casefold() not in labels:
             fail(node, f"jumps to the label {node.attrs['label']}, which is not declared")
         if node.kind in ("assign", "declare_variable"):

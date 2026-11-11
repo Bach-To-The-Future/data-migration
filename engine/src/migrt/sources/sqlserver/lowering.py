@@ -109,6 +109,7 @@ class Lowering(Procedural):
         attrs: dict = dict(self.stored_settings(statement), name=self.identity)
         if artefact_type == "scalar_function":
             body = "scalar_function_body"
+            self.return_type = T.from_column(self.reader.value(self.identity, "returns"), default=self.default_label)
             children += self.statements(statement)
         elif artefact_type == "inline_function":
             body = "table_function_body"
@@ -158,10 +159,11 @@ class Lowering(Procedural):
 
     def table_type_columns(self, declared_type: str) -> dict:
         found = [o for o in self.reader.snapshot.objects if o.kind == "table_type"
-                 and o.identity.split(".")[0] == self.database
+                 and o.identity.removeprefix("type:").split(".")[0] == self.database
                  and o.identity.split(".")[-1].casefold() == declared_type.casefold()]
         if len(found) != 1:
-            return {}
+            raise ValueError(f"{self.identity}: the table type {declared_type} of a parameter is not in the catalog "
+                             f"exactly once ({len(found)} found)")
         return {c["name"]: T.from_column(c, default=self.default_label) for c in found[0].fact("columns").value}
 
     def statements(self, statement) -> list[Node]:

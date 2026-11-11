@@ -61,6 +61,7 @@ COMPOUND = {"AddEquals": "Add", "SubtractEquals": "Subtract", "MultiplyEquals": 
             "DivideEquals": "Divide", "ModEquals": "Modulo"}
 BINARY_NAMES = {"Add": "add", "Subtract": "subtract", "Multiply": "multiply", "Divide": "divide", "Modulo": "modulo"}
 OPTIONS = {"NoCount": "NOCOUNT"}
+GLOBAL_TEMP = "a global temp table is not lowered yet: it is visible to every session"
 TEMPDB_ASSUMPTION = ("The collation of tempdb is assumed to be the server's default collation: the catalog does not "
                      "read tempdb, and a temp table's text columns without COLLATE take tempdb's.")
 NULLABLE_ASSUMPTION = ("A column of a temp table or table variable with neither NULL nor NOT NULL is assumed "
@@ -69,6 +70,8 @@ NULLABLE_ASSUMPTION = ("A column of a temp table or table variable with neither 
 
 
 class Procedural(Queries):
+    return_type: VType | None = None          # what a scalar function returns, set while lowering its body
+
     # ------------------------------------------------------------------ statement lists
 
     def statement_list(self, statements, role: str) -> list[Node]:
@@ -89,13 +92,17 @@ class Procedural(Queries):
             if kind in SCHEMA_CHANGES:
                 if self.temp_target(s):
                     raise Opaque(s, f"{kind} on a temp table is not lowered yet")
-                return [Node("schema_change", self.span(s), None,
-                             {"text": self.text_of(s), "manual": True, "scope_barrier": False})]
+                return [self.schema_change(s)]
             later = LATER.get(kind)
             raise Opaque(s, f"{kind} ({later}) is lowered by ticket 08b (#85): until then it is kept as written"
                          if later else f"{kind} is not lowered yet: it is kept as written")
         except Opaque as opaque:
             return [self.opaque_statement(s, opaque.reason)]
+
+    def schema_change(self, s) -> Node:
+        """A statement that creates, alters or drops a permanent object: recorded, and manual work."""
+        return Node("schema_change", self.span(s), None,
+                    {"text": self.text_of(s), "manual": True, "scope_barrier": False})
 
     def temp_target(self, statement) -> bool:
         found = []
@@ -189,7 +196,10 @@ class Procedural(Queries):
     def s_ReturnStatement(self, s) -> list[Node]:
         children = []
         if s.Expression is not None:
-            children.append(as_role(self.lowered_or_opaque(s.Expression), "argument"))
+            value = self.lowered_or_opaque(s.Expression)
+            if self.return_type is not None and value.kind != "opaque_fragment":
+                value = self.store(value, self.return_type)      # a function returns its declared type
+            children.append(as_role(value, "argument"))
         return [Node("return", self.span(s), None, {}, children)]
 
     def lowered_or_opaque(self, fragment) -> Node:
@@ -197,6 +207,26 @@ class Procedural(Queries):
             return self.expression(fragment)
         except Opaque as opaque:
             return self.opaque(fragment, opaque.reason)
+
+    def store(self, node: Node, target: VType) -> Node:
+        """The value as it is once stored in something of type `target` (a variable, a column, a returned value):
+        converted to the type, and cut, padded or rounded to fit it where SQL Server does that without an error
+        (a string too long for its variable, a decimal with fewer digits)."""
+        node = self.convert_toward(node, target)
+        value = node.type
+        if node.kind in ("null", "opaque_fragment") or value is None or value == target:
+            return node
+        narrower = False
+        if value.name == "string" and target.name == "string":
+            wanted, held = target.length(), value.length()
+            narrower = wanted != held and (wanted != T.UNLIMITED) and (
+                held == T.UNLIMITED or target.flag("fixed") or int(wanted) < int(held))
+        elif value.name == "decimal" and target.name == "decimal":
+            narrower = (target.int_param("precision"), target.int_param("scale")) != (
+                value.int_param("precision"), value.int_param("scale"))
+        if not narrower:
+            return node
+        return Node("implicit_convert", node.span, target, {"fits": True}, [as_role(node, "argument")])
 
     # ------------------------------------------------------------------ variables
 
@@ -209,7 +239,7 @@ class Procedural(Queries):
             if d.Value is not None:
                 value = self.lowered_or_opaque(d.Value)
                 if value.kind != "opaque_fragment":
-                    value = self.convert_toward(value, t)
+                    value = self.store(value, t)
                 children.append(as_role(value, "initial"))
             self.variables[name.casefold()] = (name, t)
             out.append(Node("declare_variable", self.span(d), t, {"name": name}, children))
@@ -233,7 +263,7 @@ class Procedural(Queries):
                     raise Opaque(s, f"the assignment {kind} is not lowered yet")
                 current = self.node("variable", s.Variable, t, {"name": declared})
                 value = self.arithmetic(s, BINARY_NAMES[op], current, value)
-            value = self.convert_toward(value, t)
+            value = self.store(value, t)
         except Opaque as opaque:
             value = self.opaque(s.Expression, opaque.reason)
         return [Node("assign", self.span(s), None, {"variable": declared}, [as_role(value, "argument")])]
@@ -322,10 +352,9 @@ class Procedural(Queries):
     def s_CreateTableStatement(self, s) -> list[Node]:
         name = self.temp_name(s.SchemaObjectName)
         if name is None:
-            return [Node("schema_change", self.span(s), None,
-                         {"text": self.text_of(s), "manual": True, "scope_barrier": False})]
+            return [self.schema_change(s)]
         if name.startswith("##"):
-            raise Opaque(s, "a global temp table is not lowered yet: it is visible to every session")
+            raise Opaque(s, GLOBAL_TEMP)
         if s.AsFileTable or s.AsEdge or s.AsNode or s.Definition is None:
             raise Opaque(s, "this kind of CREATE TABLE is not lowered yet")
         label = collations.Label(self.server_collation(), collations.COLUMN)
@@ -343,13 +372,14 @@ class Procedural(Queries):
     def s_DropTableStatement(self, s) -> list[Node]:
         objects = list(s.Objects)
         temp = [self.temp_name(o) for o in objects]
+        if any(temp) and not all(temp):
+            raise Opaque(s, "DROP TABLE of temp and permanent tables in one statement is not lowered yet")
         if not all(temp):
-            return [Node("schema_change", self.span(s), None,
-                         {"text": self.text_of(s), "manual": True, "scope_barrier": False})]
+            return [self.schema_change(s)]
         out = []
         for name in temp:
             if str(name).startswith("##"):
-                raise Opaque(s, "a global temp table is not lowered yet: it is visible to every session")
+                raise Opaque(s, GLOBAL_TEMP)
             found = self.temp_tables.pop(str(name).casefold(), None)
             out.append(Node("drop_temp_table", self.span(s), None,
                             {"name": found[0] if found else name, "if_exists": bool(s.IsIfExists)}))
@@ -378,7 +408,7 @@ class Procedural(Queries):
         if name is None:
             raise Opaque(s, "SELECT INTO a permanent table creates a table: it is not lowered")
         if name.startswith("##"):
-            raise Opaque(s, "a global temp table is not lowered yet: it is visible to every session")
+            raise Opaque(s, GLOBAL_TEMP)
         plan, outputs = self.select_statement(s, into=True)
         types = dict(outputs)
         if len(types) != len(outputs):
@@ -408,7 +438,7 @@ class Procedural(Queries):
             raise Opaque(ref, "writing through a linked server is not lowered yet")
         if parts[-1].startswith("#"):
             if parts[-1].startswith("##"):
-                raise Opaque(ref, "a global temp table is not lowered yet: it is visible to every session")
+                raise Opaque(ref, GLOBAL_TEMP)
             found = self.temp_tables.get(parts[-1].casefold()) if len(parts) == 1 else None
             if found is None:
                 raise Opaque(ref, f"the temp table {'.'.join(parts)} is not in scope here: no statement before this "
@@ -467,7 +497,7 @@ class Procedural(Queries):
             rows = [[self.expression(v) for v in row.ColumnValues] for row in source.RowValues]
             if any(len(r) != len(listed) for r in rows):
                 raise Opaque(s, "a row of VALUES has a different number of values than the columns")
-            cells = [as_role(self.convert_toward(rows[i][j], wanted[j]), "value")
+            cells = [as_role(self.store(rows[i][j], wanted[j]), "value")
                      for i in range(len(rows)) for j in range(len(listed))]
             plan = Node("read_values", self.span(source), None, {"columns": listed, "rows": len(rows), "alias": None},
                         cells)
@@ -487,7 +517,7 @@ class Procedural(Queries):
             for i, output in enumerate(plan.children_with("output")):
                 if output.kind == "opaque_fragment":
                     continue
-                converted = self.convert_toward(output, wanted[i])
+                converted = self.store(output, wanted[i])
                 if converted is not output:
                     converted.role = "output"
                     converted.attrs = dict(converted.attrs, output_name=output.attrs["output_name"])
@@ -573,7 +603,7 @@ class Procedural(Queries):
             column = self.find(columns, str(list(clause.Column.MultiPartIdentifier.Identifiers)[-1].Value), clause)
             value = self.lowered_or_opaque(clause.NewValue)
             if value.kind != "opaque_fragment":
-                value = self.convert_toward(value, columns[column])
+                value = self.store(value, columns[column])
             out.append((column, as_role(value, "value")))
         return out
 

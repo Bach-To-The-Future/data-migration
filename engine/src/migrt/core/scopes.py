@@ -1,16 +1,19 @@
 """Explicit scopes (spec section 4, item 10): what is in scope before every statement.
 
 Every statement node of a procedural body carries a `scope` attribute: the parameters, the variables, the
-row-set variables (table variables) and the temp tables that are in scope when it starts, and `barrier`, the
-position of the most recent scope barrier before it (None if there is none). The rules are T-SQL's, stated as
-facts about the representation, not about the source:
+row-set variables and the session-visible temporary tables that are in scope when it starts, and `barrier`, the
+position of the most recent scope barrier before it (None if there is none). The rules are facts about the
+representation, not about one source:
 
 - a variable is declared for the rest of its batch, not its block: a declaration inside a branch or a loop
   stays in scope after it;
-- a temp table is created and dropped when the statements run, so after a branch or a loop it *may exist*: a
-  table made in either branch may exist after it, and a table dropped in one branch may still exist;
-- a batch of a script starts with no variables (they do not survive `GO`) and keeps the temp tables;
-- everything after a scope barrier is uncertain: the barrier may have declared, changed or dropped anything.
+- a temporary table is created and dropped when the statements run, so after a branch or a loop it *may
+  exist*: a table made in either branch may exist after it, and a table dropped in one branch may still exist.
+  The lists hold what may be in scope, not what is certain;
+- a batch of a script starts with no variables and keeps the temporary tables;
+- a scope barrier may have declared, changed or dropped anything, so the lists after one may be incomplete or
+  stale. The scope says so with `barrier`; it does not guess, and the checker does not refuse a name only
+  because a barrier came before it. Cursors and open transactions join the scope with issue #85.
 
 Lowering writes the attribute with `annotate`, and the checker derives it again with `derive` and refuses a
 body whose attribute differs, so the scope at every point is both stated and verified.
