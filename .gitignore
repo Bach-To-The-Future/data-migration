@@ -3,3 +3,4 @@ sandbox/.env
 corpus/public/.cache/
 corpus/public/export/
 __pycache__/
+.snapshots/

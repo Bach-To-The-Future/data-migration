@@ -96,6 +96,17 @@ CI runs the same script after a from-scratch corpus build, on every push to mast
 
 Tests that need no server, such as `tests/test_differences.py`, `test_secrets.py`, `test_name_adjustments.py`, `test_name_resolution.py` and `test_recognised_artefacts.py`, also run on the host for a quick loop: `cd engine && PYTHONPATH=src python -m pytest tests/test_differences.py`. The sandbox run above stays the gate.
 
+**A refactor that must not change output** is checked with [`tools/generation_snapshot.py`](../tools/generation_snapshot.py), the standard check for it: capture everything generation produces for the three corpus databases before the change (each artefact's generated text, links and spans, manual items, assumptions, caveats, settings, layer-1 result and report entry, or the error it fails with), change the code, capture again, and compare byte for byte. The capture runs in the toolbox; the comparison needs only Python and names every file that differs, is missing, or exists on one side only (an empty capture is a failure). Capture twice on the same code first if in doubt: the two must be identical.
+
+```
+docker compose -f sandbox/docker-compose.yml --profile tools run --no-deps --rm -T tools \
+    python tools/generation_snapshot.py capture .snapshots/before
+# ... change the code, then capture .snapshots/after the same way ...
+python tools/generation_snapshot.py compare .snapshots/before .snapshots/after
+```
+
+It complements the tests and does not replace them: the corpus is mostly procedures, so the expression handlers are covered by `tests/test_generation.py`. The comparison half has its own tests (`tests/test_generation_snapshot.py`).
+
 A pre-commit hook lints staged engine files with pyflakes on the host, without Docker. Enable it once per clone:
 
 ```
