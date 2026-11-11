@@ -246,6 +246,14 @@ def test_the_whole_project_is_deterministic_outside_the_reports_run_specific_sec
     assert len(tree(tmp_path / "a")) > 10
 
 
+def test_the_type_mapping_version_is_among_the_reports_versions(engagement, extractor_server, tmp_path):
+    from migrt.targets.pyspark import types
+
+    result = run(engagement, extractor_server, tmp_path, artefacts=[VIEW])
+
+    assert read_json(result.report_data_path)["run"]["versions"]["type_mapping"] == types.version()
+
+
 def test_generated_assumptions_reach_the_report(engagement, extractor_server, tmp_path):
     result = run(engagement, extractor_server, tmp_path)
 

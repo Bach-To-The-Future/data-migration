@@ -47,7 +47,6 @@ PROJECT_PACKAGE = "converted"
 DESCRIPTIONS = {"view": "a view", "inline_function": "an inline table-valued function",
                 "scalar_function": "a scalar function", "table_function": "a multi-statement table-valued function",
                 "procedure": "a stored procedure", "trigger": "a trigger", "query_batch": "a query batch script"}
-STUB_ISSUE = untranslatable.PROCEDURAL_ISSUE
 SPECIAL_CAUSES = {*untranslatable.SPECIAL, untranslatable.STALE, untranslatable.UNSUPPORTED_TYPE}
 
 
@@ -111,6 +110,11 @@ def spark_type(t: VType, node: Node) -> str:
     return found.ddl
 
 
+def prose(text: str) -> str:
+    """Client text (an identity, a file's path) put in a docstring: it can never end the docstring or escape."""
+    return text.replace("\\", "/").replace('"', "'")
+
+
 def python_name(name: str, taken: set[str]) -> str:
     base = re.sub(r"\W", "_", name) or "_"
     if base[0].isdigit():
@@ -166,6 +170,16 @@ class _Lines:
         self.lines += block.lines
         self.links |= {n + offset: ids for n, ids in block.links.items()}
         self.spans |= {i: layer1.Span(s.line + offset, s.start, s.end) for i, s in block.spans.items()}
+
+
+@dataclasses.dataclass(frozen=True)
+class _Checkpoint:
+    lines: int
+    imports: dict[str, str]
+    settings: int
+    caveats: dict[str, str]
+    manual: int
+    taken: set[str]
 
 
 class Generator:
@@ -228,7 +242,7 @@ class Generator:
         uses = {n.id for n in ast.walk(ast.parse("\n".join(self.out.lines))) if isinstance(n, ast.Name)}
         header = _Lines()
         emit = header.emit
-        emit(f'"""{a.identity}, {DESCRIPTIONS[a.artefact_type]}, generated as PySpark by migrt {self.tool_version}.')
+        emit(f'"""{prose(a.identity)}, {DESCRIPTIONS[a.artefact_type]}, generated as PySpark by migrt {self.tool_version}.')
         emit("")
         emit(f"Generated from catalog snapshot {self.snapshot_id}. Never edit this file by hand: the tool")
         emit('regenerates it. Comments marked "original:" are carried unchanged from the source.')
@@ -262,6 +276,8 @@ class Generator:
             python = python_name(name.lstrip("@"), self.taken)
             self.params[name.casefold()] = python
             spark = spark_types.mapping(p.type) if p.type is not None else None
+            if spark is not None and spark.companion_column:
+                self.requirement(f"parameter {name}", spark)
             self.parameters.append({"name": name, "python_name": python, "direction": p.attrs["direction"],
                                     "readonly": p.attrs["readonly"], "default": p.attrs["default"],
                                     "type": p.type.to_json() if p.type is not None else None,
@@ -272,6 +288,11 @@ class Generator:
                     f"the generated function takes it as an argument the caller must pass, so the default is not "
                     f"applied")
         return declared
+
+    def requirement(self, what: str, found: spark_types.SparkType) -> None:
+        """A requirement on the target tables that the type's representation makes, listed in the report."""
+        self.assumptions.append(f"{self.artefact.identity}: {what} has a type held with a companion "
+                                f"{found.companion_column} column in the target table, which that table must have")
 
     def signature(self, declared: Sequence[Node], *, positional: bool, extra: Sequence[str] = ()) -> str:
         names = [self.params[p.attrs["name"].casefold()] for p in declared] + list(extra)
@@ -298,7 +319,7 @@ class Generator:
         a, emit = self.artefact, self.out.emit
         declared = self.declare_parameters(body)
         self.open_function(name, self.signature(declared, positional=True), "DataFrame",
-                           f"The {noun} {a.identity}.", declared, reads_tables=True, owner=body)
+                           f"The {noun} {prose(a.identity)}.", declared, reads_tables=True, owner=body)
         self.out.comments(body, "    ")
         query = body.child("query")
         self.result, self.columns = "dataframe", self.result_columns(query)
@@ -315,28 +336,36 @@ class Generator:
         else:
             emit(f"    return {result}", [body])
 
-    def checkpoint(self) -> tuple:
-        return (self.out.mark(), dict(self.imports), len(self.settings_used), dict(self.caveats_by_node),
-                len(self.manual), set(self.taken))
+    def checkpoint(self) -> "_Checkpoint":
+        return _Checkpoint(self.out.mark(), dict(self.imports), len(self.settings_used), dict(self.caveats_by_node),
+                           len(self.manual), set(self.taken))
 
-    def restore(self, checkpoint: tuple) -> None:
+    def restore(self, before: "_Checkpoint") -> None:
         """Back to before a plan that failed: its lines, imports, settings, caveats and manual items are gone."""
-        mark, imports, settings, caveats, manual, taken = checkpoint
-        self.out.rollback(mark)
-        self.imports, self.caveats_by_node, self.taken = imports, caveats, taken
-        del self.settings_used[settings:], self.manual[manual:]
+        self.out.rollback(before.lines)
+        self.imports, self.caveats_by_node, self.taken = before.imports, before.caveats, before.taken
+        del self.settings_used[before.settings:], self.manual[before.manual:]
 
     def result_columns(self, query: Node) -> list[dict] | None:
-        """The columns the query returns, from its select list; None where the query is not a select."""
+        """The columns the query returns, from its select list; None where the query is not a select, which the
+        report says."""
         node = query
         while node.kind not in ("project", "aggregate"):
             inputs = node.children_with("input") or node.children_with("left")
             if not inputs:
+                self.assumptions.append(f"{self.artefact.identity}: its result is not a plain select list, so the "
+                                        "manifest does not list its columns")
                 return None
             node = inputs[0]
         out = []
         for output in node.children_with("output"):
             found = spark_types.mapping(output.type) if output.type is not None else None
+            if found is None:
+                self.assumptions.append(f"{self.artefact.identity}: the column {output.attrs.get('output_name')} has "
+                                        f"the type {output.type}, which has no Spark type: the manifest lists it "
+                                        "without one")
+            if found is not None and found.companion_column:
+                self.requirement(f"column {output.attrs.get('output_name')}", found)
             out.append({"name": output.attrs.get("output_name"),
                         "type": output.type.to_json() if output.type is not None else None,
                         "spark_type": found.ddl if found else None})
@@ -353,7 +382,7 @@ class Generator:
             return
         declared = self.declare_parameters(body)
         self.open_function(name, self.signature(declared, positional=True), "Column",
-                           f"The scalar function {a.identity}, a column expression.", declared, reads_tables=False,
+                           f"The scalar function {prose(a.identity)}, a column expression.", declared, reads_tables=False,
                            owner=body)
         self.out.comments(body, "    ")
         ret = statements[0]
@@ -377,7 +406,7 @@ class Generator:
              extra: Sequence[str] = ()) -> None:
         declared = self.declare_parameters(body)
         self.open_function(name, self.signature(declared, positional=positional, extra=extra), annotation,
-                           f"The {noun} {self.artefact.identity}.", declared, reads_tables=False, owner=body)
+                           f"The {noun} {prose(self.artefact.identity)}.", declared, reads_tables=False, owner=body)
         self.report_block(body, body.children_with("statement"), name, noun, [body])
 
     def batches(self, body: Node) -> None:
@@ -388,7 +417,7 @@ class Generator:
             if number > 1:
                 self.out.emit("")
                 self.out.emit("")
-            self.open_function(name, "ss", "None", f"Batch {number} of the script {self.artefact.identity}.", [],
+            self.open_function(name, "ss", "None", f"Batch {number} of the script {prose(self.artefact.identity)}.", [],
                                reads_tables=False, owner=batch)
             if number == 1:
                 self.out.links[len(self.out.lines)] = sorted({*self.out.links.get(len(self.out.lines), []), body.id},
@@ -495,7 +524,7 @@ class Generator:
         if node.attrs.get("named_query"):
             raise Unsupported(node, "reading a named query has no PySpark generation yet")
         if node.attrs.get("temp_table") or node.attrs.get("row_set"):
-            raise Unsupported(node, f"reading a temp table or a table variable is procedural code (issue #{STUB_ISSUE})")
+            raise Unsupported(node, f"reading a temp table or a table variable is procedural code (issue #{untranslatable.PROCEDURAL_ISSUE})")
         table, alias = node.attrs["table"], node.attrs["alias"]
         var = python_name(alias, self.taken)
         kind = self.dependencies.kinds.get(table, "table")
@@ -631,7 +660,9 @@ class Generator:
             return self.parameter_value(node)
         if k == "null":
             found = spark_types.mapping(node.value_type)
-            return f'F.lit(None).cast("{found.ddl}")' if found else "F.lit(None)"
+            if found is None:
+                raise Unsupported(node, f"a NULL of type {node.type} has no Spark type to cast to")
+            return f'F.lit(None).cast("{found.ddl}")'
         if k == "literal":
             if "secret_setting" in node.attrs:
                 return self.secret(node)

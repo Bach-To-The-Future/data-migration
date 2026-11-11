@@ -1,5 +1,5 @@
 """The PySpark half of the type mapping (spec section 6, ADR 0019): vocabulary types to Spark types, each with
-the representation rule the write wrapper or a helper reproduces. The SQL Server half is
+the representation rule the write wrapper or a helper reproduces. The source's half is
 `sources.sqlserver.types`; neither half speaks of the other's side.
 
 One mapping, fixed, never configurable per client. The rules are published in every delivered project
@@ -8,6 +8,7 @@ One mapping, fixed, never configurable per client. The rules are published in ev
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 
 from ...core.ir import VType
 
@@ -76,13 +77,13 @@ def mapping(t: VType) -> SparkType | None:
         if t.length() == "unlimited":
             return SparkType("string", inexact_cast="a string is compared by its collation")
         padding = "Padded with spaces to the declared length; " if t.flag("fixed") else ""
-        rule = f"{padding}{'l' if padding else 'L'}ength enforced with SQL Server's truncation error, counted in {unit}"
+        rule = f"{padding}{'l' if padding else 'L'}ength enforced with the source's truncation error, counted in {unit}"
         return SparkType("string", rule, inexact_cast="a string's length is enforced by the support library")
     if name == "binary":
         return SparkType("binary")
     if name == "guid":
         return SparkType("string", "Compared and ordered through the byte-order helper",
-                         inexact_cast="a guid is compared by SQL Server's byte order")
+                         inexact_cast="a guid is compared by the source's byte order")
     if name == "xml":
         return SparkType("string", None, True, inexact_cast="xml is a string")
     return None
@@ -119,18 +120,25 @@ _REPRESENTATIVES = [
 ]
 
 
+def version() -> str:
+    """The version of this half of the type mapping, part of every cache key: the hash of its published rules,
+    which are worded by the mapping itself. Until the support library carries it (issue #49), this is the version."""
+    return hashlib.sha256(representation_rules_markdown().encode("utf-8")).hexdigest()
+
+
 def representation_rules_markdown() -> str:
     """The document delivered in every project: what each vocabulary type becomes in Spark and which rule the
     write wrapper or a helper reproduces. Deterministic."""
     lines = ["# Representation rules", "",
              "How each type of the intermediate representation is held in Spark. Where a rule is stated, Spark's "
-             "type alone does not keep SQL Server's meaning: the support library's write wrapper or a helper "
+             "type alone does not keep the source's meaning: the support library's write wrapper or a helper "
              "reproduces it. A type that is not listed has no Spark column type, and anything touching it is "
              "manual work.", "",
              "| Vocabulary type | Spark type | Representation rule | Flagged |", "|---|---|---|---|"]
     for label, vocabulary_type in _REPRESENTATIVES:
         found = mapping(vocabulary_type)
-        assert found is not None, label
+        if found is None:
+            raise ValueError(f"the representative type {label} has no Spark type")
         lines.append(f"| {label} | {found.ddl.upper()}{' plus a companion offset column' if found.companion_column else ''} "
                      f"| {found.rule or ''} | {'yes' if found.flagged else ''} |")
     lines.append(f"| binary(8, fixed), for row versions | BINARY | {ROW_VERSION_RULE} | |")

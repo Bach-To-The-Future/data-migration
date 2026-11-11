@@ -43,11 +43,11 @@ SPEC_TABLE = [
     (column("time", scale=7), "string",
      "Fixed-width, zero-padded HH:MM:SS.fffffff, so text order is time order", True),
     (column("varchar", max_length=20, collation="SQL_Latin1_General_CP1_CI_AS"), "string",
-     "Length enforced with SQL Server's truncation error, counted in bytes", False),
+     "Length enforced with the source's truncation error, counted in bytes", False),
     (column("nvarchar", max_length=40, collation="SQL_Latin1_General_CP1_CI_AS"), "string",
-     "Length enforced with SQL Server's truncation error, counted in UTF-16 units", False),
+     "Length enforced with the source's truncation error, counted in UTF-16 units", False),
     (column("char", max_length=5, collation="SQL_Latin1_General_CP1_CI_AS"), "string",
-     "Padded with spaces to the declared length; length enforced with SQL Server's truncation error, counted in "
+     "Padded with spaces to the declared length; length enforced with the source's truncation error, counted in "
      "bytes", False),
     (column("varchar", max_length=-1, collation="SQL_Latin1_General_CP1_CI_AS"), "string", None, False),
     (column("varbinary", max_length=16), "binary", None, False),
@@ -99,3 +99,12 @@ def test_the_representation_rules_published_in_the_project_list_every_row_of_the
 def test_a_type_outside_the_mapping_is_not_silently_given_a_spark_type():
     assert target.mapping(VType.of("row_set")) is None
     assert target.mapping(VType.of("unknown")) is None
+
+
+def test_the_type_mapping_has_a_version_that_is_part_of_every_cache_key():
+    """Spec section 6: 'versioned with the support library and part of every cache key'. Until the library is built
+    the target half's version is the hash of its rules, as each half of the differences catalogue's is."""
+    version = target.version()
+
+    assert len(version) == 64 and set(version) <= set("0123456789abcdef")
+    assert version == target.version()

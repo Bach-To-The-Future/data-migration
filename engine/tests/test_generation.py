@@ -312,3 +312,26 @@ def test_a_cross_join_and_other_plan_steps_without_generation_are_manual_work_an
 
 def _int():
     return {"system_type": "int", "max_length": 4, "precision": 10, "scale": 0, "collation": None}
+
+
+def test_a_parameter_whose_table_column_needs_a_companion_column_says_so_in_the_report(corpus_snapshot):
+    """Spec section 6, policy 5: each datetimeoffset column has a companion column holding its offset, and 'every
+    assumption and requirement is listed in the report'."""
+    offset = {"name": "@When", "declared_type": "datetimeoffset", "system_type": "datetimeoffset", "max_length": 10,
+              "precision": 34, "scale": 7, "direction": "input", "readonly": False, "nullable": True, "default": None}
+    generated = generate_text(
+        corpus_snapshot,
+        "CREATE FUNCTION sales.fnTest (@When datetimeoffset(7)) RETURNS TABLE AS RETURN "
+        "SELECT ol.OrderLineId FROM sales.OrderLine AS ol WHERE ol.OrderId = 1",
+        kind="inline_function", name="fnTest", parameters=[offset])
+
+    assert any("companion" in text and "@When" in text for text in generated.file.assumptions)
+
+
+def test_a_conversion_that_cuts_or_rounds_is_detected_before_generation(corpus_snapshot):
+    artefact, _ = lower_text(corpus_snapshot, "CREATE PROCEDURE sales.uspTest AS BEGIN\nDECLARE @s varchar(5);\n"
+                             "SET @s = 'abcdefghij';\nEND", kind="procedure", name="uspTest")
+
+    found = untranslatable.detect(artefact)
+
+    assert any(f.kind == "implicit_convert" and "cuts or rounds" in f.reason for f in found)

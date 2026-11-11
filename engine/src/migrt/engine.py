@@ -31,6 +31,7 @@ from .sources.sqlserver.extractor import (ExtractorPermissionError, SettingsRequ
 from .sources.sqlserver.folders import DuplicateCreate, FolderExtractionError
 from .sources.sqlserver.shapes import SandboxUnavailable
 from .targets.pyspark import differences as target_differences, generator, project
+from .targets.pyspark import types as target_types
 from .targets.pyspark.layer1 import Layer1Result
 from .targets.pyspark import names as target_names
 
@@ -126,7 +127,7 @@ class ArtefactResult:
 
 
 @dataclasses.dataclass(frozen=True)
-class _Converted:
+class _Generated:
     ir: Artefact
     reads: CatalogReader
     file: generator.GeneratedFile
@@ -244,12 +245,12 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
     """Convert the named artefacts (database.schema.name) with reconciliation off, extracting
     from a live server, folders of files, or both. Writes
     converted/<Database>/<schema>/<kind>/<Name>.py and report/report-data.json under out_dir.
-    Every artefact is "Not reconciled": nothing in a preview is converted."""
+    Every artefact is "Not reconciled": nothing in a preview is converted (it is generated, not reconciled)."""
     started = _now()
     run_id = f"run-{started:%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"
     dsn = _control(engagement)
     snapshot = extract(engagement, source, folders, settings, sandbox)
-    snapshot = control_db.load_snapshot(dsn, snapshot.id)   # convert from what was stored
+    snapshot = control_db.load_snapshot(dsn, snapshot.id)   # generate from what was stored
     out_dir = pathlib.Path(out_dir)
     differences = _differences()
     adjusted = control_db.name_adjustments(dsn)
@@ -258,23 +259,23 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
     results, report_items, run_rows, units = [], [], [], []
     project_kinds = _project_kinds(snapshot, artefacts)
     for identity in artefacts:
-        converted = _convert(snapshot, identity, differences, target_names.Names(adjusted, parts), project_kinds)
-        units.append(project.Unit(converted.ir, converted.file))
-        results.append(ArtefactResult(identity, report.NOT_RECONCILED, out_dir / converted.file.relative_path,
-                                      converted.layer1, converted.file.manual_items))
-        report_items.append(converted.report_item)
+        built = _generate_artefact(snapshot, identity, differences, target_names.Names(adjusted, parts), project_kinds)
+        units.append(project.Unit(built.ir, built.file))
+        results.append(ArtefactResult(identity, report.NOT_RECONCILED, out_dir / built.file.relative_path,
+                                      built.layer1, built.file.manual_items))
+        report_items.append(built.report_item)
         run_rows.append({
             "run_id": run_id, "identity": identity, "ir_format_version": FORMAT_VERSION,
-            "ir_document": converted.ir.document(),
-            "catalog_reads": json.dumps([dataclasses.asdict(r) for r in converted.reads.reads]),
-            "catalog_reads_sha256": converted.reads.reads_hash(),
-            "generated_path": converted.file.relative_path,
-            "generated_sha256": _sha256(converted.file.text),
-            "links": json.dumps(converted.file.links), "layer1": json.dumps(converted.layer1.to_json()),
+            "ir_document": built.ir.document(),
+            "catalog_reads": json.dumps([dataclasses.asdict(r) for r in built.reads.reads]),
+            "catalog_reads_sha256": built.reads.reads_hash(),
+            "generated_path": built.file.relative_path,
+            "generated_sha256": _sha256(built.file.text),
+            "links": json.dumps(built.file.links), "layer1": json.dumps(built.layer1.to_json()),
             "status": report.NOT_RECONCILED,
         })
     written = project.write(out_dir, engagement=engagement.name, snapshot_id=snapshot.id, tool_version=TOOL_VERSION,
-                            semantic=_semantic_settings(snapshot), units=units)
+                            semantic=_semantic_settings(snapshot), runtime_identity=RUNTIME_IDENTITY, units=units)
 
     server = next(o for o in snapshot.objects if o.kind == "server")
     findings = extraction_findings(snapshot)
@@ -293,7 +294,8 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
                 "assumed": sorted(f.name for f in server.facts if f.provenance.kind == "assumed")},
         target=TARGET,
         versions={"tool": TOOL_VERSION, "ir_format": FORMAT_VERSION, "vocabulary": vocabulary.version(),
-                  **differences.versions(), "report_data": report.SCHEMA_VERSION},
+                  **differences.versions(), "type_mapping": target_types.version(),
+                  "report_data": report.SCHEMA_VERSION},
         artefacts=report_items,
         recognised=recognised_artefacts(snapshot),
         extraction=findings,
@@ -380,10 +382,17 @@ def _shape_degradations(found: dict) -> list[dict]:
     return out
 
 
-CONVERTED_KINDS = {"view", "scalar_function", "inline_function", "table_function", "procedure", "trigger",
+GENERATED_KINDS = {"view", "scalar_function", "inline_function", "table_function", "procedure", "trigger",
                    "query_batch"}
 # Kinds another generated artefact can import: a function of session state returning a DataFrame or a Column.
 CALLABLE_KINDS = {"view", "scalar_function", "inline_function", "table_function"}
+# The values T-SQL reads from the machine, and what the Databricks runtime maps each to by default (spec section 7).
+RUNTIME_IDENTITY = {
+    "SUSER_SNAME": "the current Databricks user",
+    "HOST_NAME": "the Databricks runtime's host name",
+    "DB_NAME": "the catalog the job runs in",
+    "SPID": "the Spark session's id",
+}
 SETTINGS_ASSUMPTION = {
     "kind": "assumption", "where": "settings.json",
     "text": "DATEFIRST, DATEFORMAT and the language were not read from the server (the extractor does not read "
@@ -444,14 +453,14 @@ def _semantic_settings(snapshot: Snapshot) -> dict:
     }
 
 
-def _convert(snapshot: Snapshot, identity: str, differences: Catalogue, adjusted_names: target_names.Names,
-             project_kinds: dict[str, str]) -> _Converted:
+def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue, adjusted_names: target_names.Names,
+             project_kinds: dict[str, str]) -> _Generated:
     """Lower, check, generate and run layer 1 for one artefact."""
     reader = CatalogReader(snapshot, names.resolve)
     found = _resolve(reader, snapshot, identity)
     kind = reader.kind_of(found)
-    if kind not in CONVERTED_KINDS:
-        raise ValueError(f"{found} is a {kind}; only {', '.join(sorted(CONVERTED_KINDS))} are converted so far")
+    if kind not in GENERATED_KINDS:
+        raise ValueError(f"{found} is a {kind}; only {', '.join(sorted(GENERATED_KINDS))} are generated so far")
     if not reader.value(found, "extractable"):
         raise ValueError(f"{found} is encrypted or unreadable: manual work, not handled yet")
     database = str(reader.value(found, "database")) if kind == "query_batch" else found.split(".", 1)[0]
@@ -496,7 +505,7 @@ def _convert(snapshot: Snapshot, identity: str, differences: Catalogue, adjusted
         secrets=[{"setting": name, "text": reads_setting if name in generated.settings_used else unread_setting}
                  for name in artefact.secret_settings],
         name_adjustments=generated.name_adjustments)
-    return _Converted(artefact, reader, generated, checks, item)
+    return _Generated(artefact, reader, generated, checks, item)
 
 
 def _manual_by_node(artefact: Artefact, items: list[generator.ManualItem]) -> dict[str, tuple[str, str]]:

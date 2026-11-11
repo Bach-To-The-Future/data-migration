@@ -1,7 +1,7 @@
 """Constructs the PySpark target cannot translate, detected before generation (spec section 5, "Generation").
 
 Generation is never trusted to surface them: a translator that meets a form it does not know can drop it and say
-nothing (sqlglot was seen dropping `BY SOURCE` from a `MERGE` with nothing logged). So the representation is
+nothing (a translator was seen dropping a clause of a merge statement with nothing logged). So the representation is
 walked first, every node is checked against what this target has a handler for, and each finding is a node with a
 reason. Generation then must account for every finding, as a manual item that replaces the node or one above it
 (`generator.require_accounted`); a finding found nowhere in the file is an error, not a silent omission.
@@ -51,12 +51,12 @@ def reason_for_kind(kind: str) -> str | None:
     if kind in GENERATED_KINDS:
         return None
     if kind == "dynamic_sql_execution":
-        return ("dynamic SQL is not converted: the statement is assembled at run time, so it is manual work (spec "
+        return ("dynamic SQL is not generated: the statement is assembled at run time, so it is manual work (spec "
                 "section 6)")
     if kind == "schema_change":
-        return "a schema change inside a routine is not converted: it is manual work (spec section 4, item 6)"
+        return "a schema change inside a routine is not generated: it is manual work (spec section 4, item 6)"
     if kind == "permission_change":
-        return "a permission change is not converted: it is manual work (spec section 4, item 6)"
+        return "a permission change is not generated: it is manual work (spec section 4, item 6)"
     if kind == "opaque_fragment":
         return "kept as written by lowering, which could not express it: lowering assist (issue #63) is not built yet"
     if vocabulary.part_of(kind) == "procedural" or kind == "batch":
@@ -83,6 +83,10 @@ def _findings(node: Node) -> list[Finding]:
         out.append(Finding(node.id, UNSUPPORTED_TYPE,
                            f"its type {node.type.param('source_name')} has no neutral meaning, so anything touching "
                            "it is manual work (spec section 6)"))
+    if node.kind == "implicit_convert" and node.attrs.get("fits"):
+        out.append(Finding(node.id, node.kind,
+                           "a store that cuts or rounds its value is reproduced by the support library's typed "
+                           "assignment, which is not built yet"))
     if STALE in node.attrs:
         out.append(Finding(node.id, STALE,
                            f"the scope entries it depends on may be stale after the scope barrier at "
