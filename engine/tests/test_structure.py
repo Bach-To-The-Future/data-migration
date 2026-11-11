@@ -37,6 +37,18 @@ def test_the_core_imports_nothing_from_a_source_or_a_target():
         assert not bad, f"{path.name} imports {bad}"
 
 
+def test_the_support_library_imports_nothing_from_the_engine():
+    """It ships on its own in every delivered project (ADR 0018), and shares no code with the testing module or the
+    final validator (CODING_STANDARDS.md, Independence)."""
+    library = PACKAGE.parent / "migrt_spark"
+    assert library.is_dir()
+    for path in library.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+        imported |= {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and not n.level}
+        assert not {i for i in imported if i == "migrt" or i.startswith("migrt.")}, path.name
+
+
 def test_the_cores_vocabulary_is_the_specs():
     spec = json.loads((REPO / "docs" / "spec-drafts" / "operation-vocabulary.json").read_text(encoding="utf-8"))
     assert json.loads(vocabulary.PATH.read_text(encoding="utf-8")) == spec

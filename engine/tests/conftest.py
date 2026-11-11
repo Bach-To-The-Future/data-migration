@@ -130,3 +130,60 @@ def corpus_snapshot():
     address = extractor.ServerAddress(os.environ.get("MSSQL_HOST", "sqlserver"), 1433, "migration_extractor",
                                       os.environ["MIGRT_EXTRACTOR_PASSWORD"])
     return extractor.extract(address, list(CORPUS_DATABASES))
+
+
+# ---------------------------------------------------------------------- the support library's differential tests
+
+SUPPORT_DATABASE = f"MigrtSupportTest_{RUN}"
+
+
+@pytest.fixture(scope="session")
+def spark(tmp_path_factory):
+    """Local Spark with Delta, pinned by the toolbox image to Databricks Runtime 17.3 LTS."""
+    from delta import configure_spark_with_delta_pip
+    from pyspark import SparkContext
+    from pyspark.sql import SparkSession
+
+    # A session another test started has no Delta (the jars are chosen when the JVM starts), and getOrCreate would hand it
+    # back: stop it and its JVM, and start this one afresh.
+    if SparkContext._active_spark_context is not None:
+        SparkContext._active_spark_context.stop()
+    if SparkContext._gateway is not None:
+        SparkContext._gateway.shutdown()
+        SparkContext._gateway, SparkContext._jvm = None, None
+    warehouse = tmp_path_factory.mktemp("warehouse")
+    builder = (SparkSession.builder.master("local[2]").appName("migrt-support-tests")
+               .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+               .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+               .config("spark.sql.warehouse.dir", str(warehouse)).config("spark.driver.memory", "4g").config("spark.ui.enabled", "false").config("spark.ui.showConsoleProgress", "false")
+               .config("spark.sql.shuffle.partitions", "2").config("spark.sql.ansi.enabled", "true")
+               .config("spark.databricks.delta.retentionDurationCheck.enabled", "false"))
+    session = configure_spark_with_delta_pip(builder).getOrCreate()
+    session.sparkContext.setLogLevel("ERROR")
+    yield session
+    session.stop()
+
+
+@pytest.fixture(scope="session")
+def support_database():
+    """A scratch SQL Server database for the support library's tests; created for the session and dropped after it."""
+    with sa_connection() as master:
+        master.query(f"IF DB_ID(N'{SUPPORT_DATABASE}') IS NOT NULL BEGIN ALTER DATABASE [{SUPPORT_DATABASE}] SET "
+                     f"SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{SUPPORT_DATABASE}]; END")
+        master.query(f"CREATE DATABASE [{SUPPORT_DATABASE}] COLLATE SQL_Latin1_General_CP1_CI_AS")
+    yield SUPPORT_DATABASE
+    with sa_connection() as master:
+        master.query(f"IF DB_ID(N'{SUPPORT_DATABASE}') IS NOT NULL BEGIN ALTER DATABASE [{SUPPORT_DATABASE}] SET "
+                     f"SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{SUPPORT_DATABASE}]; END")
+
+
+@pytest.fixture
+def duo(spark, support_database):
+    """One scratch schema on SQL Server and in Spark, and a SQL Server session that stays open for the test."""
+    from support_harness import Duo, Oracle
+
+    oracle = Oracle(os.environ.get("MSSQL_HOST", "sqlserver"), 1433, "sa", os.environ["MSSQL_SA_PASSWORD"], support_database)
+    d = Duo(spark, oracle, support_database)
+    yield d
+    d.close()
+    oracle.close()

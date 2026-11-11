@@ -64,6 +64,13 @@ src/migrt/
   targets/pyspark/     generator, draft (the file so far; giving up a construct undoes it completely), untranslatable (detection before generation), layer1, project (the delivered
                        project), types (the target half of the type mapping, with the representation rules),
                        names (Unity Catalog and module name rules), differences (the target half, Annex D, as data)
+src/migrt_spark/       the PySpark target's support library, shipped in every delivered project; imports nothing from migrt
+  session.py           session state and the write wrappers
+  transactions.py      transaction() as compensating restore, savepoints
+  constraints.py       not null, check, key, unique and foreign-key enforcement
+  state.py             the state table: counters, leases, transaction start versions, scratch registrations
+  recovery.py          recovery on start and the recovery command
+  tables.py, settings.py, config.py, deltaops.py, errors.py
 tests/                 run with sandbox/engine-tests.sh
 ```
 
@@ -81,7 +88,13 @@ A node kind is generated if the generator has a handler for it, declared by deco
 
 Each linked expression is emitted as one contiguous, self-contained span of code, recorded with its position. Layer 1 checks that each span parses as one expression and reads nothing but the module's imports and its function's parameters, never a local variable, and that spans nest or stand apart; the testing module can then evaluate any expression alone.
 
-The delivered project ([`project.py`](src/migrt/targets/pyspark/project.py)) holds `converted/<Database>/<schema>/<kind>/<Name>.py` (a query batch under `converted/<Database>/batches/`, named from its file's path), a package in every folder, `manifest.json` (one entry point per artefact: module, functions, how to call it, parameters, result, columns, status, manual items), `settings.json` (the semantic settings with their origin and a fingerprint, the runtime identity values, and the named settings for marked secrets, to be filled in), `representation-rules.md` (the target half of the type mapping, [`types.py`](src/migrt/targets/pyspark/types.py)) and `README.md`. Not carried yet: the vendored support library with its licence and commands ([issue #49](https://github.com/Bach-To-The-Future/data-migration/issues/49)) and the state table's definition ([issue #45](https://github.com/Bach-To-The-Future/data-migration/issues/45)). DATEFIRST, DATEFORMAT and the language are not read by the extractor: the settings file holds SQL Server's defaults for us_english, marked assumed, and the report says so.
+The delivered project ([`project.py`](src/migrt/targets/pyspark/project.py)) holds `converted/<Database>/<schema>/<kind>/<Name>.py` (a query batch under `converted/<Database>/batches/`, named from its file's path), a package in every folder, `manifest.json` (one entry point per artefact: module, functions, how to call it, parameters, result, columns, status, manual items), `settings.json` (the semantic settings with their origin and a fingerprint, the runtime identity values, and the named settings for marked secrets, to be filled in), `representation-rules.md` (the target half of the type mapping, [`types.py`](src/migrt/targets/pyspark/types.py)) and `README.md`. Not carried yet: the vendored support library with its licence, the state table's definition (`migrt_spark.state_table_ddl`) and the commands ([issue #49](https://github.com/Bach-To-The-Future/data-migration/issues/49)). DATEFIRST, DATEFORMAT and the language are not read by the extractor: the settings file holds SQL Server's defaults for us_english, marked assumed, and the report says so.
+
+## The support library
+
+[`migrt_spark`](src/migrt_spark/) is the PySpark target's support library ([issue #45](https://github.com/Bach-To-The-Future/data-migration/issues/45) built its core; packaging and delivery are [issue #49](https://github.com/Bach-To-The-Future/data-migration/issues/49)). `SessionState.open(spark, job=, run=, state_table=, tables=, settings=)` starts a run: it recovers what earlier runs left unfinished, then starts the lease heartbeat. Converted code writes only through it: `insert`, `insert_values`, `update`, `delete`, inside `transaction()` blocks where the source had a transaction. A table is described by a `TableSpec` (columns, identity and row-version columns, keys, checks, foreign keys, triggers) that the delivered project will carry for each table it writes; building one from the catalog is part of procedural generation. The behaviours are tested against SQL Server: `tests/test_support_*.py` run the same statements on both sides and compare rows, row counts, identity values and the errors raised (number, severity, state and text).
+
+What a write does, in order: take the table's write lease (once per run), note its Delta version with the open transaction, check not null, check, key and foreign-key constraints, write, run foreign-key actions, then triggers. A failure anywhere in a statement that writes more than one table undoes the statement. Known limits, each loud rather than silent: string comparisons for keys follow the collations the library knows (case-sensitive, case-insensitive, binary, accent-sensitive; any other raises `UnsupportedCollation`); an `UPDATE` on a table with a trigger or a row version and no primary key is `ManualWrite`; `MERGE`, the length and range rules of the representation rules, and a trigger's rows read from Delta's change data feed are not built yet.
 
 ## Checks
 

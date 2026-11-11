@@ -11,8 +11,8 @@ Carried with the code:
 - `representation-rules.md`: the type mapping's representation rules;
 - `README.md`: what the files are.
 
-Not carried yet, each with the ticket that takes it: the vendored support library, its licence and the
-commands that ship with it (issue #49), the definition of the state table (issue #45).
+Not carried yet, with the ticket that takes it: the vendored support library, its licence, the definition of the
+state table (`migrt_spark.state_table_ddl`) and the commands that ship with it (issue #49).
 
 Everything here is deterministic: no timestamps, sorted keys, the same inputs give the same bytes.
 """
