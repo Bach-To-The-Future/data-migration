@@ -61,7 +61,7 @@ src/migrt/
                        parser's) and resolution (resolving them), secrets (the patterns), parser
                        (ScriptDom), names (the resolver), types, lowering, differences (the
                        source half, Annex C, as data)
-  targets/pyspark/     generator, untranslatable (detection before generation), layer1, project (the delivered
+  targets/pyspark/     generator, draft (the file so far; giving up a construct undoes it completely), untranslatable (detection before generation), layer1, project (the delivered
                        project), types (the target half of the type mapping, with the representation rules),
                        names (Unity Catalog and module name rules), differences (the target half, Annex D, as data)
 tests/                 run with sandbox/engine-tests.sh

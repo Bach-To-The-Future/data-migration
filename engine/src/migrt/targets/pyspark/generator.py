@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import functools
 import keyword
 import re
 from collections.abc import Sequence
@@ -31,6 +32,7 @@ from ...core import vocabulary
 from ...core.differences import Catalogue
 from ...core.ir import Artefact, Node, VType
 from . import layer1, untranslatable
+from .draft import Draft, GivenUp, Lines, ManualItem, Unsupported
 from . import types as spark_types
 from .names import Names
 
@@ -50,24 +52,8 @@ DESCRIPTIONS = {"view": "a view", "inline_function": "an inline table-valued fun
 SPECIAL_CAUSES = {*untranslatable.SPECIAL, untranslatable.STALE, untranslatable.UNSUPPORTED_TYPE}
 
 
-class Unsupported(Exception):
-    def __init__(self, node: Node, reason: str):
-        self.node, self.reason = node, reason
-        super().__init__(reason)
-
-
 class DroppedConstruct(Exception):
     """A construct detected before generation that no manual item covers: generation would have dropped it."""
-
-
-@dataclasses.dataclass(frozen=True)
-class ManualItem:
-    id: str
-    node: str                 # the node the reason is about
-    output: str | None        # the output column that fails instead, if one does
-    reason: str
-    source_position: str
-    replaces: str             # the root of the subtree whose code the file replaces with a failure
 
 
 @dataclasses.dataclass(frozen=True)
@@ -126,62 +112,6 @@ def python_name(name: str, taken: set[str]) -> str:
     return candidate
 
 
-class _Lines:
-    def __init__(self):
-        self.lines: list[str] = []
-        self.links: dict[int, list[str]] = {}
-        self.spans: dict[str, layer1.Span] = {}
-        self.pending: list[tuple[str, str]] = []      # (expression node id, its code) not yet placed in a line
-
-    def emit(self, text: str, nodes: Sequence[Node] = ()) -> None:
-        self.lines.append(text)
-        ids = sorted({n.id for node in nodes for n in node.walk()}, key=lambda i: int(i[1:]))
-        if ids:
-            self.links[len(self.lines)] = ids
-        if not text.lstrip().startswith("#"):
-            still = []
-            for node_id, code in self.pending:
-                at = text.find(code)
-                if at < 0:
-                    still.append((node_id, code))
-                elif node_id not in self.spans:
-                    self.spans[node_id] = layer1.Span(len(self.lines), at, at + len(code))
-            self.pending = still
-
-    def comments(self, node: Node, indent: str) -> None:
-        for comment in node.comments:
-            for line in comment.splitlines():
-                self.emit(f"{indent}# original: {line.strip()}")
-
-    def mark(self) -> int:
-        return len(self.lines)
-
-    def rollback(self, mark: int) -> None:
-        """Take back the lines emitted since `mark`: the code of a plan that failed is dead, and leaving it in the
-        file would leave variables nothing uses."""
-        del self.lines[mark:]
-        self.links = {n: ids for n, ids in self.links.items() if n <= mark}
-        self.spans = {i: s for i, s in self.spans.items() if s.line <= mark}
-        self.pending.clear()
-
-    def append(self, block: "_Lines") -> None:
-        """Add another block after this one's lines, carrying its links and spans."""
-        offset = len(self.lines)
-        self.lines += block.lines
-        self.links |= {n + offset: ids for n, ids in block.links.items()}
-        self.spans |= {i: layer1.Span(s.line + offset, s.start, s.end) for i, s in block.spans.items()}
-
-
-@dataclasses.dataclass(frozen=True)
-class _Checkpoint:
-    lines: int
-    imports: dict[str, str]
-    settings: int
-    caveats: dict[str, str]
-    manual: int
-    taken: set[str]
-
-
 class Generator:
     def __init__(self, artefact: Artefact, snapshot_id: str, tool_version: str, differences: Catalogue,
                  names: Names, dependencies: Dependencies):
@@ -191,31 +121,24 @@ class Generator:
         self.dependencies = dependencies
         self.snapshot_id = snapshot_id
         self.tool_version = tool_version
-        self.out = _Lines()
-        self.manual: list[ManualItem] = []
-        self.caveats_by_node: dict[str, str] = {}
-        self.taken: set[str] = {"ss", "spark", "F", "DataFrame", "Column", "RuntimeError"}   # Python names in the file
+        self.draft = Draft()
         self.findings = untranslatable.detect(artefact)
         self.detected: dict[str, list[untranslatable.Finding]] = {}
         for found in self.findings:
             self.detected.setdefault(found.node, []).append(found)
-        self.imports: dict[str, str] = {}              # imported name -> its import line
         self.params: dict[str, str] = {}               # parameter name, casefolded -> its Python name
         self.parameters: list[dict] = []
-        self.settings_used: list[str] = []
-        self.assumptions: list[str] = []
         self.functions: list[str] = []
         self.columns: list[dict] | None = None
         self.result = "none"
         self.signature_text: str | None = None
-        self.fails = False
 
     # ------------------------------------------------------------------ the file
 
     def generate(self) -> GeneratedFile:
         a = self.artefact
         path, name = self.recorded_names.module(a.identity, a.artefact_type)
-        self.taken.add(name)
+        self.draft.taken.add(name)
         kind = a.artefact_type
         body = a.body
         if kind == "view":
@@ -234,13 +157,13 @@ class Generator:
             self.batches(body)
         else:
             raise ValueError(f"{a.identity}: a {kind} is not generated")
-        require_accounted(self.findings, self.manual, a)
+        require_accounted(self.findings, self.draft.manual, a)
         return self.assemble(path)
 
     def assemble(self, path: str) -> GeneratedFile:
         a = self.artefact
-        uses = {n.id for n in ast.walk(ast.parse("\n".join(self.out.lines))) if isinstance(n, ast.Name)}
-        header = _Lines()
+        uses = {n.id for n in ast.walk(ast.parse("\n".join(self.draft.lines))) if isinstance(n, ast.Name)}
+        header = Lines()
         emit = header.emit
         emit(f'"""{prose(a.identity)}, {DESCRIPTIONS[a.artefact_type]}, generated as PySpark by migrt {self.tool_version}.')
         emit("")
@@ -253,27 +176,27 @@ class Generator:
             emit("from pyspark.sql import DataFrame")
         if "F" in uses:
             emit(FUNCTIONS_IMPORT)
-        for line in sorted(self.imports.values()):
+        for line in sorted(self.draft.imports.values()):
             emit(line)
         emit("")
         emit("")
-        header.append(self.out)
+        header.append(self.draft)
         nodes = {n.id: n for n in a.nodes()}
-        replaced = {n.id for m in self.manual for n in nodes[m.replaces].walk()}
+        replaced = {n.id for m in self.draft.manual for n in nodes[m.replaces].walk()}
         expression_nodes = [n.id for n in a.nodes() if vocabulary.part_of(n.kind) == "expression"
                             and n.id not in replaced]
         used = {rule: dict(sorted(names.items())) for rule, names in sorted(self.recorded_names.used.items())}
-        return GeneratedFile(path, "\n".join(header.lines) + "\n", header.links, self.manual, self.caveats_by_node, [],
-                             used, header.spans, expression_nodes, self.findings, sorted(set(self.settings_used)),
-                             self.assumptions, self.functions, self.parameters, self.columns, self.result,
-                             self.signature_text or "ss", self.fails)
+        return GeneratedFile(path, "\n".join(header.lines) + "\n", header.links, self.draft.manual, self.draft.caveats, [],
+                             used, header.spans, expression_nodes, self.findings, sorted(set(self.draft.settings_used)),
+                             self.draft.assumptions, self.functions, self.parameters, self.columns, self.result,
+                             self.signature_text or "ss", self.draft.fails_when_called)
 
     def declare_parameters(self, body: Node) -> list[Node]:
         """The parameter nodes, each with its Python name; a default is the caller's to pass (reported)."""
         declared = body.children_with("parameter")
         for p in declared:
             name = p.attrs["name"]
-            python = python_name(name.lstrip("@"), self.taken)
+            python = python_name(name.lstrip("@"), self.draft.taken)
             self.params[name.casefold()] = python
             spark = spark_types.mapping(p.type) if p.type is not None else None
             if spark is not None and spark.companion_column:
@@ -283,7 +206,7 @@ class Generator:
                                     "type": p.type.to_json() if p.type is not None else None,
                                     "spark_type": spark.ddl if spark else None})
             if p.attrs["default"] is not None:
-                self.assumptions.append(
+                self.draft.assumptions.append(
                     f"{self.artefact.identity}: parameter {name} has the default {p.attrs['default']} in the source; "
                     f"the generated function takes it as an argument the caller must pass, so the default is not "
                     f"applied")
@@ -291,18 +214,18 @@ class Generator:
 
     def requirement(self, what: str, found: spark_types.SparkType) -> None:
         """A requirement on the target tables that the type's representation makes, listed in the report."""
-        self.assumptions.append(f"{self.artefact.identity}: {what} has a type held with a companion "
+        self.draft.assumptions.append(f"{self.artefact.identity}: {what} has a type held with a companion "
                                 f"{found.companion_column} column in the target table, which that table must have")
 
     def signature(self, declared: Sequence[Node], *, positional: bool, extra: Sequence[str] = ()) -> str:
         names = [self.params[p.attrs["name"].casefold()] for p in declared] + list(extra)
-        self.taken.update(extra)
+        self.draft.taken.update(extra)
         return ", ".join(["ss"] + ([] if positional or not names else ["*"]) + names)
 
     def open_function(self, name: str, signature: str, annotation: str, docstring: str, declared: Sequence[Node],
                       *, reads_tables: bool, owner: Node | None = None) -> None:
         """The def line holds the function's own node, where it has one, and its parameters."""
-        emit = self.out.emit
+        emit = self.draft.emit
         self.functions.append(name)
         self.signature_text = self.signature_text or signature
         emit(f"def {name}({signature}) -> {annotation}:", ([_shallow(owner)] if owner else []) + list(declared))
@@ -316,35 +239,24 @@ class Generator:
     # ------------------------------------------------------------------ views and table functions
 
     def function_returning_dataframe(self, name: str, body: Node, noun: str) -> None:
-        a, emit = self.artefact, self.out.emit
+        a, emit = self.artefact, self.draft.emit
         declared = self.declare_parameters(body)
         self.open_function(name, self.signature(declared, positional=True), "DataFrame",
                            f"The {noun} {prose(a.identity)}.", declared, reads_tables=True, owner=body)
-        self.out.comments(body, "    ")
+        self.draft.comments(body, "    ")
         query = body.child("query")
         self.result, self.columns = "dataframe", self.result_columns(query)
-        before = self.checkpoint()
-        try:
-            result = self.plan(query)
-        except Unsupported as unsupported:
-            self.restore(before)
-            item = self.manual_item(unsupported, None, replaces=query)
-            self.fails = True
-            # Raised on the call, not on evaluation: an empty result would hide the failure.
-            emit(f"    # source {query.span}")
-            emit(f"    raise RuntimeError({item.reason!r})", [body])
+        result = self.draft.attempt(lambda: self.plan(query), replaces=query)
+        if isinstance(result, GivenUp):
+            self.fail_function(result, query, body)
         else:
             emit(f"    return {result}", [body])
 
-    def checkpoint(self) -> "_Checkpoint":
-        return _Checkpoint(self.out.mark(), dict(self.imports), len(self.settings_used), dict(self.caveats_by_node),
-                           len(self.manual), set(self.taken))
-
-    def restore(self, before: "_Checkpoint") -> None:
-        """Back to before a plan that failed: its lines, imports, settings, caveats and manual items are gone."""
-        self.out.rollback(before.lines)
-        self.imports, self.caveats_by_node, self.taken = before.imports, before.caveats, before.taken
-        del self.settings_used[before.settings:], self.manual[before.manual:]
+    def fail_function(self, given_up: GivenUp, source: Node, body: Node) -> None:
+        """What stands in the file for a function body given up: it raises on the call, not on evaluation, since an
+        empty result would hide the failure."""
+        self.draft.emit(f"    # source {source.span}")
+        self.draft.fail_when_called(given_up.item.reason, [body])
 
     def result_columns(self, query: Node) -> list[dict] | None:
         """The columns the query returns, from its select list; None where the query is not a select, which the
@@ -353,7 +265,7 @@ class Generator:
         while node.kind not in ("project", "aggregate"):
             inputs = node.children_with("input") or node.children_with("left")
             if not inputs:
-                self.assumptions.append(f"{self.artefact.identity}: its result is not a plain select list, so the "
+                self.draft.assumptions.append(f"{self.artefact.identity}: its result is not a plain select list, so the "
                                         "manifest does not list its columns")
                 return None
             node = inputs[0]
@@ -361,7 +273,7 @@ class Generator:
         for output in node.children_with("output"):
             found = spark_types.mapping(output.type) if output.type is not None else None
             if found is None:
-                self.assumptions.append(f"{self.artefact.identity}: the column {output.attrs.get('output_name')} has "
+                self.draft.assumptions.append(f"{self.artefact.identity}: the column {output.attrs.get('output_name')} has "
                                         f"the type {output.type}, which has no Spark type: the manifest lists it "
                                         "without one")
             if found is not None and found.companion_column:
@@ -374,7 +286,7 @@ class Generator:
     # ------------------------------------------------------------------ scalar functions
 
     def scalar_function(self, name: str, body: Node) -> None:
-        a, emit = self.artefact, self.out.emit
+        a, emit = self.artefact, self.draft.emit
         statements = body.children_with("statement")
         simple = len(statements) == 1 and statements[0].kind == "return" and statements[0].children_with("argument")
         if not simple:
@@ -384,18 +296,12 @@ class Generator:
         self.open_function(name, self.signature(declared, positional=True), "Column",
                            f"The scalar function {prose(a.identity)}, a column expression.", declared, reads_tables=False,
                            owner=body)
-        self.out.comments(body, "    ")
+        self.draft.comments(body, "    ")
         ret = statements[0]
         self.result = "column"
-        before = self.checkpoint()
-        try:
-            code = self.expr(ret.child("argument"), {})
-        except Unsupported as unsupported:
-            self.restore(before)
-            item = self.manual_item(unsupported, None, replaces=ret)
-            self.fails = True
-            emit(f"    # source {ret.span}")
-            emit(f"    raise RuntimeError({item.reason!r})", [body])
+        code = self.draft.attempt(lambda: self.expr(ret.child("argument"), {}), replaces=ret)
+        if isinstance(code, GivenUp):
+            self.fail_function(code, ret, body)
         else:
             emit(f"    # source {ret.span}")
             emit(f"    return {code}", [ret])
@@ -412,21 +318,21 @@ class Generator:
     def batches(self, body: Node) -> None:
         names = []
         for number, batch in enumerate(body.children_with("batch"), start=1):
-            name = python_name(f"batch_{number}", self.taken)
+            name = python_name(f"batch_{number}", self.draft.taken)
             names.append(name)
             if number > 1:
-                self.out.emit("")
-                self.out.emit("")
+                self.draft.emit("")
+                self.draft.emit("")
             self.open_function(name, "ss", "None", f"Batch {number} of the script {prose(self.artefact.identity)}.", [],
                                reads_tables=False, owner=batch)
             if number == 1:
-                self.out.links[len(self.out.lines)] = sorted({*self.out.links.get(len(self.out.lines), []), body.id},
+                self.draft.links[len(self.draft.lines)] = sorted({*self.draft.links.get(len(self.draft.lines), []), body.id},
                                                              key=lambda i: int(i[1:]))
             self.report_block(batch, batch.children_with("statement"), name, f"batch {number}", [batch],
                               roots=[batch])
-        self.out.emit("")
-        self.out.emit("")
-        self.out.emit(f"BATCHES = [{', '.join(names)}]")
+        self.draft.emit("")
+        self.draft.emit("")
+        self.draft.emit(f"BATCHES = [{', '.join(names)}]")
 
     def report_block(self, container: Node, statements: list[Node], name: str, noun: str, link: list[Node],
                      roots: Sequence[Node] = ()) -> None:
@@ -440,12 +346,11 @@ class Generator:
             if node.id not in wanted and not special:
                 continue
             reasons = [f.reason for f in causes] or [self.statement_reason(container, node)]
-            items.append((node, self.manual_item_at(node, "; ".join(reasons))))
+            items.append((node, self.draft.manual_item_at(node, "; ".join(reasons))))
         for node, item in items:
-            self.out.comments(node, "    ")
-            self.out.emit(f"    # {item.reason}")
-        self.fails = True
-        self.out.emit(f"    raise RuntimeError({self.stub_message(name, noun, len(items))!r})", link)
+            self.draft.comments(node, "    ")
+            self.draft.emit(f"    # {item.reason}")
+        self.draft.fail_when_called(self.stub_message(name, noun, len(items)), link)
 
     @staticmethod
     def statement_reason(container: Node, node: Node) -> str:
@@ -461,30 +366,19 @@ class Generator:
 
     # ------------------------------------------------------------------ manual work
 
-    def manual_item(self, unsupported: Unsupported, output: Node | None, replaces: Node | None = None) -> ManualItem:
-        node = output or unsupported.node
-        self.out.pending.clear()           # pieces of the expression that failed are not in the file
-        item = ManualItem(f"M{len(self.manual) + 1}", node.id, output.id if output else None,
-                          f"Manual work {len(self.manual) + 1}: {unsupported.reason} (source {unsupported.node.span})",
-                          str(unsupported.node.span), (output or replaces or unsupported.node).id)
-        self.manual.append(item)
-        return item
-
-    def manual_item_at(self, node: Node, reason: str) -> ManualItem:
-        text = " ".join(reason.split())
-        item = ManualItem(f"M{len(self.manual) + 1}", node.id, None,
-                          f"Manual work {len(self.manual) + 1}: {node.kind}: {text} (source {node.span})",
-                          str(node.span), node.id)
-        self.manual.append(item)
-        return item
-
-    def manual_column(self, item: ManualItem, output: Node) -> str:
-        """A column that fails loudly on any row, typed as the output so its shape holds."""
+    def failing_column(self, item: ManualItem, output: Node) -> str:
+        """A column that fails loudly on any row, typed as the output where the type allows, so its shape holds. A
+        type with no Spark type leaves the column without a cast, and the report says so: the DataFrame's column
+        then has the type of `raise_error`, not the output's. (A cast that Spark's `cast` alone would not keep
+        exactly leaves the column bare too; the column fails on every row, and this is not recorded.)"""
         code = f"F.raise_error(F.lit({item.reason!r}))"
-        try:
-            return f'{code}.cast("{spark_type(output.value_type, output)}")'
-        except Unsupported:
+        found = spark_types.mapping(output.value_type)
+        if found is None:
+            self.draft.assumptions.append(
+                f"{self.artefact.identity}: the column {output.attrs['output_name']} is generated without a cast: its "
+                f"type {output.type} has no Spark type")
             return code
+        return code if found.inexact_cast else f'{code}.cast("{found.ddl}")'
 
     # ------------------------------------------------------------------ plan steps
 
@@ -500,12 +394,12 @@ class Generator:
                 raise Unsupported(node, "a cross join has no PySpark generation yet")
             left, right = self.plan(node.child("left")), self.plan(node.child("right"))
             condition = self.expr(node.child("condition"), {})
-            var = python_name("joined", self.taken)
+            var = python_name("joined", self.draft.taken)
             self.step(node, f'{var} = {left}.join({right}, {condition}, "{node.attrs["kind"]}")')
             return var
         if node.kind == "filter":
             source = self.plan(node.child("input"))
-            var = python_name("filtered", self.taken)
+            var = python_name("filtered", self.draft.taken)
             self.step(node, f"{var} = {source}.filter({self.expr(node.child('condition'), {})})")
             return var
         if node.kind == "project":
@@ -526,7 +420,7 @@ class Generator:
         if node.attrs.get("temp_table") or node.attrs.get("row_set"):
             raise Unsupported(node, f"reading a temp table or a table variable is procedural code (issue #{untranslatable.PROCEDURAL_ISSUE})")
         table, alias = node.attrs["table"], node.attrs["alias"]
-        var = python_name(alias, self.taken)
+        var = python_name(alias, self.draft.taken)
         kind = self.dependencies.kinds.get(table, "table")
         if kind == "table":
             code = f'spark.read.table("{self.recorded_names.table(table)}").alias("{alias}")'
@@ -545,29 +439,29 @@ class Generator:
         import), under a different name if its own is taken in this file."""
         path, function = self.recorded_names.module(identity, kind)
         module = path.removesuffix(".py").replace("/", ".")
-        for local, line in self.imports.items():
+        for local, line in self.draft.imports.items():
             if line.startswith(f"from {module} import "):
                 return local
-        local = python_name(function, self.taken) if function in self.taken else function
-        self.taken.add(local)
-        self.imports[local] = (f"from {module} import {function}" if local == function
+        local = python_name(function, self.draft.taken) if function in self.draft.taken else function
+        self.draft.taken.add(local)
+        self.draft.imports[local] = (f"from {module} import {function}" if local == function
                                else f"from {module} import {function} as {local}")
         return local
 
     def step(self, node: Node, code: str) -> None:
-        self.out.comments(node, "    ")
-        self.out.emit(f"    # source {node.span}")
-        self.out.emit(f"    {code}", [node] if node.kind == "read_table" else [_shallow(node)])
+        self.draft.comments(node, "    ")
+        self.draft.emit(f"    # source {node.span}")
+        self.draft.emit(f"    {code}", [node] if node.kind == "read_table" else [_shallow(node)])
 
     def project(self, node: Node) -> str:
         source = self.plan(node.child("input"))
-        var = python_name("projected", self.taken)
-        self.out.comments(node, "    ")
-        self.out.emit(f"    # source {node.span}")
-        self.out.emit(f"    {var} = {source}.select(", [_shallow(node)])
+        var = python_name("projected", self.draft.taken)
+        self.draft.comments(node, "    ")
+        self.draft.emit(f"    # source {node.span}")
+        self.draft.emit(f"    {var} = {source}.select(", [_shallow(node)])
         for output in node.children_with("output"):
             self.output_line(output, lambda o: self.expr(o, {}))
-        self.out.emit("    )", [_shallow(node)])
+        self.draft.emit("    )", [_shallow(node)])
         return var
 
     def aggregate(self, node: Node) -> str:
@@ -587,54 +481,51 @@ class Generator:
             exact = [o.attrs["output_name"] for o in outputs if o.kind == "column"
                      and (o.attrs["relation"], o.attrs["column"]) == ref]
             key_alias[ref] = exact[0] if exact else python_name(f"{ref[0]}_{ref[1]}", used)
-        var = python_name("grouped", self.taken)
-        self.out.comments(node, "    ")
-        self.out.emit(f"    # source {node.span}")
-        self.out.emit(f"    {var} = {source}.groupBy(", [_shallow(node)])
+        var = python_name("grouped", self.draft.taken)
+        self.draft.comments(node, "    ")
+        self.draft.emit(f"    # source {node.span}")
+        self.draft.emit(f"    {var} = {source}.groupBy(", [_shallow(node)])
         for key in keys:
             ref = (key.attrs["relation"], key.attrs["column"])
             code = f'F.col("{ref[0]}.{ref[1]}")'
-            self.out.pending.append((key.id, code))
-            self.out.emit(f'        {code}.alias("{key_alias[ref]}"),', [key])
-        self.out.emit("    ).agg(", [_shallow(node)])
+            self.draft.pending.append((key.id, code))
+            self.draft.emit(f'        {code}.alias("{key_alias[ref]}"),', [key])
+        self.draft.emit("    ).agg(", [_shallow(node)])
         in_agg = [o for o in outputs if any(n.kind in AGGREGATE_KINDS for n in o.walk())]
         manual_outputs = set()
         for output in in_agg:
-            try:
-                code = self.expr(output, {})
-            except Unsupported as unsupported:
+            code = self.draft.attempt(functools.partial(self.expr, output, {}), output=output)
+            if isinstance(code, GivenUp):
                 manual_outputs.add(output.id)
-                self.manual_item(unsupported, output)
                 continue
-            self.out.comments(output, "        ")
-            self.out.emit(f'        {code}.alias("{output.attrs["output_name"]}"),', [output])
+            self.draft.comments(output, "        ")
+            self.draft.emit(f'        {code}.alias("{output.attrs["output_name"]}"),', [output])
         if len(manual_outputs) == len(in_agg):
             # Spark's agg needs one expression; a count keeps the groups when every one is manual.
-            self.out.emit('        F.count(F.lit(1)).alias("__groups"),', [_shallow(node)])
-        self.out.emit("    )", [_shallow(node)])
-        selected = python_name("selected", self.taken)
-        self.out.emit(f"    {selected} = {var}.select(", [_shallow(node)])
-        manual_by_node = {m.node: m for m in self.manual}
+            self.draft.emit('        F.count(F.lit(1)).alias("__groups"),', [_shallow(node)])
+        self.draft.emit("    )", [_shallow(node)])
+        selected = python_name("selected", self.draft.taken)
+        self.draft.emit(f"    {selected} = {var}.select(", [_shallow(node)])
+        manual_by_node = {m.node: m for m in self.draft.manual}
         for output in outputs:
             name = output.attrs["output_name"]
             if output.id in manual_by_node:
-                self.out.comments(output, "        ")
-                self.out.emit(f'        {self.manual_column(manual_by_node[output.id], output)}.alias("{name}"),', [output])
+                self.draft.comments(output, "        ")
+                self.draft.emit(f'        {self.failing_column(manual_by_node[output.id], output)}.alias("{name}"),', [output])
             elif output.id in {o.id for o in in_agg}:
-                self.out.emit(f'        F.col("{name}"),', [output])
+                self.draft.emit(f'        F.col("{name}"),', [output])
             else:
                 self.output_line(output, lambda o: self.expr(o, key_alias))
-        self.out.emit("    )", [_shallow(node)])
+        self.draft.emit("    )", [_shallow(node)])
         return selected
 
     def output_line(self, output: Node, generate) -> None:
         name = output.attrs["output_name"]
-        try:
-            code = generate(output)
-        except Unsupported as unsupported:
-            code = self.manual_column(self.manual_item(unsupported, output), output)
-        self.out.comments(output, "        ")
-        self.out.emit(f'        {code}.alias("{name}"),', [output])
+        code = self.draft.attempt(functools.partial(generate, output), output=output)
+        if isinstance(code, GivenUp):
+            code = self.failing_column(code.item, output)
+        self.draft.comments(output, "        ")
+        self.draft.emit(f'        {code}.alias("{name}"),', [output])
 
     # ------------------------------------------------------------------ expressions
 
@@ -643,7 +534,7 @@ class Generator:
         column) of grouping keys to their names after grouping; it is empty before grouping."""
         self.refuse_detected(node)
         code = self.expression(node, grouped)
-        self.out.pending.append((node.id, code))
+        self.draft.pending.append((node.id, code))
         return code
 
     def expression(self, node: Node, grouped: dict) -> str:
@@ -714,7 +605,7 @@ class Generator:
             if node.value_type.param("bits") != 32:
                 raise Unsupported(node, f"{k} returning {node.type} is not generated yet")
             a = self.expr(args[0], {})
-            self.caveats_by_node[node.id] = SUM_INT
+            self.draft.caveats[node.id] = SUM_INT
             if k == "sum":
                 return f'F.sum({a}).cast("int")'
             # AVG over int is the int sum divided by the count of values, truncated toward zero.
@@ -758,7 +649,7 @@ class Generator:
         if len(settings) > 1:
             raise Unsupported(node, f"the literal holds {len(settings)} marked secrets ({', '.join(settings)}): one "
                                     "setting cannot stand for all of them")
-        self.settings_used.append(settings[0])
+        self.draft.settings_used.append(settings[0])
         code = f'F.lit(ss.setting("{settings[0]}"))'
         if node.value_type.name == "string":
             return code

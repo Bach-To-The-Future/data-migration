@@ -103,3 +103,29 @@ def test_a_failing_column_generated_without_its_cast_says_which_column_and_why()
     assert any("no neutral meaning" in m.reason for m in result.file.manual_items), result.records
     assert any("Shape" in record and "Spark type" in record for record in result.records), \
         "nothing in the report says the column Shape has no Spark type"
+
+
+def test_a_failing_column_of_an_inner_select_emitted_without_its_cast_is_recorded_where_it_happens():
+    """`result_columns` records only the columns of the final select list. This column is in a derived table the
+    outer select does not return, so the only record there can be is the one made where the cast is left out."""
+    inner = node("project", "input", ir.read_orders(), column("output", "Status"), column("output", "Shape", ir.NO_TYPE))
+    result = ir.generate(ir.view(node("project", "", inner, column("output", "Status"))))
+
+    assert any("no neutral meaning" in m.reason for m in result.file.manual_items), result.records
+    assert any("Shape" in a and "cast" in a for a in result.file.assumptions), result.records
+
+
+def test_a_wide_select_list_costs_in_step_with_its_width():
+    """Every column is an attempt, and an attempt copies the draft. A copy that grows with the file makes the whole
+    quadratic: 2000 columns took ten seconds when each attempt copied every line in depth, and take well under one
+    when it copies each field one level deep."""
+    import time
+
+    columns = [column("output", f"C{i}") for i in range(2000)]
+    artefact = ir.view(node("project", "", ir.read_orders(), *columns))
+
+    started = time.perf_counter()
+    result = ir.generate(artefact)
+
+    assert time.perf_counter() - started < 3
+    assert result.file.manual_items == []
