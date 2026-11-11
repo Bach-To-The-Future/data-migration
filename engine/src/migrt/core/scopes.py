@@ -121,9 +121,54 @@ def derive(body: Node) -> list[tuple[Node, dict]]:
     return out
 
 
+WRITES = ("insert_rows", "update_rows", "delete_rows")
+
+
+def depends_on_scope(node: Node) -> bool:
+    """Whether the node's meaning depends on an entry of the scope: a variable, a table variable or a temp table it
+    reads, writes, drops or hands to a called procedure."""
+    if node.kind in ("variable", "assign", "assign_from_rows", "call_procedure", "drop_temp_table"):
+        return True
+    if node.kind == "read_table":
+        return bool(node.attrs.get("temp_table") or node.attrs.get("row_set"))
+    if node.kind in WRITES:
+        return node.attrs["target_kind"] in ("temp_table", "row_set")
+    return node.kind == "opaque_fragment" and not node.attrs.get("scope_barrier") and any(
+        node.attrs.get("touches", {}).get(k) for k in ("variables", "temp_tables"))
+
+
+def _own(statement: Node):
+    """The statement and the nodes below it that are not statements of their own (those have their own scope)."""
+    yield statement
+    for child in statement.children:
+        if child.role not in STATEMENT_ROLES:
+            yield from _own_below(child)
+
+
+def _own_below(node: Node):
+    yield node
+    for child in node.children:
+        if child.role not in STATEMENT_ROLES:
+            yield from _own_below(child)
+
+
+def stale(body: Node) -> list[tuple[Node, str]]:
+    """The nodes that depend on a scope entry that may be stale, with the position of the barrier that made it so.
+    After a scope barrier every entry may be stale (it may have been declared, changed or dropped); a node
+    carries `scope_may_be_stale` so that generation handles it explicitly or attaches a caveat, and the report
+    shows it at the construct."""
+    out: list[tuple[Node, str]] = []
+    for statement, scope in derive(body):
+        if scope["barrier"]:
+            out += [(n, scope["barrier"]) for n in _own(statement) if depends_on_scope(n)]
+    return out
+
+
 def annotate(body: Node) -> None:
     for node, scope in derive(body):
         node.attrs = dict(node.attrs, scope=scope)
+    for node, barrier in stale(body):
+        node.attrs = dict(node.attrs, scope_may_be_stale=barrier)
 
 
 def known(scope: dict, name: str, *, row_set: bool = False) -> bool:

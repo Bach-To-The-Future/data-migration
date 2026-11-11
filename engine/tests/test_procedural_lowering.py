@@ -552,3 +552,61 @@ def test_dropping_a_temp_and_a_permanent_table_together_is_kept_as_written_not_f
 
     _, drop = statements(artefact)
     assert drop.kind == "opaque_fragment" and drop.attrs["scope_barrier"] is True
+
+
+# ---------------------------------------------------------------- scope entries that may be stale
+
+def stale(artefact):
+    return [n for n in artefact.nodes() if "scope_may_be_stale" in n.attrs]
+
+
+def test_after_a_scope_barrier_every_node_that_depends_on_a_scope_entry_carries_the_flag(corpus_snapshot):
+    artefact = lowered(corpus_snapshot,
+                       "DECLARE @n int = 1;\nCREATE TABLE #t (Id int);\n"
+                       "SELECT t.Id FROM #t AS t WHERE t.Id = @n;\n"
+                       "EXEC('DROP TABLE #t');\n"
+                       "SET @n = 2;\n"
+                       "SELECT t.Id FROM #t AS t WHERE t.Id = @n;\n"
+                       "INSERT INTO #t (Id) VALUES (@n);")
+
+    *_, dynamic, assign, read, insert = statements(artefact)
+    barrier = str(dynamic.span)
+    flagged = {n.kind: n.attrs["scope_may_be_stale"] for n in stale(artefact)}
+    assert set(flagged.values()) == {barrier}
+    assert assign.attrs["scope_may_be_stale"] == barrier
+    assert insert.attrs["scope_may_be_stale"] == barrier
+    # the table read and the variable read inside the later SELECT, and the variable inside the INSERT's value
+    assert [n.kind for n in read.walk() if "scope_may_be_stale" in n.attrs] == ["read_table", "variable"]
+    # nothing before the barrier is flagged
+    assert not [n for s in statements(artefact)[:3] for n in s.walk() if "scope_may_be_stale" in n.attrs]
+    # a node that depends on no scope entry is not flagged: a literal, a catalog table
+    assert not [n for n in artefact.nodes() if n.kind in ("literal", "compare") and "scope_may_be_stale" in n.attrs]
+
+
+def test_the_flag_reaches_nested_statements_and_the_next_batch_of_a_script(corpus_snapshot):
+    nested = lowered(corpus_snapshot,
+                     "DECLARE @n int = 1;\nEXEC('x');\nIF @n = 1 BEGIN SET @n = 2; WHILE @n < 5 SET @n += 1; END")
+    flagged_kinds = sorted({n.kind for n in stale(nested)})
+    assert flagged_kinds == ["assign", "variable"]
+    assert all(n.attrs["scope_may_be_stale"] for n in of_kind(nested, "assign"))
+    assert len(of_kind(nested, "assign")) == 2 and len(stale(nested)) >= 5       # the condition's variable too
+
+    script, reader = lower_text(corpus_snapshot,
+                                "CREATE TABLE #t (Id int);\nEXEC('x');\nGO\nSELECT t.Id FROM #t AS t;\n",
+                                kind="query_batch", name="script")
+    assert checked(script, reader) == []
+    [read] = of_kind(script, "read_table")
+    assert "scope_may_be_stale" in read.attrs                 # a barrier in one batch still leaves temp tables stale
+
+
+def test_the_checker_refuses_a_missing_or_a_spurious_stale_flag(corpus_snapshot):
+    artefact, reader = proc(corpus_snapshot, "DECLARE @n int = 1;\nEXEC('x');\nSET @n = 2;")
+    assert checked(artefact, reader) == []
+    [assign] = of_kind(artefact, "assign")
+    del assign.attrs["scope_may_be_stale"]
+    assert any("may be stale" in f.message for f in checked(artefact, reader))
+
+    artefact, reader = proc(corpus_snapshot, "DECLARE @n int = 1;\nSET @n = 2;")
+    [assign] = of_kind(artefact, "assign")
+    assign.attrs["scope_may_be_stale"] = "L1:1-L1:2"
+    assert any("no scope barrier" in f.message for f in checked(artefact, reader))

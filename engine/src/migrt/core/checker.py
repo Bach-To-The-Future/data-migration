@@ -124,6 +124,16 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
         for inner in statement.walk():
             scope_for[id(inner)] = scope           # a nested statement is derived after, and takes its own
 
+    expected_stale = {id(n): barrier for n, barrier in scopes.stale(artefact.body)}
+    for n in artefact.nodes():
+        flag = n.attrs.get("scope_may_be_stale")
+        if id(n) in expected_stale and flag != expected_stale[id(n)]:
+            fail(n, f"{n.kind} depends on a scope entry that may be stale after the scope barrier at "
+                    f"{expected_stale[id(n)]}, and does not carry the flag")
+        elif id(n) not in expected_stale and flag is not None:
+            fail(n, f"{n.kind} carries the may-be-stale flag, but no scope barrier comes before it or it depends on "
+                    "no scope entry")
+
     def in_scope(node: Node, name: str, *, row_set: bool = False) -> bool:
         scope = scope_for.get(id(node))
         if scope is None:                        # a view or an inline function: only its parameters exist

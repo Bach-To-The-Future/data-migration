@@ -400,6 +400,8 @@ def _convert_view(snapshot: Snapshot, identity: str, differences: Catalogue,
                  "status": report.CONSTRUCT_MANUAL if item else report.CONSTRUCT_NOT_RECONCILED}
         if item:
             entry["reason"] = item.reason
+        if "scope_may_be_stale" in node.attrs:      # shown at the construct (spec section 4, item 5)
+            entry["scope_may_be_stale"] = f"a scope barrier at {node.attrs['scope_may_be_stale']} comes before it"
         if node.id in generated.differences:
             entry["difference"] = generated.differences[node.id]
             entry["caveat"] = differences.difference(entry["difference"])
