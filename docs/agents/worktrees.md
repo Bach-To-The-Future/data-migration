@@ -12,6 +12,8 @@ Several sessions may implement different tickets at once. Each works in its own 
 
 A rebase can conflict with another session that changed the same file. Resolve it, and run the checks again after, not before.
 
+**Never remove a worktree with `--force`.** Commit or stash everything first, and let `git worktree remove` refuse if anything is uncommitted: its refusal is the check that nothing is about to be lost. Forcing the removal deletes uncommitted work with no way back (it has happened: review fixes made after a squash were lost this way and had to be written again). The same holds for `git branch -D`: use `-d`, which refuses a branch that is not merged. Before removing, `git status` must be clean and the branch's commits must be on `master`.
+
 ## Names that never collide
 
 Every scratch database, schema and engagement created by the tests or the engine carries a per-run suffix, so one run never drops or reads another's.
