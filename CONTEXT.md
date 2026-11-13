@@ -185,6 +185,14 @@ _Avoid_: Lock (which suggests the database enforces it)
 A neutral kind of failure the core names, such as divide by zero or key violation. Each target maps its runtime's failures to error classes, and each source maps error classes to its own error codes.
 _Avoid_: Error number (which belongs to a source), exception type (which belongs to a target)
 
+**Reserved number**:
+The error number a source gives to a failure its error mapping does not cover, so that it cannot be mistaken for any error the mapping reproduces. A comparison in the original code against a number the mapping does not cover is flagged in the report.
+_Avoid_: Unknown error, default error
+
+**Guarded statement**:
+A statement of a procedure that reads `@@ERROR`, run in a block that records the failure and then goes on, ends the procedure, or ends everything, as SQL Server does for that error (ADR 0004).
+_Avoid_: Wrapped statement, try block (which is `TRY`/`CATCH`)
+
 **Silent difference**:
 A construct whose obvious target equivalent runs without error but gives a different result, such as integer division or trailing spaces in a comparison. Each is an entry in the differences catalogue, identified by its entry ID (such as 3.14).
 _Avoid_: Gotcha, incompatibility (which suggests a loud failure)
