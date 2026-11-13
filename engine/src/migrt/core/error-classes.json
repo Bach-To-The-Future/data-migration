@@ -1,0 +1,341 @@
+{
+  "about": "The core's neutral error classes (ADR 0019). A target maps its runtime's failures to these names and the details each takes; a source maps each class to its own codes, messages and severities. A class speaks of the failure, never of a runtime. A failure no target maps to a class, or a class no source covers, gets the source's reserved code and is flagged. A new class is added by the ticket that builds the behaviour that raises it, with its entries in both halves and a case in tests/error_cases.py.",
+  "classes": [
+    {
+      "name": "divide_by_zero",
+      "meaning": "A division or a remainder had a divisor of zero.",
+      "details": []
+    },
+    {
+      "name": "arithmetic_overflow",
+      "meaning": "A result of arithmetic, or a value converted to another number type, does not fit the type it must take.",
+      "details": [
+        {
+          "name": "to_type",
+          "meaning": "The vocabulary type the value had to fit, by name: an integer with its bits and sign, such as integer(32, signed), and any other type by its name alone, such as decimal."
+        },
+        {
+          "name": "from_type",
+          "meaning": "The vocabulary type of the value converted, when the code that converts knows it; a target's runtime does not say."
+        }
+      ]
+    },
+    {
+      "name": "conversion_failure",
+      "meaning": "A text could not be converted to a number type.",
+      "details": [
+        {
+          "name": "value",
+          "meaning": "The text that failed."
+        },
+        {
+          "name": "to_type",
+          "meaning": "The vocabulary type the value had to fit, by name: an integer with its bits and sign, such as integer(32, signed), and any other type by its name alone, such as decimal."
+        },
+        {
+          "name": "from_type",
+          "meaning": "The vocabulary type of the text, such as string(bytes) or string(utf16), when the code that converts knows it; a target's runtime does not say."
+        }
+      ]
+    },
+    {
+      "name": "datetime_conversion_failure",
+      "meaning": "A text could not be converted to a date or a time.",
+      "details": [
+        {
+          "name": "value",
+          "meaning": "The text that failed."
+        }
+      ]
+    },
+    {
+      "name": "scalar_subquery_multiple_rows",
+      "meaning": "A query used as a single value returned more than one row.",
+      "details": []
+    },
+    {
+      "name": "not_null_violation",
+      "meaning": "A null was written to a column that does not allow nulls.",
+      "details": [
+        {
+          "name": "column",
+          "meaning": "The column."
+        },
+        {
+          "name": "table",
+          "meaning": "The table, qualified by database and schema."
+        },
+        {
+          "name": "verb",
+          "meaning": "The write that failed: INSERT or UPDATE."
+        }
+      ]
+    },
+    {
+      "name": "check_violation",
+      "meaning": "A written row broke a check constraint.",
+      "details": [
+        {
+          "name": "constraint",
+          "meaning": "The constraint's name."
+        },
+        {
+          "name": "verb",
+          "meaning": "The write that failed: INSERT or UPDATE."
+        },
+        {
+          "name": "database",
+          "meaning": "The database of the table."
+        },
+        {
+          "name": "table",
+          "meaning": "The table, qualified by schema."
+        },
+        {
+          "name": "column",
+          "meaning": "The column the constraint is on, when it is on exactly one."
+        }
+      ]
+    },
+    {
+      "name": "foreign_key_violation",
+      "meaning": "A write left a foreign key without its parent row: a child written with no parent, or a parent changed or removed while a child still refers to it.",
+      "details": [
+        {
+          "name": "constraint",
+          "meaning": "The constraint's name."
+        },
+        {
+          "name": "kind",
+          "meaning": "FOREIGN KEY when the child is written; REFERENCE when the parent is changed; SAME TABLE REFERENCE when the table refers to itself."
+        },
+        {
+          "name": "verb",
+          "meaning": "The write that failed: INSERT, UPDATE or DELETE."
+        },
+        {
+          "name": "database",
+          "meaning": "The database of the table named."
+        },
+        {
+          "name": "table",
+          "meaning": "The table named, qualified by schema."
+        },
+        {
+          "name": "column",
+          "meaning": "The first column of the key on that table."
+        }
+      ]
+    },
+    {
+      "name": "primary_key_violation",
+      "meaning": "A write would give two rows the same primary key.",
+      "details": [
+        {
+          "name": "constraint",
+          "meaning": "The constraint's name."
+        },
+        {
+          "name": "table",
+          "meaning": "The table, qualified by schema."
+        },
+        {
+          "name": "key",
+          "meaning": "The duplicate key value, written as the source writes a key."
+        }
+      ]
+    },
+    {
+      "name": "unique_constraint_violation",
+      "meaning": "A write would give two rows the same value under a unique constraint.",
+      "details": [
+        {
+          "name": "constraint",
+          "meaning": "The constraint's name."
+        },
+        {
+          "name": "table",
+          "meaning": "The table, qualified by schema."
+        },
+        {
+          "name": "key",
+          "meaning": "The duplicate key value, written as the source writes a key."
+        }
+      ]
+    },
+    {
+      "name": "unique_index_violation",
+      "meaning": "A write would give two rows the same value under a unique index.",
+      "details": [
+        {
+          "name": "index",
+          "meaning": "The index's name."
+        },
+        {
+          "name": "table",
+          "meaning": "The table, qualified by schema."
+        },
+        {
+          "name": "key",
+          "meaning": "The duplicate key value, written as the source writes a key."
+        }
+      ]
+    },
+    {
+      "name": "object_not_found",
+      "meaning": "A statement named a table, view or other object that does not exist. Found when the statement runs, not before: the code around it has already begun.",
+      "details": [
+        {
+          "name": "name",
+          "meaning": "The name as the statement wrote it."
+        }
+      ]
+    },
+    {
+      "name": "column_not_found",
+      "meaning": "A statement named a column that does not exist. Found when the statement runs, not before.",
+      "details": [
+        {
+          "name": "name",
+          "meaning": "The name as the statement wrote it."
+        }
+      ]
+    },
+    {
+      "name": "object_already_exists",
+      "meaning": "A statement created an object under a name already taken.",
+      "details": [
+        {
+          "name": "name",
+          "meaning": "The name."
+        }
+      ]
+    },
+    {
+      "name": "drop_target_not_found",
+      "meaning": "A statement dropped an object that does not exist.",
+      "details": [
+        {
+          "name": "name",
+          "meaning": "The name."
+        }
+      ]
+    },
+    {
+      "name": "identity_insert_not_allowed",
+      "meaning": "A value was written explicitly to a column the system numbers, while explicit writes to it are off.",
+      "details": [
+        {
+          "name": "table",
+          "meaning": "The table."
+        }
+      ]
+    },
+    {
+      "name": "identity_update_not_allowed",
+      "meaning": "An update changed a column the system numbers.",
+      "details": [
+        {
+          "name": "column",
+          "meaning": "The column."
+        }
+      ]
+    },
+    {
+      "name": "nesting_level_exceeded",
+      "meaning": "Procedures, functions, triggers or views called one another more deeply than the limit.",
+      "details": []
+    },
+    {
+      "name": "transaction_request_without_begin",
+      "meaning": "A commit, a rollback or a savepoint was requested while no transaction was open.",
+      "details": [
+        {
+          "name": "request",
+          "meaning": "COMMIT, ROLLBACK or SAVE."
+        }
+      ]
+    },
+    {
+      "name": "savepoint_not_found",
+      "meaning": "A rollback named a savepoint or a transaction that is not open.",
+      "details": [
+        {
+          "name": "name",
+          "meaning": "The name."
+        }
+      ]
+    },
+    {
+      "name": "raised_error",
+      "meaning": "The code raised an error of its own at a severity that transfers control to a handler, and processing goes on after it unless the setting that aborts on error is on. Number, message, severity and state are the code's.",
+      "details": [
+        {
+          "name": "message",
+          "meaning": "The message text, already formatted."
+        },
+        {
+          "name": "severity",
+          "meaning": "The severity the code gave."
+        },
+        {
+          "name": "state",
+          "meaning": "The state the code gave."
+        }
+      ]
+    },
+    {
+      "name": "thrown_error",
+      "meaning": "The code raised an error of its own in the form that ends the batch. Number, message and state are the code's; the severity is fixed.",
+      "details": [
+        {
+          "name": "number",
+          "meaning": "The error number the code gave."
+        },
+        {
+          "name": "message",
+          "meaning": "The message text."
+        },
+        {
+          "name": "state",
+          "meaning": "The state the code gave."
+        }
+      ]
+    },
+    {
+      "name": "throw_number_out_of_range",
+      "meaning": "The code raised an error of its own with a number outside the range reserved for the code's own errors.",
+      "details": [
+        {
+          "name": "number",
+          "meaning": "The number the code gave."
+        }
+      ]
+    },
+    {
+      "name": "raise_severity_not_permitted",
+      "meaning": "The code raised an error of its own at a severity reserved for the system.",
+      "details": []
+    },
+    {
+      "name": "raise_format_invalid",
+      "meaning": "The message text of an error the code raised holds a placeholder that is not valid.",
+      "details": [
+        {
+          "name": "format",
+          "meaning": "The invalid placeholder, as written."
+        }
+      ]
+    },
+    {
+      "name": "raise_argument_mismatch",
+      "meaning": "A value given for a placeholder of an error message is not of the type the placeholder takes.",
+      "details": [
+        {
+          "name": "index",
+          "meaning": "The position of the value, counting from 1."
+        }
+      ]
+    }
+  ]
+}

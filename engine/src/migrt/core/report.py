@@ -58,7 +58,8 @@ def recognised_artefact(*, name: str, type: str, inventory: dict, references: li
 
 def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, layer1: dict,
                      constructs: list[dict], degradations: list[dict], secrets: list[dict],
-                     name_adjustments: dict[str, dict[str, str]], hints: list[dict] | None = None) -> dict:
+                     name_adjustments: dict[str, dict[str, str]], hints: list[dict] | None = None,
+                     flags: list[dict] | None = None) -> dict:
     return {
         "name": name,
         "type": artefact_type,
@@ -67,7 +68,7 @@ def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, l
         "validation": "Not run",
         "status": NOT_RECONCILED,
         "sign_off_group": PREVIEW_GROUP,
-        "flags": [],
+        "flags": flags or [],
         "output": output,
         "layer1": layer1,
         "constructs": constructs,

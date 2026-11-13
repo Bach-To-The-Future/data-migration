@@ -13,6 +13,7 @@ import time
 import uuid
 from typing import Callable
 
+from migrt.sources.sqlserver import error_mapping
 from migrt.sources.sqlserver.connection import Connection, ServerMessage
 
 import migrt_spark as lib
@@ -163,12 +164,13 @@ class Duo:
         return f"{self.schema}.{name}"
 
     def session(self, *, job: str = "job", run: str | None = None, spark=None, config: lib.Config | None = None,
-                settings=None, **more) -> lib.SessionState:
+                settings=None, errors=True, **more) -> lib.SessionState:
         """A session state over this Duo's tables with the clock and the state table the tests use. Each call gets its own
         Spark session, as each job run has its own in production."""
         ss = lib.SessionState.open(
             (spark or self.spark).newSession(), job=job, run=run or uuid.uuid4().hex[:8], state_table=self.state_table,
             tables=list(self.specs.values()), settings=settings,
+            errors=error_mapping.load() if errors is True else (errors or None),
             config=config or lib.Config(scratch_schema=self.schema, database=self.database, clock=self.clock), **more)
         self._sessions.append(ss)
         return ss

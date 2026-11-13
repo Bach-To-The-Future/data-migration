@@ -25,11 +25,14 @@ from pyspark.sql import Column as SparkColumn
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
-from . import constraints, deltaops, recovery
+from . import constraints, deltaops, raiserror, recovery
 from .config import TRIGGER_NESTING_LIMIT, VERSION_TAG, Config
-from .errors import (CounterNotInitialised, LeaseHeld, LeaseLost, LeaseWaitTimeout, ManualWrite, TsqlError,
-                     UnknownTable)
+from .errors import (CounterNotInitialised, ErrorFieldUnknown, ErrorMappingNotLoaded, Failure, LeaseHeld, LeaseLost,
+                     LeaseWaitTimeout, ManualWrite, RethrowOutsideHandler, ScopeAborted, TsqlError, UnknownTable,
+                     UnsupportedRaise)
 from .settings import Settings
+from .source_errors import Rendered, SourceErrors
+from .target_errors import Classified, SparkFailures
 from .state import StateTable, lit
 from .tables import ForeignKey, TableSpec
 from .transactions import Transaction, TxManager
@@ -44,6 +47,19 @@ class _Scope:
     names: dict[str, str] = dataclasses.field(default_factory=dict)             # lower-case name -> the name as written
     owned: list[str] = dataclasses.field(default_factory=list)                  # snapshots to drop when it ends
     scope_identity: int | None = None
+    procedure: "str | None | Any" = None        # what ERROR_PROCEDURE() says here: a name, None for a batch, UNKNOWN if not given
+
+
+UNKNOWN = object()                              # a scope whose generated code never said which procedure it is
+
+
+@dataclasses.dataclass(frozen=True)
+class Message:
+    """A message in the session's message stream: PRINT, or RAISERROR at severity 10 or below."""
+    number: int
+    severity: int
+    state: int
+    text: str
 
 
 class _Heartbeat(threading.Thread):
@@ -73,8 +89,11 @@ class _Heartbeat(threading.Thread):
 
 class SessionState:
     def __init__(self, spark: SparkSession, *, job: str, run: str, state_table: str, tables: Iterable[TableSpec] = (),
-                 settings: "str | dict | Any | None" = None, config: Config = Config()):
+                 settings: "str | dict | Any | None" = None, config: Config = Config(),
+                 errors: "str | dict | SourceErrors | None" = None):
         self.spark, self.job, self.run, self.config = spark, job, run, config
+        self.errors: SourceErrors | None = SourceErrors.load(errors) if errors is not None else None
+        self.failures = SparkFailures.load()
         self.clock = config.clock
         self.state = StateTable(spark, state_table, config.clock)
         self.settings = Settings.load(settings)
@@ -89,9 +108,14 @@ class SessionState:
         self.rowcount, self.at_error, self.identity = 0, 0, None
         self.error: TsqlError | None = None
         self.messages: list[str] = []
+        self.message_records: list[Message] = []
+        self.unmapped_errors: list[TsqlError] = []     # failures the mapping did not cover, with the reserved number
+        self.xact_abort = False
+        self.statement_line: int | None = None         # the line of the statement running, when generated code says
+        self._tries: list[int] = []                    # the call depth of each TRY block in progress
         self.values: dict[str, Any] = {}
         self.updated_columns: set[str] = set()
-        self._scopes = [_Scope()]
+        self._scopes = [_Scope(procedure=None)]
         self._tx = TxManager(self)
         self._held: set[str] = set()
         self._lost: set[str] = set()
@@ -106,9 +130,11 @@ class SessionState:
 
     @classmethod
     def open(cls, spark: SparkSession, *, job: str, run: str, state_table: str, tables: Iterable[TableSpec] = (),
-             settings=None, config: Config = Config()) -> "SessionState":
-        """Start a run: recover what earlier runs left unfinished before any other work, then start the heartbeat."""
-        ss = cls(spark, job=job, run=run, state_table=state_table, tables=tables, settings=settings, config=config)
+             settings=None, config: Config = Config(), errors=None) -> "SessionState":
+        """Start a run: recover what earlier runs left unfinished before any other work, then start the heartbeat. `errors` is
+        the source's half of the error mapping, the project's `error-mapping.json`."""
+        ss = cls(spark, job=job, run=run, state_table=state_table, tables=tables, settings=settings, config=config,
+                 errors=errors)
         mine = deltaops.marker(job, run)
         owner = spark.conf.get(deltaops.MARKER_CONF, None)
         if owner not in (None, "", mine):
@@ -175,6 +201,7 @@ class SessionState:
 
     def print(self, text: str) -> None:
         self.messages.append(text)
+        self.message_records.append(Message(0, 0, 1, text))
 
     def updated(self, column: str) -> bool:
         """`UPDATE(column)` inside a trigger."""
@@ -189,15 +216,168 @@ class SessionState:
         finally:
             self.error = previous
 
+    # ------------------------------------------------------------------ errors (spec section 6)
+
+    @property
+    def errors_reserved_number(self) -> int:
+        if self.errors is None:
+            raise ErrorMappingNotLoaded("unmapped")
+        return int(self.errors.reserved["number"])
+
+    def fail(self, error_class: str, *, cause: BaseException | None = None, **details) -> TsqlError:
+        """The error of an error class, as the source reports it. Sets the error number (`@@ERROR`); the caller raises it."""
+        if self.errors is None:
+            raise ErrorMappingNotLoaded(error_class)
+        return self._error(self.errors.render(error_class, details), error_class, cause)
+
+    def _error(self, rendered: Rendered, error_class: str | None, cause: BaseException | None) -> TsqlError:
+        scope = self._scopes[-1]
+        known = scope.procedure is not UNKNOWN
+        error = TsqlError(rendered.number, rendered.severity, rendered.state, rendered.message,
+                          error_class=None if rendered.unmapped else error_class, ends=rendered.ends,
+                          catchable_at_same_level=rendered.catchable_at_same_level, exact_message=rendered.exact_message,
+                          unmapped=rendered.unmapped, cause=cause, depth=len(self._scopes),
+                          procedure=scope.procedure if known else None, procedure_known=known, line=self.statement_line)
+        if rendered.unmapped:
+            self.unmapped_errors.append(error)
+        self.at_error = error.number
+        return error
+
+    def translate(self, exc: BaseException, *, operation: str | None = None,
+                  details: "dict | Callable[[Classified], dict] | None" = None) -> TsqlError | None:
+        """The error a failure stands for: a `TsqlError` as it is, the library's own `Failure` as its class, and a Spark or
+        Delta failure through the target's mapping to a class and the source's mapping to its error, or to the reserved number
+        when no rule covers it. None for anything else: a bug is not an error the program could have caught."""
+        if isinstance(exc, TsqlError):
+            if exc.depth is None:
+                exc.depth = len(self._scopes)
+            return exc
+        if isinstance(exc, Failure):
+            return self.fail(exc.error_class, **exc.details)
+        if not isinstance(exc, Exception):
+            return None
+        classified = self.failures.classify(exc, operation)
+        if classified is None:
+            return None
+        if self.errors is None:
+            raise ErrorMappingNotLoaded(classified.error_class or "an unmapped failure") from exc
+        if classified.error_class is None:
+            return self._error(self.errors.unmapped(f"{classified.reason}.", classified.message), None, exc)
+        extra = details(classified) if callable(details) else (details or {})
+        return self._error(self.errors.render(classified.error_class, {**classified.details, **extra}),
+                           classified.error_class, exc)
+
+    def try_catch(self) -> "TryBlock":
+        """`BEGIN TRY ... END TRY`. The body runs in a `with`; an error the CATCH would have caught is held, not raised, and the
+        handler runs after the block (`if block.error: with ss.handling(block.error): ...`), where an error of its own is not
+        caught by this TRY. An error T-SQL's CATCH would not have caught is raised again: a name that does not resolve at the
+        same call depth as the TRY (finding 7.6), and anything that is not an error of the source at all."""
+        return TryBlock(self)
+
+    def guarded(self) -> "Guard":
+        """One statement of a procedure that reads `@@ERROR` (ADR 0004). A failure records its number and the procedure goes on,
+        or stops, as SQL Server does for that error: it goes on if the error ends only the statement, ends the procedure if
+        it ends its scope, and ends everything if it ends the batch. Inside a TRY at the same call depth the error is the
+        catch's, and with `XACT_ABORT` on every error ends the batch."""
+        return Guard(self)
+
+    def set_xact_abort(self, on: bool) -> None:
+        """`SET XACT_ABORT`: with it on, an error ends the batch and a guarded statement lets it through."""
+        self.xact_abort = bool(on)
+
+    def raise_error(self, template: str, severity: int, state: int, *args, seterror: bool = False, log: bool = False) -> None:
+        """`RAISERROR(template, severity, state, args)`. At severity 10 or below it is a message and returns; above that it
+        raises error 50000 with the formatted text, ending only the statement."""
+        if log:
+            raise UnsupportedRaise("RAISERROR ... WITH LOG writes to the server's error log, which generated code cannot do; "
+                                   "this is manual work.")
+        severity = max(severity, 0)
+        if severity > 18:
+            raise self.fail("raise_severity_not_permitted")
+        try:
+            text = raiserror.format_text(template, args)
+        except Failure as failure:
+            raise self.fail(failure.error_class, **failure.details) from None
+        state = raiserror.clamp_raise_state(state)
+        if severity <= 10:
+            self.messages.append(text)
+            self.message_records.append(Message(50000, severity, state, text))
+            self.at_error = 50000 if seterror else 0
+            return
+        raise self.fail("raised_error", message=text, severity=severity, state=state)
+
+    def throw(self, number: int, message: str, state: int) -> None:
+        """`THROW number, message, state`: always severity 16, and it ends the batch."""
+        if number < 50000:
+            raise self.fail("throw_number_out_of_range", number=number)
+        raise self.fail("thrown_error", number=number, message=raiserror.throw_text(message), state=state % 256)
+
+    def rethrow(self) -> None:
+        """`THROW;` inside a CATCH block: the error being handled, unchanged, ending the batch."""
+        handled = self.error
+        if handled is None:
+            raise RethrowOutsideHandler("THROW without arguments outside a CATCH block: SQL Server refuses it when it compiles "
+                                        "the batch, so generated code never has one.")
+        again = TsqlError(handled.number, handled.severity, handled.state, handled.message, error_class=handled.error_class,
+                          ends="batch", exact_message=handled.exact_message, unmapped=handled.unmapped, cause=handled,
+                          depth=len(self._scopes), procedure=handled.procedure, procedure_known=handled.procedure_known,
+                          line=handled.line)
+        self.at_error = handled.number
+        raise again
+
+    def error_number(self) -> int | None:
+        return None if self.error is None else self.error.number
+
+    def error_severity(self) -> int | None:
+        return None if self.error is None else self.error.severity
+
+    def error_state(self) -> int | None:
+        return None if self.error is None else self.error.state
+
+    def error_message(self) -> str | None:
+        return None if self.error is None else self.error.message
+
+    def error_line(self) -> int | None:
+        """`ERROR_LINE()`: the line generated code said it was running when the error was raised."""
+        if self.error is None:
+            return None
+        if self.error.line is None:
+            raise ErrorFieldUnknown("ERROR_LINE() was read for an error raised where generated code never said which line it "
+                                    "ran (set ss.statement_line before the statement).")
+        return self.error.line
+
+    def error_procedure(self) -> str | None:
+        """`ERROR_PROCEDURE()`: the procedure the error was raised in, None for a batch."""
+        if self.error is None:
+            return None
+        if not self.error.procedure_known:
+            raise ErrorFieldUnknown("ERROR_PROCEDURE() was read for an error raised in a call depth that generated code never "
+                                    "named (ss.scope(<name>)).")
+        return self.error.procedure
+
+    def error_field(self, name: str):
+        """One field of the error being handled: number, message, severity, state, line or procedure."""
+        return getattr(self, f"error_{name.lower()}")()
+
     # ------------------------------------------------------------------ call depth, temp tables and scratch tables
 
     @contextlib.contextmanager
-    def scope(self) -> Iterator[None]:
-        """A call depth: a procedure, function or trigger. Temp tables created inside are dropped when it ends."""
-        scope = _Scope()
+    def scope(self, procedure: "str | None | Any" = UNKNOWN) -> Iterator[None]:
+        """A call depth: a procedure, function or trigger, named for ERROR_PROCEDURE(). Temp tables created inside are dropped
+        when it ends. An error that leaves it is an error of this call depth: a TRY beside the statement that failed does not
+        see a name that did not resolve, and the TRY of the caller does (finding 7.6). A guarded statement that ended the
+        procedure ends it here, and the caller goes on."""
+        scope = _Scope(procedure=procedure)
         self._scopes.append(scope)
         try:
             yield
+        except ScopeAborted as stopped:
+            self.at_error = stopped.error.number
+        except Exception as exc:
+            error = self.translate(exc)
+            if error is None or error is exc:
+                raise
+            raise error from exc
         finally:
             self._scopes.pop()
             for spec in scope.temps.values():
@@ -250,7 +430,7 @@ class SessionState:
         scope = self._scopes[-1]
         key = spec.target.lower()
         if key in scope.temps:
-            raise TsqlError(2714, 16, 6, f"There is already an object named '{spec.target}' in the database.")
+            raise self.fail("object_already_exists", name=spec.target)
         physical = self._scratch_name(re.sub(r"[^0-9A-Za-z]", "", spec.target) or "t")
         columns = ", ".join(f"`{c.name}` {c.type}" for c in spec.columns)
         self.spark.sql(f"CREATE TABLE {physical} ({columns}) USING DELTA")
@@ -269,7 +449,7 @@ class SessionState:
                 self._drop_physical(scope.temps.pop(name.lower()).target)
                 del scope.names[name.lower()]
                 return
-        raise TsqlError(3701, 11, 5, f"Cannot drop the table '{name}', because it does not exist or you do not have permission.")
+        raise self.fail("drop_target_not_found", name=name)
 
     # ------------------------------------------------------------------ resolving names
 
@@ -281,7 +461,7 @@ class SessionState:
         if found is not None:
             return found
         if name.startswith(("#", "@")):
-            raise TsqlError(208, 16, 1, f"Invalid object name '{name}'.")
+            raise self.fail("object_not_found", name=name)
         raise UnknownTable(f"{name} is not described in the catalog the session was given: the wrappers write only to "
                            f"tables whose constraints they know.")
 
@@ -384,7 +564,7 @@ class SessionState:
             raise ValueError("insert_values needs at least one column")
         for k in names:
             if not spec.has_column(k):
-                raise TsqlError(207, 16, 1, f"Invalid column name '{k}'.")
+                raise self.fail("column_not_found", name=k)
         schema = ", ".join(f"`{spec.column(k).name}` {spec.column(k).type}" for k in names)
         df = self.spark.createDataFrame([tuple(r.get(k) for k in names) for r in rows], schema)
         self._statement(spec, "insert", lambda: self._run_insert(spec, df, identity_insert))
@@ -395,8 +575,8 @@ class SessionState:
         touched = {spec.column(c).name for c in set} if all(spec.has_column(c) for c in set) else None
         if touched is None:
             bad = next(c for c in set if not spec.has_column(c))
-            self.at_error, self.rowcount = 207, 0
-            raise TsqlError(207, 16, 1, f"Invalid column name '{bad}'.")
+            self.rowcount = 0
+            raise self.fail("column_not_found", name=bad)
         self.updated_columns = {*touched}
         cond = F.expr(where) if isinstance(where, str) else where
         assignments = {spec.column(c).name: (v if isinstance(v, SparkColumn) else F.lit(v)) for c, v in set.items()}
@@ -432,6 +612,26 @@ class SessionState:
         except TsqlError as err:
             self.at_error, self.rowcount = err.number, 0
             raise
+        except Exception as exc:                          # a Failure of the library's, or a failure of Spark or Delta
+            error = self.translate(exc, operation=event, details=lambda c: self._write_details(spec, event, c))
+            if error is None:
+                raise
+            self.rowcount = 0
+            raise error from exc
+
+    def _write_details(self, spec: TableSpec, event: str, classified: Classified) -> dict:
+        """What a failure of Delta cannot say about the write it failed: the table, the statement and the catalog's spelling of
+        a constraint's name (Delta folds it to lower case)."""
+        verb = event.upper()
+        if classified.error_class == "not_null_violation":
+            return {"table": f"{spec.database}.{spec.schema}.{spec.name}", "verb": verb}
+        if classified.error_class == "check_violation":
+            named = classified.details.get("constraint", "").lower()
+            check = next((c for c in spec.checks if c.name.lower() == named), None)
+            columns = check.columns if check else ()
+            return {"verb": verb, "database": spec.database, "table": spec.qualified,
+                    **({"constraint": check.name} if check else {}), **({"column": columns[0]} if len(columns) == 1 else {})}
+        return {}
 
     def _writes_several_tables(self, spec: TableSpec, event: str, touched) -> bool:
         if spec.triggers_for(event, "after") or spec.triggers_for(event, "instead_of"):
@@ -445,12 +645,11 @@ class SessionState:
         given: dict[str, str] = {}
         for c in df.columns:
             if not spec.has_column(c):
-                raise TsqlError(207, 16, 1, f"Invalid column name '{c}'.")
+                raise self.fail("column_not_found", name=c)
             given[spec.column(c).name] = c
         ident, rowversion = spec.identity_column, spec.rowversion_column
         if ident and ident.name in given and not identity_insert:
-            raise TsqlError(544, 16, 1, f"Cannot insert explicit value for identity column in table '{spec.name}' when "
-                                        f"IDENTITY_INSERT is set to OFF.")
+            raise self.fail("identity_insert_not_allowed", table=spec.name)
         owned: list[str] = []
         try:
             filled = df.select(
@@ -518,7 +717,7 @@ class SessionState:
         """Update the rows `pairs` describes, each with its old (`o_`) and new (`n_`) values: check, write, cascade, fire."""
         ident, rowversion = spec.identity_column, spec.rowversion_column
         if ident and ident.name in touched:
-            raise TsqlError(8102, 16, 1, f"Cannot update identity column '{ident.name}'.")
+            raise self.fail("identity_update_not_allowed", column=ident.name)
         self._lease(spec)
         incoming = self.incoming.get(spec.target.lower(), [])
         low = {t.lower() for t in touched}
@@ -735,8 +934,7 @@ class SessionState:
             if self._trigger_stack and self._trigger_stack[-1] == spec.target and not self.config.recursive_triggers:
                 return                                                 # direct recursion is off unless the database says so
             if len(self._trigger_stack) >= TRIGGER_NESTING_LIMIT:
-                raise TsqlError(217, 16, 1, "Maximum stored procedure, function, trigger, or view nesting level exceeded "
-                                            f"(limit {TRIGGER_NESTING_LIMIT}).")
+                raise self.fail("nesting_level_exceeded")
             updated = self.updated_columns
             self._trigger_stack.append(spec.target)
             try:
@@ -781,3 +979,60 @@ class SessionState:
             self._closed = True
         if self._heartbeat and self._heartbeat.error:                      # a run that never wrote again must hear of it too
             raise LeaseLost(f"This run's heartbeat failed ({self._heartbeat.error}), so its leases may have expired while it ran.")
+
+
+class TryBlock:
+    """`BEGIN TRY`: see `SessionState.try_catch`. `error` is the error the CATCH block handles, None if the body went through."""
+
+    def __init__(self, ss: SessionState):
+        self.ss, self.error = ss, None
+        self._depth = len(ss._scopes)
+
+    def __enter__(self) -> "TryBlock":
+        self.ss._tries.append(self._depth)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.ss._tries.pop()
+        if exc is None or not isinstance(exc, Exception):
+            return False
+        error = self.ss.translate(exc)
+        if error is None:
+            return False                                           # not an error of the source: a bug, never caught
+        if not error.catchable_at_same_level and error.depth == self._depth:
+            if error is exc:
+                return False
+            raise error from exc                                   # a CATCH beside the failing statement does not see it
+        self.error = error
+        self.ss.at_error = error.number
+        return True
+
+
+class Guard:
+    """One guarded statement: see `SessionState.guarded`."""
+
+    def __init__(self, ss: SessionState):
+        self.ss = ss
+
+    def __enter__(self) -> "Guard":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        ss = self.ss
+        if exc is None:
+            ss.at_error = 0
+            return False
+        if not isinstance(exc, Exception) or isinstance(exc, ScopeAborted):
+            return False
+        error = ss.translate(exc)
+        if error is None:
+            return False
+        ss.at_error = error.number
+        inside_try = bool(ss._tries) and ss._tries[-1] == len(ss._scopes)
+        if inside_try or ss.xact_abort or error.ends == "batch" or (error.ends == "scope" and len(ss._scopes) == 1):
+            if error is exc:
+                return False
+            raise error from exc
+        if error.ends == "scope":
+            raise ScopeAborted(error) from exc
+        return True                                                # the statement ended and the procedure goes on

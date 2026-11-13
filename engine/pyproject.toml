@@ -14,7 +14,9 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.package-data]
-migrt = ["core/operation-vocabulary.json", "sources/sqlserver/differences.json", "targets/pyspark/differences.json"]
+migrt = ["core/operation-vocabulary.json", "core/error-classes.json", "sources/sqlserver/differences.json",
+         "sources/sqlserver/error-mapping.json", "targets/pyspark/differences.json"]
+migrt_spark = ["spark-failures.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

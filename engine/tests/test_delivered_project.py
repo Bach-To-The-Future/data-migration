@@ -44,7 +44,7 @@ def test_the_project_follows_the_decided_layout_with_a_package_for_every_folder(
     folders = {p.parent for p in (tmp_path / "converted").rglob("*.py") if p.name != "__init__.py"}
     folders |= {p for f in folders for p in f.parents if p != tmp_path and tmp_path in p.parents}
     assert all((folder / "__init__.py").is_file() for folder in folders), sorted(map(str, folders))
-    for name in ("manifest.json", "settings.json", "representation-rules.md"):
+    for name in ("manifest.json", "settings.json", "error-mapping.json", "representation-rules.md"):
         assert (tmp_path / name).is_file(), name
 
 
@@ -260,3 +260,17 @@ def test_generated_assumptions_reach_the_report(engagement, extractor_server, tm
     report = read_json(result.report_data_path)
     text = json.dumps(report["degradations"])
     assert "DATEFIRST" in text and "DATEFORMAT" in text and "not read from the server" in text
+
+
+def test_the_project_carries_the_sources_half_of_the_error_mapping_for_session_state_to_read(engagement, extractor_server, tmp_path):
+    """The library holds the target's half; the source's half is data beside the settings (ADR 0019), and the library reads
+    exactly what the engine's half says."""
+    from migrt.sources.sqlserver import error_mapping
+    from migrt_spark import SourceErrors
+
+    run(engagement, extractor_server, tmp_path)
+
+    delivered = read_json(tmp_path / "error-mapping.json")
+    assert delivered == error_mapping.load()
+    assert SourceErrors.load(tmp_path / "error-mapping.json").render("divide_by_zero").number == 8134
+    assert "error-mapping.json" in (tmp_path / "README.md").read_text(encoding="utf-8")

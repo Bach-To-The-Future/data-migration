@@ -9,15 +9,76 @@ import datetime
 
 
 class TsqlError(Exception):
-    """An error as SQL Server reports it."""
+    """An error as the source reports it: its number, severity, state and text, and what the mapping knows of it.
 
-    def __init__(self, number: int, severity: int, state: int, message: str):
+    `error_class` is the core's neutral class it came from (None when the code raised it with a number of its own);
+    `ends` says how far it reaches (statement, scope or batch); `catchable_at_same_level` is False for an error a CATCH
+    beside the failing statement does not see; `exact_message` is False when the failure did not carry what the source's
+    message needs, so the text is a stand-in; `unmapped` is True when the source has no entry for the failure and the
+    error carries its reserved number. `procedure` and `line` are where it was raised, when generated code said so;
+    `procedure_known` is False when the call depth it was raised in was never named, so ERROR_PROCEDURE() cannot say;
+    `depth` is the call depth it was raised at."""
+
+    def __init__(self, number: int, severity: int, state: int, message: str, *, error_class: str | None = None,
+                 ends: str = "statement", catchable_at_same_level: bool = True, exact_message: bool = True,
+                 unmapped: bool = False, cause: BaseException | None = None, depth: int | None = None,
+                 procedure: str | None = None, procedure_known: bool = True, line: int | None = None):
         super().__init__(message)
         self.number, self.severity, self.state, self.message = number, severity, state, message
+        self.error_class, self.ends, self.catchable_at_same_level = error_class, ends, catchable_at_same_level
+        self.exact_message, self.unmapped, self.cause = exact_message, unmapped, cause
+        self.depth, self.procedure, self.procedure_known, self.line = depth, procedure, procedure_known, line
 
 
 class SupportLibraryError(Exception):
     """The base of the library's own named errors."""
+
+
+class Failure(SupportLibraryError):
+    """A failure the library found in a write, named by its neutral error class and its details, not yet turned into the
+    source's error. Session state turns it into a `TsqlError` before it reaches generated code."""
+
+    def __init__(self, error_class: str, **details):
+        super().__init__(f"{error_class}: {details}")
+        self.error_class, self.details = error_class, details
+
+
+class ErrorMappingNotLoaded(SupportLibraryError):
+    """An error needed the source's half of the error mapping and session state was given none."""
+
+    def __init__(self, error_class: str):
+        super().__init__(f"The error class {error_class!r} needs the source's error mapping to become an error, and this "
+                         f"session was opened without one. Open it with errors=<the project's error-mapping.json>.")
+
+
+class MissingDetail(SupportLibraryError):
+    """An error class was raised without a detail the source's message needs, and the mapping has no stand-in text."""
+
+    def __init__(self, error_class: str, missing: list[str]):
+        super().__init__(f"The error class {error_class!r} was raised without {missing}, which its message needs.")
+        self.error_class, self.missing = error_class, missing
+
+
+class ErrorFieldUnknown(SupportLibraryError):
+    """Generated code read ERROR_LINE() or ERROR_PROCEDURE() of an error whose line or procedure it never said."""
+
+
+class RethrowOutsideHandler(SupportLibraryError):
+    """A rethrow (`THROW;`) outside a CATCH block, which SQL Server refuses when it compiles the batch: generated code never
+    emits one, so this is a defect in generation."""
+
+
+class ScopeAborted(SupportLibraryError):
+    """A guarded statement failed with an error that ends its procedure: the rest of the procedure does not run and the
+    caller goes on. The scope that the procedure runs in ends it; nothing else catches this."""
+
+    def __init__(self, error: "TsqlError"):
+        super().__init__(f"error {error.number} ended the procedure")
+        self.error = error
+
+
+class UnsupportedRaise(SupportLibraryError):
+    """A RAISERROR option that changes what the server does outside the session and that this library does not do."""
 
 
 class UnknownTable(SupportLibraryError):

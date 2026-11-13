@@ -1,0 +1,51 @@
+{
+  "format": "migrt-failure-mapping/1",
+  "about": "The PySpark target's half of the error mapping (ADR 0019): the failures Spark and Delta raise, by their error condition, to the core's neutral error classes and the details each takes. It names no source. A rule matches a condition exactly, or by prefix when it ends in a dot-less family name listed under 'prefix'; 'when' narrows it by a message parameter; 'operation' narrows it to the kind of statement the caller says it ran. A failure no rule matches is not given a class: the source reports it with its reserved number. The library version identifies this file (ADR 0018).",
+  "types": {
+    "TINYINT": "integer(8, signed)",
+    "SMALLINT": "integer(16, signed)",
+    "INT": "integer(32, signed)",
+    "BIGINT": "integer(64, signed)",
+    "DECIMAL": "decimal",
+    "DOUBLE": "float(53)",
+    "FLOAT": "float(24)",
+    "DATE": "date",
+    "TIMESTAMP": "timestamp_with_offset",
+    "TIMESTAMP_NTZ": "local_timestamp",
+    "STRING": "string"
+  },
+  "maps": {
+    "overflow_message": {
+      "integer overflow": "integer(32, signed)",
+      "long overflow": "integer(64, signed)"
+    }
+  },
+  "rules": [
+    {"condition": "DIVIDE_BY_ZERO", "class": "divide_by_zero", "details": {}},
+    {"condition": "ARITHMETIC_OVERFLOW", "class": "arithmetic_overflow",
+     "details": {"to_type": ["message", "map:overflow_message"]}},
+    {"condition": "CAST_OVERFLOW", "class": "arithmetic_overflow",
+     "details": {"to_type": ["targetType", "unquote", "type"]}},
+    {"condition": "NUMERIC_VALUE_OUT_OF_RANGE", "prefix": true, "class": "arithmetic_overflow",
+     "details": {"to_type": ["constant:DECIMAL", "type"]}},
+    {"condition": "CAST_INVALID_INPUT", "when": {"targetType": ["INT", "SMALLINT", "TINYINT", "BIGINT", "DECIMAL"]},
+     "class": "conversion_failure",
+     "details": {"value": ["expression", "unquote"], "to_type": ["targetType", "unquote", "type"]}},
+    {"condition": "CAST_INVALID_INPUT", "when": {"targetType": ["DATE", "TIMESTAMP", "TIMESTAMP_NTZ"]},
+     "class": "datetime_conversion_failure",
+     "details": {"value": ["expression", "unquote"]}},
+    {"condition": "SCALAR_SUBQUERY_TOO_MANY_ROWS", "class": "scalar_subquery_multiple_rows", "details": {}},
+    {"condition": "DELTA_NOT_NULL_CONSTRAINT_VIOLATED", "class": "not_null_violation",
+     "details": {"column": ["columnName"]}},
+    {"condition": "DELTA_VIOLATE_CONSTRAINT_WITH_VALUES", "class": "check_violation",
+     "details": {"constraint": ["constraintName"]}},
+    {"condition": "TABLE_OR_VIEW_NOT_FOUND", "operation": "drop", "class": "drop_target_not_found",
+     "details": {"name": ["relationName", "name"]}},
+    {"condition": "TABLE_OR_VIEW_NOT_FOUND", "class": "object_not_found",
+     "details": {"name": ["relationName", "name"]}},
+    {"condition": "UNRESOLVED_COLUMN", "prefix": true, "class": "column_not_found",
+     "details": {"name": ["objectName", "last_name"]}},
+    {"condition": "TABLE_OR_VIEW_ALREADY_EXISTS", "class": "object_already_exists",
+     "details": {"name": ["relationName", "last_name"]}}
+  ]
+}

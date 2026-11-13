@@ -52,6 +52,7 @@ src/migrt/
     checker.py         verifies the representation
     vocabulary.py      the operation vocabulary (Annex A), with its JSON copy
     differences.py     the silent-differences catalogue: the one interface to both halves
+    error_classes.py   the neutral error classes (error-classes.json): what a target maps failures to and a source maps to codes
     secrets.py         marked secrets, masked by named settings wherever text leaves the catalog
     name_adjustments.py  extending the recorded name adjustments by a target's rules
     report.py          the report data
@@ -60,7 +61,8 @@ src/migrt/
                        ssis and jobs (the recognised artefacts' inventories), references (the
                        parser's) and resolution (resolving them), secrets (the patterns), parser
                        (ScriptDom), names (the resolver), types, lowering, differences (the
-                       source half, Annex C, as data)
+                       source half, Annex C, as data), error_mapping (the error classes to SQL Server's numbers, messages,
+                       severities and reach, as data) and error_comparisons (comparisons against numbers it does not cover)
   targets/pyspark/     generator, draft (the file so far; giving up a construct undoes it completely), untranslatable (detection before generation), layer1, project (the delivered
                        project), types (the target half of the type mapping, with the representation rules),
                        names (Unity Catalog and module name rules), differences (the target half, Annex D, as data)
@@ -70,7 +72,11 @@ src/migrt_spark/       the PySpark target's support library, shipped in every de
   constraints.py       not null, check, key, unique and foreign-key enforcement
   state.py             the state table: counters, leases, transaction start versions, scratch registrations
   recovery.py          recovery on start and the recovery command
-  tables.py, settings.py, config.py, deltaops.py, errors.py
+  errors.py            TsqlError and the library's named errors
+  target_errors.py     Spark and Delta failures to error classes (spark-failures.json)
+  source_errors.py     applies the source's half of the error mapping (the project's error-mapping.json)
+  raiserror.py         the text of RAISERROR and THROW
+  tables.py, settings.py, config.py, deltaops.py
 tests/                 run with sandbox/engine-tests.sh
 ```
 
@@ -92,9 +98,33 @@ The delivered project ([`project.py`](src/migrt/targets/pyspark/project.py)) hol
 
 ## The support library
 
-[`migrt_spark`](src/migrt_spark/) is the PySpark target's support library ([issue #45](https://github.com/Bach-To-The-Future/data-migration/issues/45) built its core; packaging and delivery are [issue #49](https://github.com/Bach-To-The-Future/data-migration/issues/49)). `SessionState.open(spark, job=, run=, state_table=, tables=, settings=)` starts a run: it recovers what earlier runs left unfinished, then starts the lease heartbeat. Generated code writes only through it: `insert`, `insert_values`, `update`, `delete`, inside `transaction()` blocks where the source had a transaction. A table is described by a `TableSpec` (columns, identity and row-version columns, keys, checks, foreign keys, triggers) that the delivered project will carry for each table it writes; building one from the catalog is part of procedural generation. The behaviours are tested against SQL Server: `tests/test_support_*.py` run the same statements on both sides and compare rows, row counts, identity values and the errors raised (number, severity, state and text).
+[`migrt_spark`](src/migrt_spark/) is the PySpark target's support library ([issue #45](https://github.com/Bach-To-The-Future/data-migration/issues/45) built its core and [issue #46](https://github.com/Bach-To-The-Future/data-migration/issues/46) its errors; packaging and delivery are [issue #49](https://github.com/Bach-To-The-Future/data-migration/issues/49)). `SessionState.open(spark, job=, run=, state_table=, tables=, settings=, errors=)` starts a run: it recovers what earlier runs left unfinished, then starts the lease heartbeat. Generated code writes only through it: `insert`, `insert_values`, `update`, `delete`, inside `transaction()` blocks where the source had a transaction. A table is described by a `TableSpec` (columns, identity and row-version columns, keys, checks, foreign keys, triggers) that the delivered project will carry for each table it writes; building one from the catalog is part of procedural generation. The behaviours are tested against SQL Server: `tests/test_support_*.py` run the same statements on both sides and compare rows, row counts, identity values and the errors raised (number, severity, state and text).
 
 What a write does, in order: take the table's write lease (once per run), note its Delta version with the open transaction, check not null, check, key and foreign-key constraints, write, run foreign-key actions, then triggers. A failure anywhere in a statement that writes more than one table undoes the statement. Known limits, each loud rather than silent: string comparisons for keys follow the collations the library knows (case-sensitive, case-insensitive, binary, accent-sensitive; any other raises `UnsupportedCollation`); an `UPDATE` on a table with a trigger or a row version and no primary key is `ManualWrite`; `MERGE`, the length and range rules of the representation rules, and a trigger's rows read from Delta's change data feed are not built yet.
+
+## Errors
+
+Errors follow [ADR 0019](../docs/adr/0019-shared-mappings-are-split-by-source-and-by-target.md): the core lists neutral **error classes** ([`error-classes.json`](src/migrt/core/error-classes.json), each with the details it takes); the PySpark target maps Spark and Delta failures, by their error condition, to a class and its details ([`spark-failures.json`](src/migrt_spark/spark-failures.json), inside the library, so the library version identifies it); the SQL Server source maps each class to a number, severity, state and message, and to **how far SQL Server lets the error reach** ([`error-mapping.json`](src/migrt/sources/sqlserver/error-mapping.json)). The delivered project carries the source's half as `error-mapping.json`, and `SessionState.open(..., errors=...)` reads it, so the library holds the target half only and one interpreter applies any source's file. A class a source has no entry for, or a variant its entry does not cover, and a failure no target rule covers, take the source's **reserved number** (2147483600), with the reason in the message; the session lists them in `ss.unmapped_errors`, and a comparison against a number the mapping does not cover is flagged at the artefact in the report (`flags`, kind `unmapped_error_number`).
+
+Every entry was decided against SQL Server in the sandbox (`tests/test_error_mapping_sqlserver.py`, one case per error in `tests/error_cases.py`), and the two halves are tested together against it (`tests/test_error_mapping.py`): a Spark or Delta failure goes through both and must give the number, severity, state and text SQL Server reports for the same operation. Three things found there:
+
+- **An error ends the statement, the scope or the batch.** `ends` is `statement` (the next statement runs: constraint violations, divide by zero, `RAISERROR`), `scope` (the rest of the procedure does not run and its caller goes on: a name that does not resolve when the statement runs, 207 and 208) or `batch` (nothing after it runs: `THROW`, a failed conversion, 2714). The spec and ADR 0004 spoke of two; at the top level a scope-ending error is a batch-ending one.
+- **Some errors are not caught beside the statement.** `catchable_at_same_level` is false for a name that does not resolve (finding 7.6): a `TRY` at the same call depth does not see it, and the `TRY` of a caller does. Call depths are `ss.scope(name)`.
+- **A message may be a stand-in.** Spark does not say a failed conversion was of a `varchar` or an `nvarchar`, and Delta folds a constraint name to lower case. The details the generated code knows (the types, the catalog's spelling) are added by the caller; without them the error's `exact_message` is false and its text says less. Number, severity and state are never stand-ins.
+
+Not covered yet, each by an unmapped failure, never by another error's number: the smaller integer overflows (220), string truncation (2628, and 8152 before SQL Server 2019), conversion to `float`, and the many errors Spark has no counterpart for. A class is added by the ticket that builds the behaviour that raises it, with a case in `tests/error_cases.py`.
+
+**In generated code.** `ss.raise_error(text, severity, state, *args)` is `RAISERROR` (at severity 10 or below a message in `ss.messages` and `ss.message_records`, never an exception; formatting as SQL Server does, `%d %i %u %o %x %X %s`, flags, width, precision and `*`), `ss.throw(number, text, state)` is `THROW` and `ss.rethrow()` is `THROW;`. `ERROR_NUMBER()` and the rest are `ss.error_number()`, `error_severity()`, `error_state()`, `error_message()`, `error_line()` and `error_procedure()`; the last two are what generated code said (`ss.statement_line = n` before a statement, `ss.scope(name)`), and a loud `ErrorFieldUnknown` when it said nothing. `TRY`/`CATCH` is
+
+```python
+with ss.try_catch() as block:
+    ...                                # BEGIN TRY
+if block.error is not None:
+    with ss.handling(block.error):     # BEGIN CATCH
+        ...
+```
+
+The block holds an error a `CATCH` would have caught, and raises again one it would not have: a name that does not resolve at the same call depth, and anything that is not an error of the source at all (a Python bug is never swallowed). A procedure that reads `@@ERROR` puts each statement in `with ss.guarded():`: a failure records its number in `ss.at_error` and the procedure goes on, stops, or ends everything, as the error's `ends` says; inside a `try_catch` at the same call depth, or with `ss.set_xact_abort(True)`, the error is raised instead. Known limits: a scope-ending error inside a `transaction()` block rolls the block back where SQL Server leaves the transaction open (the cursors, transactions and error lowering of [issue #85](https://github.com/Bach-To-The-Future/data-migration/issues/85) decide how generation uses them); `RAISERROR ... WITH LOG` is `UnsupportedRaise`; severities 17 and 18 are raised like 16 but were not run against the oracle, whose client turns them into exceptions.
 
 ## Checks
 

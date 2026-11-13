@@ -24,7 +24,7 @@ from .core.differences import Catalogue
 from .core.catalog import CatalogReader, Snapshot
 from .core.ir import FORMAT_VERSION, Artefact
 from .core import vocabulary
-from .sources.sqlserver import differences as source_differences, extractor, lowering, names, parser, shapes
+from .sources.sqlserver import differences as source_differences, error_comparisons, error_mapping as source_errors, extractor, lowering, names, parser, shapes
 from .sources.sqlserver import folders as folder_source
 from .sources.sqlserver.extractor import (ExtractorPermissionError, SettingsRequired, TimeZoneRequired,
                                           UnsupportedServer)
@@ -275,7 +275,8 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
             "status": report.NOT_RECONCILED,
         })
     written = project.write(out_dir, engagement=engagement.name, snapshot_id=snapshot.id, tool_version=TOOL_VERSION,
-                            semantic=_semantic_settings(snapshot), runtime_identity=RUNTIME_IDENTITY, units=units)
+                            semantic=_semantic_settings(snapshot), runtime_identity=RUNTIME_IDENTITY, units=units,
+                            error_mapping=source_errors.load())
 
     server = next(o for o in snapshot.objects if o.kind == "server")
     findings = extraction_findings(snapshot)
@@ -504,6 +505,7 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
         degradations=[{"kind": "assumption", "where": found, "text": text}
                       for text in [*artefact.assumptions, *generated.assumptions]],
         hints=[{**h, "status": report.HINT_NOT_APPLICABLE} for h in artefact.hints],
+        flags=[error_comparisons.flag(c) for c in error_comparisons.flagged(error_comparisons.find(parsed))],
         secrets=[{"setting": name, "text": reads_setting if name in generated.settings_used else unread_setting}
                  for name in artefact.secret_settings],
         name_adjustments=generated.name_adjustments)

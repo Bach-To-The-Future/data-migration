@@ -1,0 +1,325 @@
+{
+  "format": "migrt-error-mapping/1",
+  "about": "The SQL Server half of the error mapping (ADR 0019): each of the core's neutral error classes to SQL Server's error number, severity, state and message, and how far the error reaches. 'ends' is statement (the next statement of the batch runs), scope (the rest of the procedure, function or trigger does not, and its caller goes on) or batch (nothing after it runs). 'catchable_at_same_level' is false for an error that a TRY beside the failing statement does not catch but the TRY of a caller does. Every entry was decided against SQL Server in the sandbox (tests/test_error_mapping_sqlserver.py). The delivered project carries this file as error-mapping.json.",
+  "reserved": {
+    "number": 2147483600,
+    "severity": 16,
+    "state": 1,
+    "ends": "batch",
+    "message": "A failure the migration tool's error mapping does not cover: {reason} {original}"
+  },
+  "type_names": {
+    "integer(8, unsigned)": "tinyint",
+    "integer(16, signed)": "smallint",
+    "integer(32, signed)": "int",
+    "integer(64, signed)": "bigint",
+    "string(bytes)": "varchar",
+    "string(utf16)": "nvarchar"
+  },
+  "classes": {
+    "divide_by_zero": {
+      "number": 8134,
+      "severity": 16,
+      "state": 1,
+      "ends": "statement",
+      "message": "Divide by zero error encountered."
+    },
+    "arithmetic_overflow": {
+      "variants": [
+        {
+          "when": {
+            "to_type": [
+              "integer(32, signed)",
+              "integer(64, signed)"
+            ]
+          },
+          "number": 8115,
+          "severity": 16,
+          "state": 2,
+          "ends": "statement",
+          "message": "Arithmetic overflow error converting expression to data type {to_type:type}."
+        },
+        {
+          "when": {
+            "to_type": [
+              "decimal"
+            ]
+          },
+          "number": 8115,
+          "severity": 16,
+          "state": 8,
+          "ends": "statement",
+          "message": "Arithmetic overflow error converting {from_type:type} to data type numeric.",
+          "fallback_message": "Arithmetic overflow error converting a value to data type numeric."
+        }
+      ]
+    },
+    "conversion_failure": {
+      "variants": [
+        {
+          "when": {
+            "to_type": [
+              "integer(8, unsigned)",
+              "integer(16, signed)",
+              "integer(32, signed)"
+            ]
+          },
+          "number": 245,
+          "severity": 16,
+          "state": 1,
+          "ends": "batch",
+          "message": "Conversion failed when converting the {from_type:type} value '{value}' to data type {to_type:type}.",
+          "fallback_message": "Conversion failed when converting a text value to a whole number."
+        },
+        {
+          "when": {
+            "to_type": [
+              "integer(64, signed)"
+            ]
+          },
+          "number": 8114,
+          "severity": 16,
+          "state": 5,
+          "ends": "batch",
+          "message": "Error converting data type {from_type:type} to {to_type:type}.",
+          "fallback_message": "Error converting a text value to a whole number."
+        },
+        {
+          "when": {
+            "to_type": [
+              "decimal"
+            ]
+          },
+          "number": 8114,
+          "severity": 16,
+          "state": 5,
+          "ends": "batch",
+          "message": "Error converting data type {from_type:type} to numeric.",
+          "fallback_message": "Error converting a text value to an exact number."
+        }
+      ]
+    },
+    "datetime_conversion_failure": {
+      "number": 241,
+      "severity": 16,
+      "state": 1,
+      "ends": "batch",
+      "message": "Conversion failed when converting date and/or time from character string."
+    },
+    "scalar_subquery_multiple_rows": {
+      "number": 512,
+      "severity": 16,
+      "state": 1,
+      "ends": "statement",
+      "message": "Subquery returned more than 1 value. This is not permitted when the subquery follows =, !=, <, <= , >, >= or when the subquery is used as an expression."
+    },
+    "not_null_violation": {
+      "number": 515,
+      "severity": 16,
+      "state": 2,
+      "ends": "statement",
+      "message": "Cannot insert the value NULL into column '{column}', table '{table}'; column does not allow nulls. {verb} fails."
+    },
+    "check_violation": {
+      "variants": [
+        {
+          "when_present": [
+            "column"
+          ],
+          "number": 547,
+          "severity": 16,
+          "state": 0,
+          "ends": "statement",
+          "message": "The {verb} statement conflicted with the CHECK constraint \"{constraint}\". The conflict occurred in database \"{database}\", table \"{table}\", column '{column}'."
+        },
+        {
+          "when_absent": [
+            "column"
+          ],
+          "number": 547,
+          "severity": 16,
+          "state": 0,
+          "ends": "statement",
+          "message": "The {verb} statement conflicted with the CHECK constraint \"{constraint}\". The conflict occurred in database \"{database}\", table \"{table}\"."
+        }
+      ]
+    },
+    "foreign_key_violation": {
+      "number": 547,
+      "severity": 16,
+      "state": 0,
+      "ends": "statement",
+      "message": "The {verb} statement conflicted with the {kind} constraint \"{constraint}\". The conflict occurred in database \"{database}\", table \"{table}\", column '{column}'."
+    },
+    "primary_key_violation": {
+      "number": 2627,
+      "severity": 14,
+      "state": 1,
+      "ends": "statement",
+      "message": "Violation of PRIMARY KEY constraint '{constraint}'. Cannot insert duplicate key in object '{table}'. The duplicate key value is {key}."
+    },
+    "unique_constraint_violation": {
+      "number": 2627,
+      "severity": 14,
+      "state": 1,
+      "ends": "statement",
+      "message": "Violation of UNIQUE KEY constraint '{constraint}'. Cannot insert duplicate key in object '{table}'. The duplicate key value is {key}."
+    },
+    "unique_index_violation": {
+      "number": 2601,
+      "severity": 14,
+      "state": 1,
+      "ends": "statement",
+      "message": "Cannot insert duplicate key row in object '{table}' with unique index '{index}'. The duplicate key value is {key}."
+    },
+    "object_not_found": {
+      "number": 208,
+      "severity": 16,
+      "state": 1,
+      "ends": "scope",
+      "catchable_at_same_level": false,
+      "message": "Invalid object name '{name}'."
+    },
+    "column_not_found": {
+      "number": 207,
+      "severity": 16,
+      "state": 1,
+      "ends": "scope",
+      "catchable_at_same_level": false,
+      "message": "Invalid column name '{name}'."
+    },
+    "object_already_exists": {
+      "number": 2714,
+      "severity": 16,
+      "state": 6,
+      "ends": "batch",
+      "message": "There is already an object named '{name}' in the database."
+    },
+    "drop_target_not_found": {
+      "number": 3701,
+      "severity": 11,
+      "state": 5,
+      "ends": "statement",
+      "message": "Cannot drop the table '{name}', because it does not exist or you do not have permission."
+    },
+    "identity_insert_not_allowed": {
+      "number": 544,
+      "severity": 16,
+      "state": 1,
+      "ends": "statement",
+      "message": "Cannot insert explicit value for identity column in table '{table}' when IDENTITY_INSERT is set to OFF."
+    },
+    "identity_update_not_allowed": {
+      "number": 8102,
+      "severity": 16,
+      "state": 1,
+      "ends": "batch",
+      "message": "Cannot update identity column '{column}'.",
+      "catchable_at_same_level": false
+    },
+    "nesting_level_exceeded": {
+      "number": 217,
+      "severity": 16,
+      "state": 1,
+      "ends": "batch",
+      "message": "Maximum stored procedure, function, trigger, or view nesting level exceeded (limit 32)."
+    },
+    "transaction_request_without_begin": {
+      "variants": [
+        {
+          "when": {
+            "request": [
+              "COMMIT"
+            ]
+          },
+          "number": 3902,
+          "severity": 16,
+          "state": 1,
+          "ends": "statement",
+          "message": "The COMMIT TRANSACTION request has no corresponding BEGIN TRANSACTION."
+        },
+        {
+          "when": {
+            "request": [
+              "ROLLBACK"
+            ]
+          },
+          "number": 3903,
+          "severity": 16,
+          "state": 1,
+          "ends": "statement",
+          "message": "The ROLLBACK TRANSACTION request has no corresponding BEGIN TRANSACTION."
+        },
+        {
+          "when": {
+            "request": [
+              "SAVE"
+            ]
+          },
+          "number": 628,
+          "severity": 16,
+          "state": 0,
+          "ends": "batch",
+          "message": "Cannot issue SAVE TRANSACTION when there is no active transaction."
+        }
+      ]
+    },
+    "savepoint_not_found": {
+      "number": 6401,
+      "severity": 16,
+      "state": 1,
+      "ends": "statement",
+      "message": "Cannot roll back {name}. No transaction or savepoint of that name was found."
+    },
+    "raised_error": {
+      "number": 50000,
+      "severity": {
+        "detail": "severity"
+      },
+      "state": {
+        "detail": "state"
+      },
+      "ends": "statement",
+      "message": "{message}"
+    },
+    "thrown_error": {
+      "number": {
+        "detail": "number"
+      },
+      "severity": 16,
+      "state": {
+        "detail": "state"
+      },
+      "ends": "batch",
+      "message": "{message}"
+    },
+    "throw_number_out_of_range": {
+      "number": 35100,
+      "severity": 16,
+      "state": 10,
+      "ends": "batch",
+      "message": "Error number {number} in the THROW statement is outside the valid range. Specify an error number in the valid range of 50000 to 2147483647."
+    },
+    "raise_severity_not_permitted": {
+      "number": 2754,
+      "severity": 16,
+      "state": 1,
+      "ends": "statement",
+      "message": "Error severity levels greater than 18 can only be specified by members of the sysadmin role, using the WITH LOG option."
+    },
+    "raise_format_invalid": {
+      "number": 2787,
+      "severity": 16,
+      "state": 1,
+      "ends": "statement",
+      "message": "Invalid format specification: '{format}'."
+    },
+    "raise_argument_mismatch": {
+      "number": 2786,
+      "severity": 16,
+      "state": 1,
+      "ends": "statement",
+      "message": "The data type of substitution parameter {index} does not match the expected type of the format specification."
+    }
+  }
+}

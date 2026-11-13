@@ -12,7 +12,7 @@ import itertools
 from typing import TYPE_CHECKING
 
 from . import deltaops
-from .errors import RestoreRefused, TsqlError, VersionVacuumed
+from .errors import RestoreRefused, VersionVacuumed
 from .state import lit
 
 if TYPE_CHECKING:
@@ -110,7 +110,7 @@ class TxManager:
     def commit(self, mine: _Real | None = ...) -> None:       # type: ignore[assignment]
         real = self.real if mine is ... else mine
         if real is None or real is not self.real or real.depth == 0:
-            raise TsqlError(3902, 16, 1, "The COMMIT TRANSACTION request has no corresponding BEGIN TRANSACTION.")
+            raise self.ss.fail("transaction_request_without_begin", request="COMMIT")
         real.depth -= 1
         if real.depth == 0:
             self._finish(real)
@@ -118,17 +118,17 @@ class TxManager:
     def rollback(self, mine: _Real | None = ...) -> None:     # type: ignore[assignment]
         real = self.real if mine is ... else mine
         if real is None or real is not self.real:
-            raise TsqlError(3903, 16, 1, "The ROLLBACK TRANSACTION request has no corresponding BEGIN TRANSACTION.")
+            raise self.ss.fail("transaction_request_without_begin", request="ROLLBACK")
         self._undo(real, dict(real.versions))
 
     def save(self, name: str, real: _Real | None) -> None:
         if real is None or real is not self.real:
-            raise TsqlError(3902, 16, 1, "The SAVE TRANSACTION request has no corresponding BEGIN TRANSACTION.")
+            raise self.ss.fail("transaction_request_without_begin", request="SAVE")
         real.saves[name] = {t: deltaops.version(self.ss.spark, t) for t in real.versions}
 
     def rollback_to(self, name: str, real: _Real | None) -> None:
         if real is None or real is not self.real or name not in real.saves:
-            raise TsqlError(6401, 16, 1, f"Cannot roll back {name}. No transaction or savepoint of that name was found.")
+            raise self.ss.fail("savepoint_not_found", name=name)
         saved = real.saves[name]
         self._restore(real, {t: saved.get(t, v) for t, v in real.versions.items()})
         for later in list(real.saves)[list(real.saves).index(name) + 1:]:

@@ -8,6 +8,8 @@ Carried with the code:
 - `settings.json`: the semantic settings, fixed and fingerprinted because they are part of what was verified; the
   runtime identity values; and the named settings that stand for marked secrets, to be filled in at deployment,
   which generated code reads through session state (`ss.setting(name)`);
+- `error-mapping.json`: the source's half of the error mapping, which session state reads at startup to turn the library's
+  error classes into the source's numbers, messages and severities (the target's half is inside the library);
 - `representation-rules.md`: the type mapping's representation rules;
 - `README.md`: what the files are.
 
@@ -40,6 +42,8 @@ says the status of each entry point.
 - `converted/`: the generated code, one artefact per file. A callee is imported as a module.
 - `manifest.json`: one entry point per artefact, how to invoke it, and how to read its results.
 - `settings.json`: the settings session state reads at startup. Fill in each secret before running.
+- `error-mapping.json`: the source's error numbers, messages and severities for the library's error classes, read at startup
+  (`SessionState.open(..., errors="error-mapping.json")`).
 - `representation-rules.md`: how each type is held in Spark and what the write wrapper or a helper reproduces.
 
 Every function takes session state `ss` as its first argument. A function that is manual work raises when
@@ -117,7 +121,7 @@ def _dumps(data: dict) -> str:
 
 
 def write(out_dir: pathlib.Path, *, engagement: str, snapshot_id: str, tool_version: str, semantic: dict,
-          runtime_identity: dict[str, str], units: list[Unit]) -> list[str]:
+          runtime_identity: dict[str, str], units: list[Unit], error_mapping: dict) -> list[str]:
     """Write the project under `out_dir`; returns the paths written, relative to it and sorted."""
     files: dict[str, str] = {u.generated.relative_path: u.generated.text for u in units}
     for path in list(files):
@@ -130,6 +134,7 @@ def write(out_dir: pathlib.Path, *, engagement: str, snapshot_id: str, tool_vers
         raise ValueError(f"generated files outside the {PROJECT_PACKAGE} package: {outside}")
     files["manifest.json"] = _dumps(manifest(snapshot_id, tool_version, units))
     files["settings.json"] = _dumps(settings(engagement, snapshot_id, semantic, runtime_identity, units))
+    files["error-mapping.json"] = _dumps(error_mapping)
     files["representation-rules.md"] = types.representation_rules_markdown()
     files["README.md"] = README
     for relative, text in files.items():

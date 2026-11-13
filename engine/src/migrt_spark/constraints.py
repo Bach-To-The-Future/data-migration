@@ -19,7 +19,7 @@ from pyspark.sql import Column as SparkColumn
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
-from .errors import TsqlError, UnsupportedCollation
+from .errors import Failure, UnsupportedCollation
 from .tables import Column, ForeignKey, TableSpec, Unique
 
 SUPPORTED_TOKENS = {"CI", "CS", "AS", "BIN", "BIN2"}
@@ -79,28 +79,24 @@ def check_not_null(spec: TableSpec, new: DataFrame, verb: str) -> None:
                      ).collect()[0]
     for i, c in enumerate(required):
         if counts[f"n{i}"]:
-            raise TsqlError(515, 16, 2, f"Cannot insert the value NULL into column '{c.name}', table "
-                                        f"'{spec.database}.{spec.schema}.{spec.name}'; column does not allow nulls. {verb} fails.")
+            raise Failure("not_null_violation", column=c.name, table=f"{spec.database}.{spec.schema}.{spec.name}", verb=verb)
 
 
 def check_checks(spec: TableSpec, new: DataFrame, verb: str) -> None:
     for ck in spec.checks:
         if not new.where(~F.coalesce(F.expr(ck.expression), F.lit(True))).limit(1).count():
             continue
-        column = f", column '{ck.columns[0]}'" if len(ck.columns) == 1 else ""
-        raise TsqlError(547, 16, 0, f'The {verb} statement conflicted with the CHECK constraint "{ck.name}". The conflict '
-                                    f'occurred in database "{spec.database}", table "{spec.qualified}"{column}.')
+        raise Failure("check_violation", constraint=ck.name, verb=verb, database=spec.database, table=spec.qualified,
+                      column=ck.columns[0] if len(ck.columns) == 1 else None)
 
 
 # ------------------------------------------------------------------ primary key and unique
 
-def unique_error(spec: TableSpec, u: Unique, values: list) -> TsqlError:
+def unique_error(spec: TableSpec, u: Unique, values: list) -> Failure:
     if u.index:
-        return TsqlError(2601, 14, 1, f"Cannot insert duplicate key row in object '{spec.qualified}' with unique index "
-                                      f"'{u.name}'. The duplicate key value is {key_text(values)}.")
-    kind = "PRIMARY KEY" if u.primary else "UNIQUE KEY"
-    return TsqlError(2627, 14, 1, f"Violation of {kind} constraint '{u.name}'. Cannot insert duplicate key in object "
-                                  f"'{spec.qualified}'. The duplicate key value is {key_text(values)}.")
+        return Failure("unique_index_violation", index=u.name, table=spec.qualified, key=key_text(values))
+    return Failure("primary_key_violation" if u.primary else "unique_constraint_violation", constraint=u.name,
+                   table=spec.qualified, key=key_text(values))
 
 
 def _keyed(spec: TableSpec, columns: tuple[str, ...], df: DataFrame, where: str | None, default: str) -> DataFrame:
@@ -144,13 +140,11 @@ def check_foreign_keys(spec: TableSpec, new: DataFrame, final: DataFrame, verb: 
                                     for i, rc in enumerate(fk.ref_columns)])
         cond = all_of([F.col(f"c.k{i}") == F.col(f"p.k{i}") for i in range(len(fk.columns))])
         if child.alias("c").join(keys.alias("p"), cond, "left_anti").limit(1).count():
-            raise TsqlError(547, 16, 0, f'The {verb} statement conflicted with the FOREIGN KEY constraint "{fk.name}". The '
-                                        f'conflict occurred in database "{parent.database}", table "{parent.qualified}", '
-                                        f"column '{fk.ref_columns[0]}'.")
+            raise Failure("foreign_key_violation", constraint=fk.name, kind="FOREIGN KEY", verb=verb,
+                          database=parent.database, table=parent.qualified, column=fk.ref_columns[0])
 
 
-def reference_error(parent: TableSpec, child: TableSpec, fk: ForeignKey, verb: str) -> TsqlError:
+def reference_error(parent: TableSpec, child: TableSpec, fk: ForeignKey, verb: str) -> Failure:
     kind = "SAME TABLE REFERENCE" if child.target == parent.target else "REFERENCE"
-    return TsqlError(547, 16, 0, f'The {verb} statement conflicted with the {kind} constraint "{fk.name}". The conflict '
-                                 f'occurred in database "{child.database}", table "{child.qualified}", column '
-                                 f"'{fk.columns[0]}'.")
+    return Failure("foreign_key_violation", constraint=fk.name, kind=kind, verb=verb, database=child.database,
+                   table=child.qualified, column=fk.columns[0])
