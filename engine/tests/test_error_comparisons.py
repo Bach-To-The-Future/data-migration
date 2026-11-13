@@ -1,4 +1,4 @@
-"""Source comparisons against error numbers (spec section 6, "Errors"): converted code can raise only the numbers the error
+"""Source comparisons against error numbers (spec section 6, "Errors"): generated code can raise only the numbers the error
 mapping gives, so a comparison of `ERROR_NUMBER()` or `@@ERROR` against any other number is flagged in the report. The numbers
 the program raises itself (50000 and above) and zero are never flagged."""
 import json
@@ -32,6 +32,8 @@ def numbers(sql: str) -> list[int]:
     ("IF ERROR_SEVERITY() = 16 PRINT 'severity, not number'", []),
     ("IF ERROR_NUMBER() = @n PRINT 'no literal'", []),
     ("IF ERROR_NUMBER() = -1 PRINT 'negative'", [-1]),
+    ("IF ERROR_NUMBER() BETWEEN 1200 AND 1210 PRINT 'range'", [1200, 1210]),
+    ("IF @@ERROR NOT BETWEEN 10 AND 20 PRINT 'range'", [10, 20]),
 ], ids=lambda v: v if isinstance(v, str) and len(v) < 30 else None)
 def test_every_comparison_of_an_error_number_with_a_whole_number_is_found(sql, expected):
     assert sorted(numbers(sql)) == sorted(expected)
@@ -78,3 +80,27 @@ def test_a_preview_run_lists_the_flag_at_the_artefact(engagement, scratch_databa
     [item] = data["artefacts"]
     assert [f["number"] for f in item["flags"] if f["kind"] == "unmapped_error_number"] == [1205]
     assert all("converted" not in f["text"].lower() for f in item["flags"])
+
+
+def test_the_errors_the_corpus_catches_and_tests_for_are_all_covered_by_the_mapping():
+    """Every ERROR_NUMBER() or @@ERROR comparison in the three corpus databases, and every number the corpus THROWs, is a
+    number the mapping covers: the mapping was decided by these errors, and a corpus change that brings a new one fails here."""
+    import re
+
+    from conftest import CORPUS_DATABASES, sa_connection
+
+    compared, thrown, unparsed = [], set(), []
+    for database in CORPUS_DATABASES:
+        with sa_connection(database) as conn:
+            rows = conn.query("SELECT OBJECT_SCHEMA_NAME(object_id) AS s, OBJECT_NAME(object_id) AS n, definition AS d "
+                              "FROM sys.sql_modules WHERE definition LIKE '%ERROR%' OR definition LIKE '%THROW%'")
+        for row in rows:
+            thrown |= {int(n) for n in re.findall(r"\bTHROW\s+(\d+)\s*,", row["d"], re.I)}
+            try:
+                compared += error_comparisons.find(parsed(row["d"]))
+            except parser.ParseFailed:
+                unparsed.append(f"{database}.{row['s']}.{row['n']}")
+    assert not unparsed, f"modules the parser refuses, whose comparisons were not looked at: {unparsed}"
+    assert compared, "the corpus holds comparisons of error numbers"
+    assert error_comparisons.flagged(compared) == []
+    assert thrown and all(n >= 50000 for n in thrown)

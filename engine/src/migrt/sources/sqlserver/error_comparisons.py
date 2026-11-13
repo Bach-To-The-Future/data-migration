@@ -7,7 +7,7 @@ error the generated code can never show it: the comparison is false where the or
 parsed source, and flagged at the artefact in the report.
 
 A comparison is found when one side is `ERROR_NUMBER()`, `@@ERROR` or a variable that is assigned from either anywhere in
-the artefact, and the other is a whole number: with `=`, `<>`, the other operators, `IN` and `NOT IN`, and the two forms of
+the artefact, and the other is a whole number: with `=`, `<>`, the other operators, `BETWEEN`, `IN` and `NOT IN`, and the two forms of
 `CASE`. A number held in a variable or computed is not found; the report cannot say what it is."""
 from __future__ import annotations
 
@@ -87,6 +87,9 @@ def find(parsed: Parsed) -> list[Comparison]:
         elif kind == "InPredicate" and node.Subquery is None and _is_error_source(node.Expression, variables):
             for value in node.Values:
                 add(node, _whole_number(value))
+        elif kind == "BooleanTernaryExpression" and str(node.TernaryExpressionType) in ("Between", "NotBetween")                 and _is_error_source(node.FirstExpression, variables):
+            add(node, _whole_number(node.SecondExpression))
+            add(node, _whole_number(node.ThirdExpression))
         elif kind == "SimpleCaseExpression" and _is_error_source(node.InputExpression, variables):
             for clause in node.WhenClauses:
                 add(clause, _whole_number(clause.WhenExpression))

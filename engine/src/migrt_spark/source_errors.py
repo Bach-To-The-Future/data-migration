@@ -21,7 +21,6 @@ from typing import Any
 from .errors import MissingDetail
 
 FORMAT = "migrt-error-mapping/1"
-ENDS = ("statement", "scope", "batch")
 _PLACEHOLDER = re.compile(r"\{(\w+)(?::(\w+))?\}")
 
 

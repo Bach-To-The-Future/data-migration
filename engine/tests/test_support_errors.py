@@ -231,5 +231,5 @@ def test_a_python_bug_is_never_an_error_a_catch_could_see(duo):
     ss = duo.session()
     with pytest.raises(TypeError):
         with ss.try_catch():
-            raise TypeError("a bug in the converted code")
+            raise TypeError("a bug in the generated code")
     assert ss.unmapped_errors == []

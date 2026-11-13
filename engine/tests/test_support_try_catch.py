@@ -1,5 +1,5 @@
 """`TRY`/`CATCH` and the statements guarded for `@@ERROR` (spec section 6, "Errors"; ADR 0004), each compared with SQL Server
-running the T-SQL the converted code stands for. A trace is the list of what the code printed, in order."""
+running the T-SQL the generated code stands for. A trace is the list of what the code printed, in order."""
 import pytest
 
 import migrt_spark as lib
@@ -73,6 +73,7 @@ def test_a_conversion_failure_ends_the_batch_and_a_catch_still_sees_it(duo):
         duo.spark.sql("SELECT CAST('abc' AS INT)").collect()
     assert [f"caught {t.error.number}"] == expected == ["caught 245"]
     assert t.error.ends == "batch" and not t.error.exact_message              # Spark does not say the text was a varchar
+    assert ss.inexact_errors == [t.error]                                     # and the session says it kept a stand-in text
 
 
 def test_a_try_block_that_fails_nothing_leaves_no_error_and_does_not_touch_the_error_number(duo):
@@ -243,7 +244,7 @@ def customers(duo):
 
 
 def load_batch(ss, target, codes):
-    """stg.uspLoadCustomerBatch, converted: every statement in a guarded block, because the procedure reads @@ERROR."""
+    """stg.uspLoadCustomerBatch, generated: every statement in a guarded block, because the procedure reads @@ERROR."""
     loaded = failed = 0
     with ss.transaction() as tx:
         for code in codes:
@@ -345,6 +346,32 @@ def test_a_guard_inside_a_try_hands_the_error_to_the_catch(duo):
     if t.error is not None:
         trace.append("caught")
     assert trace == expected == ["caught"]
+
+
+@pytest.mark.parametrize("statement, tsql, code", [
+    ("a duplicate key", "INSERT {s}.Cust (Code) VALUES ('dup1')",
+     lambda ss, duo: ss.insert_values(duo.target("Cust"), [{"Code": "dup1"}])),
+    ("a missing table", "SELECT * FROM {s}.nosuch",
+     lambda ss, duo: duo.spark.sql(f"SELECT * FROM {duo.schema}.nosuch").collect()),
+], ids=["a statement-ending error", "a scope-ending error"])
+def test_a_guard_in_a_called_procedure_hands_the_error_to_the_callers_try(duo, statement, tsql, code):
+    """A TRY anywhere up the call stack takes the error: the callee does not go on, whatever it reads of @@ERROR."""
+    ss = customers(duo)
+    duo.tsql(f"CREATE PROCEDURE {{s}}.Callee AS BEGIN PRINT 'callee-1'; {tsql}; PRINT 'callee-2'; END")
+    duo.run("BEGIN TRY EXEC {s}.Callee; PRINT 'caller-went-on'; END TRY BEGIN CATCH PRINT CONCAT('caught ', ERROR_NUMBER()); END CATCH")
+    expected = printed(duo)
+    trace = []
+    with ss.try_catch() as t:
+        with ss.scope("Callee"):
+            trace.append("callee-1")
+            with ss.guarded():
+                code(ss, duo)
+            trace.append("callee-2")
+        trace.append("caller-went-on")
+    if t.error is not None:
+        trace.append(f"caught {t.error.number}")
+    assert trace == expected
+    assert t.error is not None
 
 
 def test_a_python_bug_inside_a_guard_is_not_swallowed(duo):

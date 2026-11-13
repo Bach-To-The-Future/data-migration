@@ -110,6 +110,7 @@ class SessionState:
         self.messages: list[str] = []
         self.message_records: list[Message] = []
         self.unmapped_errors: list[TsqlError] = []     # failures the mapping did not cover, with the reserved number
+        self.inexact_errors: list[TsqlError] = []      # errors whose text is a stand-in: the failure lacked what it needs
         self.xact_abort = False
         self.statement_line: int | None = None         # the line of the statement running, when generated code says
         self._tries: list[int] = []                    # the call depth of each TRY block in progress
@@ -221,7 +222,7 @@ class SessionState:
     @property
     def errors_reserved_number(self) -> int:
         if self.errors is None:
-            raise ErrorMappingNotLoaded("unmapped")
+            raise ErrorMappingNotLoaded("the reserved number")
         return int(self.errors.reserved["number"])
 
     def fail(self, error_class: str, *, cause: BaseException | None = None, **details) -> TsqlError:
@@ -240,6 +241,8 @@ class SessionState:
                           procedure=scope.procedure if known else None, procedure_known=known, line=self.statement_line)
         if rendered.unmapped:
             self.unmapped_errors.append(error)
+        elif not rendered.exact_message:
+            self.inexact_errors.append(error)
         self.at_error = error.number
         return error
 
@@ -277,8 +280,8 @@ class SessionState:
     def guarded(self) -> "Guard":
         """One statement of a procedure that reads `@@ERROR` (ADR 0004). A failure records its number and the procedure goes on,
         or stops, as SQL Server does for that error: it goes on if the error ends only the statement, ends the procedure if
-        it ends its scope, and ends everything if it ends the batch. Inside a TRY at the same call depth the error is the
-        catch's, and with `XACT_ABORT` on every error ends the batch."""
+        it ends its scope, and ends everything if it ends the batch. Inside a TRY, at this call depth or any above it, the error
+        is the catch's, and with `XACT_ABORT` on every error ends the batch."""
         return Guard(self)
 
     def set_xact_abort(self, on: bool) -> None:
@@ -1028,7 +1031,7 @@ class Guard:
         if error is None:
             return False
         ss.at_error = error.number
-        inside_try = bool(ss._tries) and ss._tries[-1] == len(ss._scopes)
+        inside_try = bool(ss._tries)                               # a TRY anywhere up the call stack takes the error
         if inside_try or ss.xact_abort or error.ends == "batch" or (error.ends == "scope" and len(ss._scopes) == 1):
             if error is exc:
                 return False

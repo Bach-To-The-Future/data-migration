@@ -102,7 +102,7 @@ def test_a_drop_that_finds_nothing_and_a_read_that_finds_nothing_are_different_c
 
 
 def test_a_python_error_is_not_a_failure_of_the_runtime():
-    """A bug in the converted code, or in the library, is never an error the program could have caught."""
+    """A bug in the generated code, or in the library, is never an error the program could have caught."""
     for bug in (TypeError("x"), KeyError("k"), ZeroDivisionError("y"), RuntimeError("z")):
         assert SparkFailures.load().classify(bug) is None
 
