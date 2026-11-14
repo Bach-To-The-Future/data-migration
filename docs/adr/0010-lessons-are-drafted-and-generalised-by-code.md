@@ -49,5 +49,6 @@ Decided by the owner on [the architecture review](https://github.com/Bach-To-The
 - **Lesson content is client-derived text,** so it goes in delimited data blocks like any other client text, never in the instructions.
 - **The applicable-lessons slot has a cap** (provisional: 5 lessons per call, ordered by specificity, client lessons first when specificity is equal). A matched lesson that does not fit is recorded with the call and counted in the report, so a cap that bites can be seen. Within the cap the slot is still never trimmed.
 - **A code-level repair patch drafts no lesson** (ADR 0008, amended).
+- **Every lesson records the artefacts it was drafted from,** so that a lesson set can be built from, and checked against, a part of the corpus (the benchmark rule is in [ADR 0020](0020-orchestrators-are-policies-over-a-fixed-engine.md), amended).
 
 Decided by the owner, 14 November 2026.
