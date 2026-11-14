@@ -192,3 +192,33 @@ def test_generation_gives_every_fragment_a_manual_item_and_never_drops_one(corpu
 
     assert {f.id for f in fragments_in} <= {m.node for m in file.manual_items} | {m.replaces for m in file.manual_items}
     assert generator.check(artefact, file).passed
+
+
+# ---------------------------------------------------------------- review follow-ups
+
+def test_a_parser_message_that_quotes_a_marked_secret_is_masked(corpus_snapshot):
+    text = "CREATE PROCEDURE sales.uspTest AS\nCREATE LOGIN x WITH PASSWORD = 'hunter2' 'hunter2';\nSELECT 1;"
+
+    artefact, _ = lower_source_text(corpus_snapshot, text, kind="procedure")
+
+    shown = " ".join(str(n.attrs["reason"]) for n in artefact.nodes() if n.kind == "opaque_fragment")
+    shown += " ".join(artefact.assumptions)
+    assert "L2:" in shown and "hunter2" not in shown      # the parser reported the error, and its quotation is masked
+
+
+def test_text_with_characters_outside_the_basic_plane_is_divided_where_the_text_says(corpus_snapshot):
+    text = "CREATE PROCEDURE sales.uspTest AS\nPRINT N'😀 😀'; -- 😀😀\nSELEKT FROM;\nSELECT 1 AS one;"
+
+    artefact, _ = lower_source_text(corpus_snapshot, text, kind="procedure")
+
+    found = fragments(artefact)
+    assert [n.attrs["text"].split("\n")[-1] for n in found] == ["PRINT N'😀 😀'; -- 😀😀", "SELEKT FROM;", "SELECT 1 AS one;"]
+    assert_verbatim(artefact, found)
+
+
+def test_a_comment_after_go_is_not_part_of_the_separator(corpus_snapshot):
+    text = "SELEKT FROM;\nGO 3 -- three times\nSELECT 1 AS one"
+
+    artefact, _ = lower_source_text(corpus_snapshot, text, kind="query_batch", name="broken")
+
+    assert artefact.body.children_with("batch")[0].attrs["separator"] == "GO 3"

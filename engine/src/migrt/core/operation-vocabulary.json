@@ -235,7 +235,7 @@
     },
     {
       "name": "part_body",
-      "meaning": "One part of an artefact the divider split along its block boundaries: a run of consecutive statements of one block, in source order, with the state they start in (`start_state`), the enclosing blocks (`path`), the declarations in scope and the labels. Added by ticket 08c (#86).",
+      "meaning": "One part of an artefact the divider split along its block boundaries: a run of consecutive statements of one block, in source order, with the state they start in (`start_state`), the enclosing blocks (`path`), the declarations in scope and the labels. Added with the divider.",
       "tsql": [],
       "x": false,
       "detect": ""

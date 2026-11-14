@@ -20,6 +20,7 @@ from ...core import scopes, vocabulary
 from ...core.catalog import CatalogReader
 from ...core.ir import Artefact, Node
 from . import collations, names, unparsed
+from .extractor import SOURCE
 from . import types as T
 from .expressions import Opaque, as_role, type_name
 from .parser import ParseFailed, Parsed, parse, walk
@@ -29,7 +30,6 @@ VIEWS = {"CreateViewStatement", "CreateOrAlterViewStatement", "AlterViewStatemen
 FUNCTIONS = {"CreateFunctionStatement", "CreateOrAlterFunctionStatement", "AlterFunctionStatement"}
 PROCEDURES = {"CreateProcedureStatement", "CreateOrAlterProcedureStatement", "AlterProcedureStatement"}
 TRIGGERS = {"CreateTriggerStatement", "CreateOrAlterTriggerStatement", "AlterTriggerStatement"}
-SOURCE = "sqlserver"
 FUNCTION_TYPES = ("scalar_function", "inline_function", "table_function")
 
 
@@ -284,7 +284,8 @@ def lower_source(reader: CatalogReader, identity: str) -> Artefact:
 
 def lower_source_with_tree(reader: CatalogReader, identity: str) -> tuple[Artefact, Parsed | None]:
     """`lower_source`, and the parse tree it lowered (None where the text did not parse)."""
-    database = str(reader.value(identity, "database")) if reader.kind_of(identity) == "query_batch"         else identity.split(".", 1)[0]
+    database = str(reader.value(identity, "database")) if reader.kind_of(identity) == "query_batch" \
+        else identity.split(".", 1)[0]
     text = str(reader.value(identity, "source_text"))
     level = reader.value(database, "compatibility_level", SOURCE)
     quoted = bool(reader.value(identity, "quoted_identifier", SOURCE))

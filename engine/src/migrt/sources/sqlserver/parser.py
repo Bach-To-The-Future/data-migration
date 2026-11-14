@@ -92,8 +92,14 @@ def tokens(text: str, compatibility_level: int, quoted_identifier: bool) -> list
     kinds = {scriptdom.TSqlTokenType.Go: "go", scriptdom.TSqlTokenType.Semicolon: "semicolon",
              scriptdom.TSqlTokenType.WhiteSpace: "space", scriptdom.TSqlTokenType.SingleLineComment: "comment",
              scriptdom.TSqlTokenType.MultilineComment: "comment", scriptdom.TSqlTokenType.EndOfFile: "end"}
-    return [Token(kinds.get(t.TokenType, "other"), int(t.Offset), str(t.Text) if t.Text is not None else "")
-            for t in stream]
+    found, at = [], 0
+    for t in stream:           # the tokens tile the text, so offsets are counted in its characters (.NET counts UTF-16 units)
+        piece = str(t.Text) if t.Text is not None else ""
+        found.append(Token(kinds.get(t.TokenType, "other"), at, piece))
+        at += len(piece)
+    if at != len(text):
+        raise ValueError(f"the lexer's tokens cover {at} of the text's {len(text)} characters")
+    return found
 
 
 _visitor_class = None

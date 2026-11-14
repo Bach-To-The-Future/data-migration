@@ -321,3 +321,22 @@ def test_a_budget_that_is_not_a_number_of_characters_is_refused(corpus_snapshot)
         assert "budget" in str(refused)
     else:
         raise AssertionError("a budget of zero was accepted")
+
+
+def test_a_query_larger_than_the_budget_is_flagged_oversize(corpus_snapshot):
+    artefact, _ = lower_text(corpus_snapshot, "CREATE VIEW sales.vTest AS SELECT o.OrderId FROM sales.[Order] AS o", kind="view")
+
+    [only] = divider.divide(artefact, budget=10)
+
+    assert only.body.attrs["oversize"] is True and only.body.attrs["size"] > 10
+
+
+def test_a_part_whose_carried_scope_or_declarations_disagree_with_its_start_state_is_refused(corpus_snapshot):
+    artefact, reader = proc(corpus_snapshot, BODY)
+    parts = divider.divide(artefact, budget=120)
+    scope_lie, declarations_lie = parts[1], parts[2]
+    scope_lie.body.attrs["scope"] = dict(scope_lie.body.attrs["scope"], variables=[])
+    declarations_lie.body.attrs["declarations"] = []
+
+    assert any("carried scope" in f.message for f in checker.check(scope_lie, lowering.columns_of(reader)))
+    assert any("declaration" in f.message for f in checker.check(declarations_lie, lowering.columns_of(reader)))

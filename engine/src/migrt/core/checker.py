@@ -137,6 +137,14 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
                 declared_types[declaration["name"].casefold()] = VType.from_json(declaration["type"])
             if declaration["group"] == "cursors":
                 cursor_columns.setdefault(declaration["name"].casefold(), []).append(declaration["columns"])
+        start = scopes.State.from_json(carried["start_state"])
+        if carried["scope"] is not None and carried["scope"] != start.scope():
+            fail(artefact.body, "its carried scope differs from the scope of the state it starts in")
+        named = {(d["group"], d["name"].casefold()) for d in carried["declarations"]}
+        for group in ("parameters", "variables", "row_sets", "temp_tables", "cursors"):
+            for name in getattr(start, group):
+                if (group, name.casefold()) not in named:
+                    fail(artefact.body, f"{name} is in scope and the part carries no declaration of it")
         if any(entry["kind"] == "while" for entry in carried["path"]):
             in_loop |= {id(n) for n in artefact.nodes()}
     for n in artefact.nodes():

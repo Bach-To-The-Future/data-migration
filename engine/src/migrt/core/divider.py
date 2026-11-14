@@ -46,7 +46,7 @@ def divide(artefact: Artefact, budget: int) -> list[Artefact]:
         raise ValueError(f"the budget is a number of characters above zero, not {budget}")
     body = artefact.body
     if not _has_statements(body):
-        return [_whole(artefact)]
+        return [_whole(artefact, budget)]
     states = {id(node): state for node, state in scopes.derive_states(body)}
     runs: list[tuple[list[Node], list[dict]]] = []
     if body.kind == "batch_script_body":
@@ -73,12 +73,12 @@ def _has_statements(body: Node) -> bool:
     return any(c.role in scopes.STATEMENT_ROLES or c.role == "batch" for c in body.children)
 
 
-def _whole(artefact: Artefact) -> Artefact:
+def _whole(artefact: Artefact, budget: int) -> Artefact:
     """The one part of an artefact with no statements: all of its body."""
     body = artefact.body
     size = body.position.length
     attrs = {"index": 0, "count": 1, "path": [], "scope": None, "start_state": scopes.State().to_json(),
-             "declarations": [], "labels": [], "size": size, "oversize": False}
+             "declarations": [], "labels": [], "size": size, "oversize": size > budget}
     return _artefact(artefact, Node("part_body", body.span, None, attrs, copy.deepcopy(body.children), id="p0"))
 
 

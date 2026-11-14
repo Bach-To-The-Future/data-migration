@@ -24,8 +24,8 @@ from ...core import scopes, secrets, vocabulary
 from ...core.catalog import CatalogReader
 from ...core.ir import UNKNOWN, Artefact, Node, SourceSpan
 from . import parser
+from .extractor import SOURCE
 
-SOURCE = "sqlserver"
 QUERY_TYPES = ("view", "inline_function")
 BODIES = {"view": "view_body", "inline_function": "table_function_body", "table_function": "table_function_body",
           "scalar_function": "scalar_function_body", "procedure": "procedure_body", "trigger": "trigger_body",
@@ -34,7 +34,8 @@ REASON = ("the artefact did not parse, so it was divided at the boundaries a lex
           "statement terminators) and this part is kept as written")
 UNKNOWNS = ("The artefact did not parse, so it was divided at lexer boundaries into fragments kept as written. Its "
             "parameters, its variables and what each fragment reads and writes are not known, so every fragment is a "
-            "scope barrier, and its dependencies are only those the catalog holds.")
+            "scope barrier. Its dependencies are only those the catalog holds, and its comparisons against error "
+            "numbers are not flagged.")
 
 
 @dataclasses.dataclass
@@ -50,25 +51,28 @@ class Batch:
     separator_start: int = 0
 
 
-def _separator_end(tokens: list[parser.Token], i: int, text: str) -> tuple[int, int] | None:
+def _separator_end(tokens: list[parser.Token], i: int, text: str) -> tuple[int, int, int] | None:
     """If the `GO` token at `i` stands on a line of its own (a count and a comment may follow), the offset where the
-    line ends and the index of the token after it; None if it does not."""
+    separator ends (after its count), the offset where the line ends and the index of the token after it; None if it
+    does not."""
     j = i
     while j > 0 and tokens[j - 1].kind == "space" and "\n" not in tokens[j - 1].text:
         j -= 1
     if j > 0 and not (tokens[j - 1].kind == "space" and "\n" in tokens[j - 1].text):
         return None
-    k = i + 1
+    k, sep_end = i + 1, tokens[i].end
     while k < len(tokens):
         t = tokens[k]
         if t.kind == "end":
-            return len(text), k
+            return sep_end, len(text), k
         if t.kind == "space" and "\n" in t.text:
-            return t.offset + t.text.index("\n"), k
+            return sep_end, t.offset + t.text.index("\n"), k
         if not (t.kind in ("space", "comment") or (t.kind == "other" and t.text.isdigit())):
             return None
+        if t.kind == "other":
+            sep_end = t.end
         k += 1
-    return len(text), k
+    return sep_end, len(text), k
 
 
 def divide_text(tokens: list[parser.Token], text: str) -> list[Batch]:
@@ -100,8 +104,8 @@ def divide_text(tokens: list[parser.Token], text: str) -> list[Batch]:
             found = _separator_end(tokens, i, text)
             if found is not None:
                 settle()
-                line_end, i = found
-                line = text[t.offset:line_end].strip()
+                sep_end, _, i = found
+                line = text[t.offset:sep_end].strip()
                 batches.append(Batch(pieces, None if line.upper() == "GO" else line, t.offset))
                 pieces = []
                 continue
@@ -150,12 +154,24 @@ def lower_unparsed(reader: CatalogReader, identity: str, text: str, compatibilit
     settings: set[str] = set()
     placed: set[int] = set()
 
+    ordered = secrets.merged(marked)
+
+    def quoted(message: str) -> str:
+        """A parser message quotes the source near the error: a marked secret in it is masked like the text is."""
+        for index, span in enumerate(ordered):
+            value = text[span.start:span.end]
+            if value and value in message:
+                name = secrets.setting_name(identity, index)
+                message = message.replace(value, secrets.placeholder(name))
+                settings.add(name)
+        return message
+
     def fragment(piece: Piece, role: str) -> Node:
         span = lines.span(piece.start, piece.end)
         inside = [e for e in errors if (span.start_line, span.start_column) <= (e.line, e.column)
                   <= (span.end_line, span.end_column)]
         placed.update(id(e) for e in inside)
-        reason = REASON + "".join(f"; the parser reported at L{e.line}:{e.column}: {e.message}" for e in inside)
+        reason = REASON + "".join(f"; the parser reported at L{e.line}:{e.column}: {quoted(e.message)}" for e in inside)
         shown, used = secrets.mask(text[piece.start:piece.end], marked, prefix=identity, offset=piece.start)
         settings.update(used)
         return Node("opaque_fragment", span, UNKNOWN, {"reason": reason, "text": shown, "scope_barrier": True,
@@ -196,7 +212,7 @@ def lower_unparsed(reader: CatalogReader, identity: str, text: str, compatibilit
     unplaced = [e for e in errors if id(e) not in placed]
     if unplaced:
         assumptions.append("The parser also reported, outside every fragment: " +
-                           "; ".join(f"L{e.line}:{e.column} {e.message}" for e in unplaced))
+                           "; ".join(f"L{e.line}:{e.column} {quoted(e.message)}" for e in unplaced))
     dependencies = set()
     if reader.has_fact(identity, "references"):
         dependencies |= {r["resolved"] for r in reader.value(identity, "references") if r.get("resolved")}
