@@ -24,7 +24,7 @@ from .core.differences import Catalogue
 from .core.catalog import CatalogReader, Snapshot
 from .core.ir import FORMAT_VERSION, Artefact
 from .core import vocabulary
-from .sources.sqlserver import differences as source_differences, error_comparisons, error_mapping as source_errors, extractor, lowering, names, parser, shapes
+from .sources.sqlserver import differences as source_differences, error_comparisons, error_mapping as source_errors, extractor, lowering, names, shapes
 from .sources.sqlserver import folders as folder_source
 from .sources.sqlserver.extractor import (ExtractorPermissionError, SettingsRequired, TimeZoneRequired,
                                           UnsupportedServer)
@@ -464,11 +464,7 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
         raise ValueError(f"{found} is a {kind}; only {', '.join(sorted(GENERATED_KINDS))} are generated so far")
     if not reader.value(found, "extractable"):
         raise ValueError(f"{found} is encrypted or unreadable: manual work, not handled yet")
-    database = str(reader.value(found, "database")) if kind == "query_batch" else found.split(".", 1)[0]
-    parsed = parser.parse(found, reader.value(found, "source_text"),
-                          reader.value(database, "compatibility_level", extractor.SOURCE),
-                          reader.value(found, "quoted_identifier", extractor.SOURCE))
-    artefact = lowering.lower_artefact(reader, found, parsed)
+    artefact, parsed = lowering.lower_source_with_tree(reader, found)   # a text that does not parse is divided, not rejected
     checker.require(artefact, lowering.columns_of(reader))
     dependencies = generator.Dependencies(
         kinds={dep: reader.kind_of(dep) for dep in artefact.dependencies if snapshot.has(dep)},
@@ -505,7 +501,7 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
         degradations=[{"kind": "assumption", "where": found, "text": text}
                       for text in [*artefact.assumptions, *generated.assumptions]],
         hints=[{**h, "status": report.HINT_NOT_APPLICABLE} for h in artefact.hints],
-        flags=[error_comparisons.flag(c) for c in error_comparisons.flagged(error_comparisons.find(parsed))],
+        flags=[error_comparisons.flag(c) for c in error_comparisons.flagged(error_comparisons.find(parsed) if parsed is not None else [])],
         secrets=[{"setting": name, "text": reads_setting if name in generated.settings_used else unread_setting}
                  for name in artefact.secret_settings],
         name_adjustments=generated.name_adjustments)

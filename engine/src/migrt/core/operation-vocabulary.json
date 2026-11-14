@@ -234,6 +234,13 @@
       "detect": ""
     },
     {
+      "name": "part_body",
+      "meaning": "One part of an artefact the divider split along its block boundaries: a run of consecutive statements of one block, in source order, with the state they start in (`start_state`), the enclosing blocks (`path`), the declarations in scope and the labels. Added by ticket 08c (#86).",
+      "tsql": [],
+      "x": false,
+      "detect": ""
+    },
+    {
       "name": "opaque_fragment",
       "meaning": "Source kept verbatim because lowering could not express it, with its position and the reason. It records what it reads and writes in scope where detectable, and is otherwise a scope barrier.",
       "tsql": [],

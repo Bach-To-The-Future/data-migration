@@ -19,16 +19,17 @@ from collections.abc import Callable
 from ...core import scopes, vocabulary
 from ...core.catalog import CatalogReader
 from ...core.ir import Artefact, Node
-from . import collations, names
+from . import collations, names, unparsed
 from . import types as T
 from .expressions import Opaque, as_role, type_name
-from .parser import Parsed, walk
+from .parser import ParseFailed, Parsed, parse, walk
 from .errors import Errors
 
 VIEWS = {"CreateViewStatement", "CreateOrAlterViewStatement", "AlterViewStatement"}
 FUNCTIONS = {"CreateFunctionStatement", "CreateOrAlterFunctionStatement", "AlterFunctionStatement"}
 PROCEDURES = {"CreateProcedureStatement", "CreateOrAlterProcedureStatement", "AlterProcedureStatement"}
 TRIGGERS = {"CreateTriggerStatement", "CreateOrAlterTriggerStatement", "AlterTriggerStatement"}
+SOURCE = "sqlserver"
 FUNCTION_TYPES = ("scalar_function", "inline_function", "table_function")
 
 
@@ -273,6 +274,25 @@ class Lowering(Errors):
 def lower_artefact(reader: CatalogReader, identity: str, parsed: Parsed) -> Artefact:
     """Lower a view, function, procedure, trigger or batch script (by its catalog kind) into the representation."""
     return Lowering(reader, identity, parsed).lower()
+
+
+def lower_source(reader: CatalogReader, identity: str) -> Artefact:
+    """Parse the text of an artefact and lower it. A text that does not parse is not rejected: it is divided at the
+    boundaries a lexer can still find, each part an opaque fragment (`unparsed`)."""
+    return lower_source_with_tree(reader, identity)[0]
+
+
+def lower_source_with_tree(reader: CatalogReader, identity: str) -> tuple[Artefact, Parsed | None]:
+    """`lower_source`, and the parse tree it lowered (None where the text did not parse)."""
+    database = str(reader.value(identity, "database")) if reader.kind_of(identity) == "query_batch"         else identity.split(".", 1)[0]
+    text = str(reader.value(identity, "source_text"))
+    level = reader.value(database, "compatibility_level", SOURCE)
+    quoted = bool(reader.value(identity, "quoted_identifier", SOURCE))
+    try:
+        parsed = parse(identity, text, level, quoted)
+    except ParseFailed as failed:
+        return unparsed.lower_unparsed(reader, identity, text, level, quoted, failed.errors), None
+    return lower_artefact(reader, identity, parsed), parsed
 
 
 def columns_of(reader: CatalogReader) -> Callable[[str], set[str]]:

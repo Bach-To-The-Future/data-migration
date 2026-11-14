@@ -29,6 +29,10 @@ representation, not about one source:
   and after the whole statement what may be in scope after the block or after the handler. Nothing in it is a scope
   barrier.
 
+- a part of a divided artefact (`part_body`, core.divider) starts from the whole state its first statement started in
+  (`start_state`, which also holds what a rollback would undo and which cursors are global), so what it derives is
+  what the whole artefact derives.
+
 Lowering writes the attribute with `annotate`, and the checker derives it again with `derive` and refuses a
 body whose attribute differs, so the scope at every point is both stated and verified.
 """
@@ -69,6 +73,22 @@ class State:
             temp_tables=list(self.temp_tables), cursors=list(self.cursors), open_cursors=list(self.open_cursors),
             global_cursors=list(self.global_cursors), begun=list(self.begun), save_points=list(self.save_points),
             journal=list(self.journal))
+
+    def to_json(self) -> dict:
+        """The whole state, hidden parts included (which cursors are global, what a rollback would undo), so that a
+        part of an artefact can start from it and derive exactly what the whole artefact derives."""
+        return {**self.scope(), "global_cursors": list(self.global_cursors),
+                "journal": [list(e) for e in self.journal]}
+
+    @staticmethod
+    def from_json(value: dict) -> "State":
+        transaction = value["transaction"]
+        return State(parameters=list(value["parameters"]), variables=list(value["variables"]),
+                     row_sets=list(value["row_sets"]), temp_tables=list(value["temp_tables"]),
+                     barrier=value["barrier"], cursors=list(value["cursors"]), open_cursors=list(value["open_cursors"]),
+                     global_cursors=list(value["global_cursors"]), tx_min=transaction["min"], tx_max=transaction["max"],
+                     begun=list(transaction["begun"]), save_points=list(transaction["save_points"]),
+                     journal=[(e[0], e[1], e[2]) for e in value["journal"]])
 
     def scope(self) -> dict:
         return {"parameters": list(self.parameters), "variables": list(self.variables),
@@ -177,8 +197,8 @@ def _cursor(node: Node, state: State) -> None:
             _remove(names, node.attrs["cursor"])
 
 
-def _visit(node: Node, state: State, out: list[tuple[Node, dict]]) -> None:
-    out.append((node, state.scope()))
+def _visit(node: Node, state: State, out: list[tuple[Node, State]]) -> None:
+    out.append((node, state.copy()))
     kind = node.kind
     if kind == "declare_variable":
         _add(state.variables, node.attrs["name"])
@@ -248,7 +268,18 @@ def _join(state: State, *paths: State) -> None:
 
 def derive(body: Node) -> list[tuple[Node, dict]]:
     """Every statement node of a body with the scope it starts in, in order."""
-    out: list[tuple[Node, dict]] = []
+    return [(node, state.scope()) for node, state in derive_states(body)]
+
+
+def derive_states(body: Node) -> list[tuple[Node, State]]:
+    """Every statement node of a body with the whole state it starts in, in order. A part of a divided artefact
+    (`part_body`) starts from the state its divider recorded, in `start_state`."""
+    out: list[tuple[Node, State]] = []
+    if body.kind == "part_body":
+        state = State.from_json(body.attrs["start_state"])
+        for child in _statements(body, *STATEMENT_ROLES):
+            _visit(child, state, out)
+        return out
     declared = body.children_with("parameter")
     state = State(parameters=[c.attrs["name"] for c in declared],
                   row_sets=[c.attrs["name"] for c in declared if c.attrs.get("row_set")])   # table-valued parameters

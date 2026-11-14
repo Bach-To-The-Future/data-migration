@@ -11,6 +11,10 @@ touches or is a scope barrier. Cursors, transactions, errors and messages (issue
 names is in scope, a fetch names variables in scope and as many as the cursor has columns, a rollback to a savepoint
 names one that may be set, and the values these statements read (the row count, the error number, the transaction
 depth, an error field, the identity value) have their types.
+
+A part of a divided artefact (issue #86, core.divider) is checked as an artefact is: its scopes are derived from the
+state it starts in, and what lies outside it comes from what the divider carried: the types of the variables in scope,
+the column counts of the cursors, every label, and whether it lies inside a loop.
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ import dataclasses
 from typing import Callable
 
 from . import scopes, vocabulary
-from .ir import Artefact, Node
+from .ir import Artefact, Node, VType
 
 # Operations whose operands must be of one type family.
 INTEGER_OPERANDS = {"integer_divide"}
@@ -124,11 +128,21 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
                       if n.kind in ("declare_parameter", "declare_variable") and n.type is not None}
     labels = {n.attrs["name"].casefold() for n in artefact.nodes() if n.kind == "declare_label"}
     cursor_columns: dict[str, list[int | None]] = {}
+    in_loop: set[int] = set()
+    if artefact.body.kind == "part_body":        # a part of a divided artefact brings what lies outside it
+        carried = artefact.body.attrs
+        labels |= {name.casefold() for name in carried["labels"]}
+        for declaration in carried["declarations"]:
+            if declaration["type"] is not None and declaration["group"] in ("parameters", "variables"):
+                declared_types[declaration["name"].casefold()] = VType.from_json(declaration["type"])
+            if declaration["group"] == "cursors":
+                cursor_columns.setdefault(declaration["name"].casefold(), []).append(declaration["columns"])
+        if any(entry["kind"] == "while" for entry in carried["path"]):
+            in_loop |= {id(n) for n in artefact.nodes()}
     for n in artefact.nodes():
         if n.kind == "declare_cursor":
             cursor_columns.setdefault(n.attrs["name"].casefold(), []).append(
                 None if n.attrs["columns"] is None else len(n.attrs["columns"]))
-    in_loop: set[int] = set()
     for loop in (n for n in artefact.nodes() if n.kind == "while"):
         in_loop |= {id(n) for n in loop.walk()}
     scope_for: dict[int, dict] = {}

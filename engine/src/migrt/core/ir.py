@@ -56,6 +56,10 @@ class VType:
     def to_json(self) -> dict:
         return {"name": self.name, **dict(self.params)}
 
+    @staticmethod
+    def from_json(value: dict) -> "VType":
+        return VType.of(value["name"], **{k: v for k, v in value.items() if k != "name"})
+
     def __str__(self) -> str:
         inner = ", ".join(f"{k}={v}" for k, v in self.params)
         return f"{self.name}({inner})" if inner else self.name

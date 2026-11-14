@@ -9,12 +9,13 @@ from migrt.sources.sqlserver import extractor, lowering, names, parser
 P = Provenance("server", "test: a synthetic module")
 
 
-def lower_text(snapshot: Snapshot, sql: str, kind: str = "view", database: str = "RetailSample",
-               schema: str = "sales", name: str = "vTest", ansi_nulls: bool = True, parameters=(),
-               returns=None, table: str = "RetailSample.sales.Order", timing: str = "AFTER",
-               events=("INSERT", "UPDATE", "DELETE")) -> tuple[Artefact, CatalogReader]:
-    """`kind` is the catalog kind: view, the functions, procedure, trigger (on `table`, with its timing and
-    events) or query_batch (a file, whose identity is `batch:<name>.sql`)."""
+def synthetic_module(snapshot: Snapshot, sql: str, kind: str = "view", database: str = "RetailSample",
+                     schema: str = "sales", name: str = "vTest", ansi_nulls: bool = True, parameters=(),
+                     returns=None, table: str = "RetailSample.sales.Order", timing: str = "AFTER",
+                     events=("INSERT", "UPDATE", "DELETE")) -> tuple[CatalogReader, str]:
+    """The text added to the snapshot as a module, with the facts the extractor would read: its reader and identity.
+    `kind` is the catalog kind: view, the functions, procedure, trigger (on `table`, with its timing and events) or
+    query_batch (a file, whose identity is `batch:<name>.sql`)."""
     identity = f"batch:{name}.sql" if kind == "query_batch" else f"{database}.{schema}.{name}"
     facts = [Fact("skeleton", "source_text", sql, P), Fact("skeleton", "extractable", True, P),
              Fact("skeleton", "secrets", _secrets(sql), P),
@@ -31,9 +32,25 @@ def lower_text(snapshot: Snapshot, sql: str, kind: str = "view", database: str =
         facts.append(Fact("skeleton", "returns", returns, P))
     module = CatalogObject(identity, kind, tuple(facts))
     extended = Snapshot.of("test", [o for o in snapshot.objects if o.identity != identity] + [module])
-    reader = CatalogReader(extended, names.resolve)
+    return CatalogReader(extended, names.resolve), identity
+
+
+def lower_text(snapshot: Snapshot, sql: str, kind: str = "view", database: str = "RetailSample",
+               schema: str = "sales", name: str = "vTest", ansi_nulls: bool = True, parameters=(),
+               returns=None, table: str = "RetailSample.sales.Order", timing: str = "AFTER",
+               events=("INSERT", "UPDATE", "DELETE")) -> tuple[Artefact, CatalogReader]:
+    """Lower the text of a module (see `synthetic_module` for its arguments)."""
+    reader, identity = synthetic_module(snapshot, sql, kind, database, schema, name, ansi_nulls, parameters, returns,
+                                        table, timing, events)
     parsed = parser.parse(identity, sql, reader.value(database, "compatibility_level", extractor.SOURCE), True)
     return lowering.lower_artefact(reader, identity, parsed), reader
+
+
+def lower_source_text(snapshot: Snapshot, sql: str, kind: str = "view", database: str = "RetailSample",
+                      schema: str = "sales", name: str = "vTest", parameters=()) -> tuple[Artefact, CatalogReader]:
+    """Lower a module the way a run does: text that does not parse is divided at lexer boundaries."""
+    reader, identity = synthetic_module(snapshot, sql, kind, database, schema, name, parameters=parameters)
+    return lowering.lower_source(reader, identity), reader
 
 
 def _secrets(sql: str) -> list:

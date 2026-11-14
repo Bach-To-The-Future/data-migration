@@ -126,6 +126,13 @@ An opaque fragment whose effect on what is in scope cannot be determined, so tha
 **Scope**:
 What is in force at a point of a procedural artefact: its parameters, variables, table variables, temp tables, cursors (declared, and open) and open transactions (the range of levels that may be open, the `BEGIN` statements whose transaction may still be open, the savepoints that may be set), and the position of the last scope barrier before it. Every statement of the representation states it; the core derives it from the statements and the checker derives it again and refuses a difference. A variable is declared for the rest of its batch, not its block; a temp table made or dropped in a branch or a loop "may exist" after it. A rollback undoes the creation of the temp tables made inside the transaction and brings back the ones dropped inside it, but never undoes a table variable; a `TRY` block may stop after any of its statements, so its handler starts in what may be in scope after any of them.
 
+**Divider**:
+The core component that splits a long artefact along the boundaries of its statements and nested blocks, never by line count, so that no artefact is rejected for its length. A source's lexer-level division of text that does not parse is separate: it makes opaque fragments.
+
+**Part**:
+A run of consecutive statements of one block of an artefact, cut out by the divider, with the whole state its first statement starts in, the blocks around it, the declarations in scope and the labels. Parts together hold every statement once. A part is checked like an artefact. A statement too large for the budget, with nothing inside it to open, is a part of its own, flagged oversize.
+_Avoid_: Chunk, segment (a part is cut along the parse tree, never by size alone)
+
 **Generated description**:
 A natural-language account of an artefact rendered by fixed rules from its intermediate representation, and so always faithful to it.
 _Avoid_: Summary, documentation

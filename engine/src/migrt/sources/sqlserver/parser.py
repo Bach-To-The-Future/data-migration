@@ -66,6 +66,36 @@ def parse(identity: str, text: str, compatibility_level: int, quoted_identifier:
     return Parsed(text, tree, comments)
 
 
+@dataclasses.dataclass(frozen=True)
+class Token:
+    """A lexical token of the text, found without parsing it. `kind` is `go`, `semicolon`, `space`, `comment`, `end`
+    or `other`."""
+    kind: str
+    offset: int
+    text: str
+
+    @property
+    def end(self) -> int:
+        return self.offset + len(self.text)
+
+
+def tokens(text: str, compatibility_level: int, quoted_identifier: bool) -> list[Token]:
+    """The text's tokens, which the lexer finds whether or not the text parses."""
+    dotnet.load()
+    import Microsoft.SqlServer.TransactSql.ScriptDom as scriptdom  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
+    from System.IO import StringReader  # pyright: ignore[reportMissingImports]  (a .NET namespace, loaded by pythonnet at run time)
+
+    if compatibility_level not in PARSERS:
+        raise ValueError(f"no T-SQL parser for compatibility level {compatibility_level}")
+    stream, _errors = getattr(scriptdom, PARSERS[compatibility_level])(quoted_identifier).GetTokenStream(
+        StringReader(text), None)
+    kinds = {scriptdom.TSqlTokenType.Go: "go", scriptdom.TSqlTokenType.Semicolon: "semicolon",
+             scriptdom.TSqlTokenType.WhiteSpace: "space", scriptdom.TSqlTokenType.SingleLineComment: "comment",
+             scriptdom.TSqlTokenType.MultilineComment: "comment", scriptdom.TSqlTokenType.EndOfFile: "end"}
+    return [Token(kinds.get(t.TokenType, "other"), int(t.Offset), str(t.Text) if t.Text is not None else "")
+            for t in stream]
+
+
 _visitor_class = None
 _visits: list = []   # the callbacks of the walks in progress, innermost last
 
