@@ -61,7 +61,7 @@ class Layer1Result:
 def run(text: str, *, links: dict[int, list[str]], node_spans: dict[str, str | None],
         manual_items: list[str], escape_hatch_uses: list[str], expressions: dict[str, Span],
         expression_nodes: list[str], library_module: str | None = None,
-        project_package: str = "converted") -> Layer1Result:
+        project_package: str = "generated") -> Layer1Result:
     """links: generated line -> node ids; node_spans: every node id in the artefact's
     representation -> its source position (None if it has none); manual_items: the ids
     ('M1', ...) generation declared; expressions: the span of the code of each expression generation

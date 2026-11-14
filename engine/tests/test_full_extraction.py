@@ -409,7 +409,7 @@ def test_generated_code_uses_the_recorded_names(engagement, scratch, tmp_path):
     result = engine.preview_run(engagement, scratch, artefacts=[f"{SCRATCH}.s.v Order Lines"], out_dir=tmp_path)
 
     [artefact] = result.artefacts
-    assert artefact.file == tmp_path / "converted" / f"{SCRATCH}" / "s" / "views" / "v_Order_Lines.py"
+    assert artefact.file == tmp_path / "generated" / f"{SCRATCH}" / "s" / "views" / "v_Order_Lines.py"
     code = artefact.file.read_text(encoding="utf-8")
     assert "def v_Order_Lines(ss)" in code and f'spark.read.table("`{SCRATCH}`.`s`.`Order_Lines`")' in code
     assert artefact.layer1.passed, artefact.layer1.failures

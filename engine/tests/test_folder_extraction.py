@@ -396,7 +396,7 @@ def test_one_command_previews_a_view_from_folders_alone(engagement, tmp_path, ca
                               "--sql-server-version", "2022", "--compatibility-level", "RetailSample=160"]) == 0
     summary = json.loads(capsys.readouterr().out)
     assert [a["status"] for a in summary["artefacts"]] == ["Not reconciled"]
-    assert (tmp_path / "converted/RetailSample/sales/views/vOrderTotals.py").is_file()
+    assert (tmp_path / "generated/RetailSample/sales/views/vOrderTotals.py").is_file()
 
 
 # ---------------------------------------------------------------- beside a live server

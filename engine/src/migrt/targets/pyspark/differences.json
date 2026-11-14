@@ -62,7 +62,7 @@
     {
       "id": "1.8",
       "section": "1. ANSI mode",
-      "behaviour": "An exception is raised, so a converted handler runs",
+      "behaviour": "An exception is raised, so a generated handler runs",
       "behaviour_ansi_off": "No exception; the handler never runs and the `NULL` or wrapped value flows on (rows 1.1 to 1.4)",
       "reproduces": "ANSI on",
       "evidence": "Both"
@@ -457,7 +457,7 @@
     {
       "id": "7.1",
       "section": "7. Errors and transactions",
-      "behaviour": "By default each statement is its own transaction against one table, and nothing spans statements, so a converted \"rollback\" leaves the earlier writes committed ([Databricks ACID][d-acid])",
+      "behaviour": "By default each statement is its own transaction against one table, and nothing spans statements, so a generated \"rollback\" leaves the earlier writes committed ([Databricks ACID][d-acid])",
       "reproduces": "Databricks only: `BEGIN ATOMIC … END` or `BEGIN TRANSACTION … COMMIT` through SQL, on Runtime 18.0+ with Unity Catalog managed tables that have catalog commits enabled; DML and `SELECT` only, no DDL ([Databricks transactions][d-txn]). Apache Spark with Delta: none ([Delta concurrency][dl-cc])",
       "evidence": "Both"
     },

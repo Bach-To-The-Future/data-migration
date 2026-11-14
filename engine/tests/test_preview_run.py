@@ -1,5 +1,5 @@
 """The tracer bullet, through the engine's library interface: one view from the sample
-corpus converted end to end as a preview run (issue #36)."""
+corpus generated end to end as a preview run (issue #36)."""
 import ast
 import json
 
@@ -12,7 +12,7 @@ def test_preview_run_generates_one_view_into_the_delivered_project_layout(engage
     out = tmp_path / "out"
     result = engine.preview_run(engagement, extractor_server, artefacts=[VIEW], out_dir=out)
 
-    produced = out / "converted" / "RetailSample" / "sales" / "views" / "vOrderTotals.py"
+    produced = out / "generated" / "RetailSample" / "sales" / "views" / "vOrderTotals.py"
     assert produced.is_file()
     assert [a.file for a in result.artefacts] == [produced]
     tree = ast.parse(produced.read_text(encoding="utf-8"))

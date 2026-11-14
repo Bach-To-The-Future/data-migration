@@ -1,7 +1,7 @@
 """Differential tests of the support library: SQL Server is the oracle (spec section 7, "The support library's
 tests"). A `Duo` is one scratch schema on the sandbox SQL Server and the same-named schema in local Spark, with tables
 declared once and created on both sides, and a SQL Server session that stays open for the test so `@@IDENTITY`,
-`@@ROWCOUNT` and the like carry over between batches as they do in converted code's session.
+`@@ROWCOUNT` and the like carry over between batches as they do in generated code's session.
 
 The comparison code here shares nothing with the library."""
 from __future__ import annotations

@@ -43,7 +43,7 @@ Rule 3 makes a re-run that replays the run catalog identical. A cold run without
 
 ## Amendment, 7 November 2026: after the architecture review
 
-- **Promotion rule 2 is reworded:** an agent's tools are context-builder queries and checks on visible seeds only, except that an agent proposing test inputs may also run the original in the sandbox, never converted code (finding A4).
+- **Promotion rule 2 is reworded:** an agent's tools are context-builder queries and checks on visible seeds only, except that an agent proposing test inputs may also run the original in the sandbox, never generated code (finding A4).
 - **The three agent arms are post-core experiments,** off by default unless they win, and they do not block the orchestrator benchmark. Each has a success measure:
   - **(a) the exploring test-input agent:** mutants killed and coverage of the original gained, not converted share;
   - **(b) the convert-check-retry agent for hard raising:** the share of raised forms delivered, at equal converted share;

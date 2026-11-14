@@ -35,17 +35,30 @@ def read_json(path):
 def test_the_project_follows_the_decided_layout_with_a_package_for_every_folder(engagement, extractor_server, tmp_path):
     run(engagement, extractor_server, tmp_path)
 
-    base = tmp_path / "converted" / "RetailSample"
+    base = tmp_path / "generated" / "RetailSample"
     for produced in (base / "sales" / "views" / "vOrderTotals.py", base / "ref" / "views" / "vActiveCustomers.py",
                      base / "ref" / "functions" / "fnSafeRatio.py", base / "sales" / "functions" / "fnOrderLines.py",
                      base / "sales" / "procedures" / "uspCancelOrder.py",
                      base / "sales" / "triggers" / "trOrder_AuditStatus.py"):
         assert produced.is_file(), produced
-    folders = {p.parent for p in (tmp_path / "converted").rglob("*.py") if p.name != "__init__.py"}
+    folders = {p.parent for p in (tmp_path / "generated").rglob("*.py") if p.name != "__init__.py"}
     folders |= {p for f in folders for p in f.parents if p != tmp_path and tmp_path in p.parents}
     assert all((folder / "__init__.py").is_file() for folder in folders), sorted(map(str, folders))
     for name in ("manifest.json", "settings.json", "error-mapping.json", "representation-rules.md"):
         assert (tmp_path / name).is_file(), name
+
+
+def test_the_delivered_layout_names_no_folder_or_module_converted(engagement, extractor_server, tmp_path):
+    """The code is generated, and nothing has verified it: "converted" is a verdict (ADR 0012), so no folder, file or
+    module of the delivered project carries the word, and the generated code sits under `generated/`."""
+    run(engagement, extractor_server, tmp_path)
+
+    paths = [p.relative_to(tmp_path) for p in tmp_path.rglob("*")]
+    assert pathlib.Path("generated") / "RetailSample" in paths
+    assert [str(p) for p in paths if "converted" in str(p).lower()] == []
+    manifest = read_json(tmp_path / "manifest.json")
+    assert [e["module"] for e in manifest["entry_points"] if "converted" in e["module"].lower()] == []
+    assert all(e["module"].startswith("generated.") for e in manifest["entry_points"])
 
 
 def test_a_query_batch_read_from_a_folder_is_generated_under_its_databases_batches_folder(engagement, tmp_path):
@@ -57,7 +70,7 @@ def test_a_query_batch_read_from_a_folder_is_generated_under_its_databases_batch
                engine.Folder(ROOT / "corpus" / "sample" / "artefacts", "RetailSample")]
     result = engine.preview_run(engagement, None, artefacts=[BATCH], out_dir=tmp_path, folders=folders, settings=settings)
 
-    produced = tmp_path / "converted" / "RetailSample" / "batches" / "batches_customer_dedup.py"
+    produced = tmp_path / "generated" / "RetailSample" / "batches" / "batches_customer_dedup.py"
     assert [a.file for a in result.artefacts] == [produced]
     assert result.artefacts[0].layer1.passed, result.artefacts[0].layer1.failures
     text = produced.read_text(encoding="utf-8")
@@ -83,7 +96,7 @@ def test_every_module_of_the_project_imports_and_defines_what_the_manifest_says(
                 a for a in parameters[1:] if a not in ("inserted", "deleted")][:len(entry["parameters"])]
     finally:
         sys.path.remove(str(tmp_path))
-        for name in [m for m in sys.modules if m == "converted" or m.startswith("converted.")]:
+        for name in [m for m in sys.modules if m == "generated" or m.startswith("generated.")]:
             del sys.modules[name]
 
 
@@ -96,7 +109,7 @@ def test_the_manifest_has_one_entry_point_per_artefact_saying_how_to_invoke_it_a
     assert sorted(entries) == sorted(ALL) and manifest["snapshot"]
     view = entries[VIEW]
     assert view["type"] == "view" and view["status"] == "generated with manual work, not reconciled"   # the money column
-    assert view["module"] == "converted.RetailSample.sales.views.vOrderTotals" and view["functions"] == ["vOrderTotals"]
+    assert view["module"] == "generated.RetailSample.sales.views.vOrderTotals" and view["functions"] == ["vOrderTotals"]
     assert view["call"] == "vOrderTotals(ss)" and "DataFrame" in view["result"]
     assert [c["name"] for c in view["columns"]][:3] == ["OrderId", "CustomerId", "OrderDate"]
     assert view["columns"][0]["spark_type"] == "int" and view["columns"][1]["spark_type"] == "int"
@@ -163,11 +176,11 @@ def test_source_comments_appear_beside_the_generated_code_marked_as_from_the_ori
         engagement, extractor_server, tmp_path):
     run(engagement, extractor_server, tmp_path)
 
-    text = (tmp_path / "converted/RetailSample/sales/views/vOrderTotals.py").read_text(encoding="utf-8")
+    text = (tmp_path / "generated/RetailSample/sales/views/vOrderTotals.py").read_text(encoding="utf-8")
     lines = text.splitlines()
     at = next(i for i, line in enumerate(lines) if "# original: -- AVG over an int column returns int" in line)
     assert 'alias("AvgUnitsPerLine")' in lines[at + 1] or "AvgUnitsPerLine" in " ".join(lines[at:at + 3])
-    procedure = (tmp_path / "converted/RetailSample/sales/procedures/uspCancelOrder.py").read_text(encoding="utf-8")
+    procedure = (tmp_path / "generated/RetailSample/sales/procedures/uspCancelOrder.py").read_text(encoding="utf-8")
     assert "# original: --" in procedure or "# original: /*" in procedure
 
 
@@ -194,7 +207,7 @@ def test_a_dependency_between_generated_artefacts_is_an_import_and_otherwise_man
                           folders=folders, settings=settings)
 
     text = together.artefacts[0].file.read_text(encoding="utf-8")
-    assert "from converted.RetailSample.ref.functions.fnSafeRatio import fnSafeRatio" in text
+    assert "from generated.RetailSample.ref.functions.fnSafeRatio import fnSafeRatio" in text
     assert "fnSafeRatio(ss, " in text
     assert together.artefacts[0].layer1.passed, together.artefacts[0].layer1.failures
     assert together.artefacts[0].manual_items == []

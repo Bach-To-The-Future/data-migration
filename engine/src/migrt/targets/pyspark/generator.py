@@ -52,7 +52,7 @@ MONEY_NOT_BUILT = "it needs the support library's money type, which is not built
 SUM_INT = "3.14"              # silent difference: a running integer total that leaves int
 UDF_FALLBACK = "#64"          # raising a scalar function to one expression, and the Python UDF fallback
 STRING_COMPARISON = "comparing strings by a named rule needs the support library's comparison helpers (not built yet)"
-PROJECT_PACKAGE = "converted"
+PROJECT_PACKAGE = "generated"
 DESCRIPTIONS = {"view": "a view", "inline_function": "an inline table-valued function",
                 "scalar_function": "a scalar function", "table_function": "a multi-statement table-valued function",
                 "procedure": "a stored procedure", "trigger": "a trigger", "query_batch": "a query batch script"}

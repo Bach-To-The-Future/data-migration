@@ -150,7 +150,7 @@ How the Snowflake target carries what SQL Server's session holds and PySpark kee
 
 | SQL Server behaviour | Snowflake target |
 |---|---|
-| Session state between procedures (`@@ROWCOUNT`, `@@ERROR`, the last identity value, the error being handled) | Converted procedures run with caller's rights, so they share the caller's session. Session state lives in a session-scoped temporary table owned by the support library, read and written through its procedures |
+| Session state between procedures (`@@ROWCOUNT`, `@@ERROR`, the last identity value, the error being handled) | Generated procedures run with caller's rights, so they share the caller's session. Session state lives in a session-scoped temporary table owned by the support library, read and written through its procedures |
 | Temp tables and their visibility by call depth | Snowflake temporary tables, named with the call depth by the support library so a callee can shadow a caller's `#name` and drop its own on return |
 | `@@ROWCOUNT` | `SQLROWCOUNT` after each statement, copied into session state where the code reads it |
 | Identity values and row versions | Counters in the state table, through the write path |

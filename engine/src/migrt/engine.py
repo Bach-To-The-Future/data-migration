@@ -244,7 +244,7 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
                 sandbox: Sandbox | None = None) -> RunResult:
     """Convert the named artefacts (database.schema.name) with reconciliation off, extracting
     from a live server, folders of files, or both. Writes
-    converted/<Database>/<schema>/<kind>/<Name>.py and report/report-data.json under out_dir.
+    generated/<Database>/<schema>/<kind>/<Name>.py and report/report-data.json under out_dir.
     Every artefact is "Not reconciled": nothing in a preview is converted (it is generated, not reconciled)."""
     started = _now()
     run_id = f"run-{started:%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:8]}"

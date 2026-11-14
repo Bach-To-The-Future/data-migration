@@ -4,7 +4,7 @@ status: accepted
 
 # Transactions are emulated by restoring Delta table versions
 
-T-SQL procedures rely on multi-statement transactions, and open-source Spark with Delta has none: each write commits on its own. We decided that converted code always uses one support-library helper, a `transaction()` block, whose default mechanism records each written table's version at the start and restores those tables to those versions on rollback. We chose it over Databricks' own transactions because it runs in the sandbox, which keeps stored procedures, the lead artefact type, reconcilable.
+T-SQL procedures rely on multi-statement transactions, and open-source Spark with Delta has none: each write commits on its own. We decided that generated code always uses one support-library helper, a `transaction()` block, whose default mechanism records each written table's version at the start and restores those tables to those versions on rollback. We chose it over Databricks' own transactions because it runs in the sandbox, which keeps stored procedures, the lead artefact type, reconcilable.
 
 The full decision is in [the resolution of the ticket that made it](https://github.com/Bach-To-The-Future/data-migration/issues/10#issuecomment-6142244199).
 

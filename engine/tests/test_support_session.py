@@ -1,4 +1,4 @@
-"""Session state (spec sections 6 and 7): what converted code carries in place of the legacy database session. The
+"""Session state (spec sections 6 and 7): what generated code carries in place of the legacy database session. The
 starting values and the scoping of temp tables and identity values are compared with SQL Server."""
 import json
 

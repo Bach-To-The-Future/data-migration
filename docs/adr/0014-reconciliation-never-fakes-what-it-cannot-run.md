@@ -4,10 +4,10 @@ status: accepted
 
 # Reconciliation never fakes what it cannot run
 
-Some artefacts can't run in the sandbox as they are. They may read another database or a linked server the extraction didn't include, or depend on the current time. Their converted code may use something only Databricks has. A tool could stub the missing objects, fake the clock, or skip the parts that won't run, and report the rest as reconciled. We decided it does none of this:
+Some artefacts can't run in the sandbox as they are. They may read another database or a linked server the extraction didn't include, or depend on the current time. Their generated code may use something only Databricks has. A tool could stub the missing objects, fake the clock, or skip the parts that won't run, and report the rest as reconciled. We decided it does none of this:
 
 - **External objects are never stubbed.** An artefact that touches an object outside the extraction is "Not reconcilable locally" until that object is extracted. The report lists each external database whose extraction would make artefacts reconcilable, with the number of artefacts it would unlock.
-- **The clock is never faked on SQL Server.** It can't be: the sandbox's SQL Server on Linux ignores `libfaketime`, which was tested on 17 October 2026. Instead, the converted side's clock is set to the start of the SQL Server execution, and a value derived from the current time must fall inside that execution's window. Every use of the window is reported under timeliness.
+- **The clock is never faked on SQL Server.** It can't be: the sandbox's SQL Server on Linux ignores `libfaketime`, which was tested on 17 October 2026. Instead, the generated side's clock is set to the start of the SQL Server execution, and a value derived from the current time must fall inside that execution's window. Every use of the window is reported under timeliness.
 - **Code the sandbox can't run goes to an optional remote tier**, a real target account provided for the engagement that receives synthetic data only. Otherwise it is "Not reconcilable locally".
 
 We chose this because a stub or a fake is a guess about the client's system. A pass resting on a guess would let the report claim "Reconciled" for behaviour nobody ran.

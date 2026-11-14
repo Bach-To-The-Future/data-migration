@@ -4,7 +4,7 @@ status: accepted
 
 # The support library ships as source, vendored in each project under versioned names
 
-Converted code imports the support library at runtime, so a client can't run its migrated code without it. We decided:
+Generated code imports the support library at runtime, so a client can't run its migrated code without it. We decided:
 
 - **Source-available.** The library's source ships inside every delivered project, under a source-available licence: perpetual, for the client's internal use and for modification in their own maintenance, with no redistribution and no use to build a competing tool.
 - **One pure-Python wheel.** It has no third-party dependencies of its own. The project carries the wheel with its hash and pins it exactly. There is no dependency on a package index.
@@ -29,7 +29,7 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 
 ## Amendment, 17 October 2026: a support library per target
 
-The support library implements vocabulary operations for one target, so the decision above applies to each target's library, in that target's own unit of packaging. For PySpark that is the wheel described above. For the Snowflake paper design it is a schema of SQL functions and procedures, vendored per project under a versioned schema name. The import name says which target it serves (for example `migrt_spark_v1_4_3`, not `tsqlrt_v1_4_3`). "Every converted function takes session state as its first argument" is a convention of the PySpark target, not of the core. The library holds the target half of the type and error mappings ([ADR 0019](0019-shared-mappings-are-split-by-source-and-by-target.md)). See [What must a new source or target provide?](https://github.com/Bach-To-The-Future/data-migration/issues/17).
+The support library implements vocabulary operations for one target, so the decision above applies to each target's library, in that target's own unit of packaging. For PySpark that is the wheel described above. For the Snowflake paper design it is a schema of SQL functions and procedures, vendored per project under a versioned schema name. The import name says which target it serves (for example `migrt_spark_v1_4_3`, not `tsqlrt_v1_4_3`). "Every generated function takes session state as its first argument" is a convention of the PySpark target, not of the core. The library holds the target half of the type and error mappings ([ADR 0019](0019-shared-mappings-are-split-by-source-and-by-target.md)). See [What must a new source or target provide?](https://github.com/Bach-To-The-Future/data-migration/issues/17).
 
 ## Amendment, 7 November 2026: after the architecture review
 

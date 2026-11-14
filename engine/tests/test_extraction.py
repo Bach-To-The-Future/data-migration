@@ -51,7 +51,7 @@ def test_missing_view_definition_fails_loudly_before_anything_is_read(engagement
 
     assert raised.value.missing == ["database RetailSample: VIEW DEFINITION"]
     assert "VIEW DEFINITION" in str(raised.value)
-    assert not (tmp_path / "converted").exists()
+    assert not (tmp_path / "generated").exists()
 
 
 def test_a_login_holding_more_than_read_only_needs_is_refused(engagement, tmp_path):

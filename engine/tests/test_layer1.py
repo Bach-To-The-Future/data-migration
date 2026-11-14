@@ -4,7 +4,7 @@ import pytest
 
 from migrt.targets.pyspark import layer1
 
-GOOD = '''"""A converted view."""
+GOOD = '''"""A generated view."""
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 

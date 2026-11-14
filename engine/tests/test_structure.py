@@ -63,4 +63,4 @@ def test_one_command_generates_one_view_as_a_preview(tmp_path, capsys, engagemen
     assert code == 0
     assert summary["preview"] is True
     assert [a["status"] for a in summary["artefacts"]] == ["Not reconciled"]
-    assert (tmp_path / "converted/RetailSample/sales/views/vOrderTotals.py").is_file()
+    assert (tmp_path / "generated/RetailSample/sales/views/vOrderTotals.py").is_file()

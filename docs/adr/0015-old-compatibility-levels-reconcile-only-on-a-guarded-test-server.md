@@ -24,14 +24,14 @@ The full decision is in [the resolution of the ticket that made it](https://gith
 
 ## Considered options
 
-- **Reconcile old-level databases on the client's own server.** It would be faithful by construction. Rejected: it would run converted and original code, and write synthetic rows, on a server that may be production. That breaks the promise that the tool never executes client code there.
+- **Reconcile old-level databases on the client's own server.** It would be faithful by construction. Rejected: it would run generated and original code, and write synthetic rows, on a server that may be production. That breaks the promise that the tool never executes client code there.
 - **Raise old databases to level 100 in the sandbox.** It works for most code. Rejected: level 100 changes behaviour, and `*=` joins stop parsing at all (tested), so the oracle would no longer be the client's behaviour.
 - **Refuse versions before 2008.** Simpler. Rejected: those are the systems most in need of migration.
 
 ## Consequences
 
 - **"Remote tier" now covers sources as well as targets.** ADR 0014's remote tier was a target account; this one is a source server.
-- **Pre-2005 syntax is converted but can only be verified on the test server**, for example `*=` joins.
+- **Pre-2005 syntax is generated but can only be verified on the test server**, for example `*=` joins.
 - **Old test servers are unsupported software.** The build tests them on Windows VMs on an isolated network, and licensed installation media for each version is a prerequisite.
 
 ## Amendment, 18 October 2026: every source-side remote tier

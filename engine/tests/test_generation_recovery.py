@@ -67,7 +67,7 @@ def _as(role: str, expression, output_name: str | None = None):
 def test_a_given_up_expression_leaves_no_import_for_a_function_it_called(site):
     result = place(failing_call(), site)
 
-    imports = [line for line in result.text.splitlines() if line.startswith("from converted")]
+    imports = [line for line in result.text.splitlines() if line.startswith("from generated")]
     assert imports == [], "the file imports a function that no code in it calls"
 
 

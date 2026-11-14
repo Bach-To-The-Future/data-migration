@@ -40,7 +40,7 @@ def fields_but_the_manual_items(draft: Draft) -> dict:
 
 def used(draft: Draft) -> Draft:
     draft.emit("def f(ss):", [construct("view_body")])
-    draft.imports["g"] = "from converted.x import g"
+    draft.imports["g"] = "from generated.x import g"
     draft.taken.add("g")
     draft.settings_used.append("a.secret_1")
     draft.assumptions.append("an assumption made before")

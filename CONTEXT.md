@@ -177,15 +177,15 @@ A piece of target code the report singles out for review, either because an LLM 
 Target code that falls back to embedded SQL because the construct has no reasonable idiomatic equivalent in the target language.
 
 **Session state**:
-What converted code carries in place of the legacy database session: temp tables, the open transaction, the last row count, the last identity value and the error being handled. All writes go through it.
+What generated code carries in place of the legacy database session: temp tables, the open transaction, the last row count, the last identity value and the error being handled. All writes go through it.
 _Avoid_: Context (which the context builder assembles), connection
 
 **Single-writer assumption**:
-That at most one writer writes a table at any moment, converted or not, across every project in an environment. Emulated transactions, assigned identity values and constraint enforcement are correct only while it holds. Converted jobs enforce it among themselves with write leases.
+That at most one writer writes a table at any moment, converted or not, across every project in an environment. Emulated transactions, assigned identity values and constraint enforcement are correct only while it holds. Generated jobs enforce it among themselves with write leases.
 _Avoid_: Concurrency caveat, exclusive access
 
 **Write lease**:
-A claim a delivered job records on a table before its first write to it, kept live by a heartbeat and expiring when the heartbeat stops. A second converted writer that finds a live lease fails at once instead of proceeding.
+A claim a delivered job records on a table before its first write to it, kept live by a heartbeat and expiring when the heartbeat stops. A second generated writer that finds a live lease fails at once instead of proceeding.
 _Avoid_: Lock (which suggests the database enforces it)
 
 **Error class**:
@@ -209,7 +209,7 @@ The silent differences as versioned data, split into a source half (how each sou
 _Avoid_: Tolerance catalogue (one of its uses), gotcha list
 
 **Support library**:
-The versioned package that converted code may import to reproduce source behaviour the target lacks.
+The versioned package that generated code may import to reproduce source behaviour the target lacks.
 _Avoid_: Helper library, runtime, utils
 
 ### Verification
@@ -235,7 +235,7 @@ A copy of an original into which the parser inserts statements that report check
 _Avoid_: Traced original, debug build
 
 **Mutant**:
-A copy of converted code with one small fault planted, which the tests must catch. One that is never caught is a survivor.
+A copy of generated code with one small fault planted, which the tests must catch. One that is never caught is a survivor.
 _Avoid_: Fault injection (which suggests runtime faults)
 
 **Verdict**:

@@ -38,7 +38,7 @@ PYTHON_MODULE = Rule("python-module", _python, str.casefold,
                      lambda name: keyword.iskeyword(name) or name.casefold() in GENERATED_IMPORTS)
 
 RULES = {rule.name: rule for rule in (UNITY_CATALOG, PYTHON_MODULE)}
-# Artefact types generated into files, and their folders (spec section 6: converted/<Database>/<schema>/<kind>/<Name>.py).
+# Artefact types generated into files, and their folders (spec section 6: generated/<Database>/<schema>/<kind>/<Name>.py).
 KIND_FOLDERS = {"view": "views", "procedure": "procedures", "scalar_function": "functions",
                 "inline_function": "functions", "table_function": "functions", "trigger": "triggers"}
 BATCH_KIND, BATCH_FOLDER = "query_batch", "batches"
@@ -105,9 +105,9 @@ class Names:
         database, schema, name = self._split(identity)
         if kind == BATCH_KIND:
             module = self._get(PYTHON_MODULE, f"{database}.{BATCH_FOLDER}", name)
-            return f"converted/{self._get(PYTHON_MODULE, '', database)}/{BATCH_FOLDER}/{module}.py", module
+            return f"generated/{self._get(PYTHON_MODULE, '', database)}/{BATCH_FOLDER}/{module}.py", module
         folder = KIND_FOLDERS[kind]
         module = self._get(PYTHON_MODULE, f"{database}.{schema}.{folder}", name)
-        path = (f"converted/{self._get(PYTHON_MODULE, '', database)}/{self._get(PYTHON_MODULE, database, schema)}"
+        path = (f"generated/{self._get(PYTHON_MODULE, '', database)}/{self._get(PYTHON_MODULE, database, schema)}"
                 f"/{folder}/{module}.py")
         return path, module

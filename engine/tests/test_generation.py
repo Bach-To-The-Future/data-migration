@@ -110,8 +110,8 @@ def test_a_view_reads_another_generated_view_by_import_and_a_function_by_import(
 
     assert generated.layer1.passed, generated.layer1.failures
     assert generated.file.manual_items == []
-    assert "from converted.RetailSample.sales.views.vOrderTotals import vOrderTotals" in generated.text
-    assert "from converted.RetailSample.ref.functions.fnSafeRatio import fnSafeRatio" in generated.text
+    assert "from generated.RetailSample.sales.views.vOrderTotals import vOrderTotals" in generated.text
+    assert "from generated.RetailSample.ref.functions.fnSafeRatio import fnSafeRatio" in generated.text
     assert "vOrderTotals(ss).alias(" in generated.text and "fnSafeRatio(" in generated.text
 
 
@@ -235,7 +235,7 @@ def test_a_batch_script_is_one_function_per_go_batch_and_a_list_giving_their_ord
                               kind="query_batch", name="load")
 
     assert generated.layer1.passed, generated.layer1.failures
-    assert generated.file.relative_path == "converted/RetailSample/batches/load.py"
+    assert generated.file.relative_path == "generated/RetailSample/batches/load.py"
     assert "def batch_1(ss) -> None:" in generated.text and "def batch_2(ss) -> None:" in generated.text
     assert "BATCHES = [batch_1, batch_2]" in generated.text
 
