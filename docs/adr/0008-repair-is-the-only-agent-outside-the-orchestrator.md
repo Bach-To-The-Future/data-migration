@@ -72,7 +72,7 @@ Decided by the owner after an agent-architecture review on Claude Fable (14 Nove
 
 **Repair**
 
-- **A loop contract:** limits on patches proposed, visible-check runs and tool calls; a cap on each tool result; a no-progress stop (two successive patches that fail at the same first diverging checkpoint with the same difference); and an explicit `submit` of a patch that has passed the visible checks, the only way the model ends a run. Provisional values are in the spec's section 2.
+- **A loop contract:** limits on patches proposed, visible-check runs and tool calls, where the check limit is never below the patch limit because every patch that code does not reject is checked (provisional: 5 patches, 5 check runs, 30 read-tool calls); a cap on each tool result; a no-progress stop (two successive patches that fail at the same first diverging checkpoint with the same difference); and an explicit `submit` of a patch that has passed the visible checks, the only way the model ends a run. Provisional values are in the spec's section 2.
 - **A ceiling check between attempts:** a running repair run starts no further attempt once the cost ceiling is reached.
 - **Hold-out disclosure rounds are capped per artefact** (provisional: 2). After that the artefact is manual work, with repair's evidence in the report.
 - **Code rejects a patch that introduces a literal taken from the failing input,** before any check runs (the exact rule is in the spec's section 9). Each repair run is otherwise free to try again, so without this a patch could pass by fitting the input it was shown.
