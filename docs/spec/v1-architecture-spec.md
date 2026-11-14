@@ -329,10 +329,10 @@ The core works on an intermediate representation it defines and owns: typed, wit
 3. **Queries are a logical plan in the core's own vocabulary,** modelled on Spark's logical-plan concepts (read, filter, join, aggregate, project, window, sort, limit…) but never using Spark's plan objects. They keep the source's names (aliases, common table expression names) and its order of steps, so generated code stays recognisable beside the original. Query hints and options are kept as annotations and reported as "not applicable on the target", never dropped.
 4. **Lowering is faithful; raising is separate** ([section 5](#5-lowering-raising-and-generation)).
 5. **Nothing is dropped silently.**
-   - Source that lowering cannot express is kept verbatim as an **opaque fragment**, with its position and the reason. The artefact is still converted; the fragment goes to lowering assist and is flagged.
+   - Source that lowering cannot express is kept verbatim as an **opaque fragment**, with its position and the reason. The artefact is still generated; the fragment goes to lowering assist and is flagged.
    - An opaque fragment records what it reads and writes in scope where that can be detected. Where it cannot, it is a **scope barrier**: everything it might touch is unknown afterwards, and the report says so.
    - An artefact that fails to parse at all is divided at boundaries a lexer can still find (`GO` separators, statement terminators), and each part becomes an opaque fragment. As built by [issue #86](https://github.com/Bach-To-The-Future/data-migration/issues/86): every fragment is a scope barrier (nothing was parsed, so nothing is known of what it reads or writes), a semicolon inside a string or a comment ends nothing, a `GO` with a count is kept on its batch, a view or an inline function (one query, no boundary a lexer can find) is one fragment, and what is unknown because nothing parsed is recorded in the artefact's assumptions.
-6. **Dynamic SQL has its own node kind,** distinct from an opaque fragment. The expressions building the string are lowered so the report can show what is assembled; the statement is always a scope barrier and is reported as manual work, while the rest of the artefact is converted. Schema changes inside a routine (10 corpus artefacts) and permission changes have node kinds of their own and are reported as manual work.
+6. **Dynamic SQL has its own node kind,** distinct from an opaque fragment. The expressions building the string are lowered so the report can show what is assembled; the statement is always a scope barrier and is reported as manual work, while the rest of the artefact is generated. Schema changes inside a routine (10 corpus artefacts) and permission changes have node kinds of their own and are reported as manual work.
 7. **Who produced each node** is recorded: deterministic code, or an LLM step with its prompt, model and tier. Flagged fragments in the report are derived from that record.
 8. **A deterministic checker** runs after every step that creates or changes the representation, whoever made the change. It verifies that every name resolves to the catalog or to something in scope, that types agree, that every node has a source position, and that every opaque fragment is accounted for.
 9. **One outer record for every artefact type:** identity, artefact type, tier, dependencies, original source, status. Converted types get the procedural-and-query body. Recognised types get the outer record and an inventory, with no body in v1.
@@ -437,7 +437,7 @@ A scalar function that cannot be a column expression is first raised to one (`IF
 | `GOTO` | Raised for the exit-label shape, otherwise manual | Idiomatic or manual |
 | `PRINT`, `RAISERROR` at severity 10 or below | Messages in session state | Support library |
 | Table-valued parameter | A DataFrame argument | Idiomatic |
-| Dynamic SQL; text-pointer statements (`READTEXT`, `WRITETEXT`, `UPDATETEXT`, `TEXTPTR`, `TEXTVALID`); `COMPUTE`/`COMPUTE BY` | Not converted | Manual |
+| Dynamic SQL; text-pointer statements (`READTEXT`, `WRITETEXT`, `UPDATETEXT`, `TEXTPTR`, `TEXTVALID`); `COMPUTE`/`COMPUTE BY` | Not generated | Manual |
 | Point-in-time reads | A query over the current and history tables with the period predicates, never Delta time travel | Support library |
 | Recursive common table expressions | An iterative helper keeping `MAXRECURSION` (100 by default, error 530 when exceeded) | Support library |
 | `FOR JSON` | A helper reproducing its formatting, omitted nulls and escaping | Support library |
@@ -928,7 +928,7 @@ A table of business areas is added when a run spans several. At scale, each grou
 | Not reconcilable locally otherwise; Contains manual work; Recognised, not converted | Manual work |
 | Not reconciled (preview run) | Not reconciled: preview run, the only heading in a preview run's sign-off |
 
-**Construct statuses:** converted, or converted with a caveat; raised; manual work; failed; blocked; and, in a preview run, "Not reconciled (preview run)" for every construct that was generated, since nothing in a preview is checked (decided on [the engine skeleton][t36]). A construct may also be tagged as produced by a model, as using the escape hatch, or as reviewer-supplied. **Rollup:** construct, artefact, business area (the schema by default, mappable per engagement), run. Recognised artefacts count in the totals as manual work.
+**Construct statuses:** generated, or generated with a caveat; raised; manual work; failed; blocked; and, in a preview run, "Not reconciled (preview run)" for every construct that was generated, since nothing in a preview is checked (decided on [the engine skeleton][t36]). A construct may also be tagged as produced by a model, as using the escape hatch, or as reviewer-supplied. **Rollup:** construct, artefact, business area (the schema by default, mappable per engagement), run. Recognised artefacts count in the totals as manual work.
 
 **Wording.**
 
@@ -987,11 +987,11 @@ Decided in: [Which SQL Server versions does v1 support?][t26], [Which behaviours
 
 | Syntax | Handling |
 |---|---|
-| `*=` and `=*` joins | Converted to ANSI outer joins (a predicate on the inner table moves into `ON`), flagged; verified only on a remote tier at level 80, otherwise "Not reconcilable locally"; the faithful form is still produced |
+| `*=` and `=*` joins | Generated as ANSI outer joins (a predicate on the inner table moves into `ON`), flagged; verified only on a remote tier at level 80, otherwise "Not reconcilable locally"; the faithful form is still produced |
 | `COMPUTE`, `COMPUTE BY` | Manual work |
-| The old `RAISERROR n 'text'` form | Converted |
-| `GROUP BY ALL` | Converted |
-| Ordered `TOP 100 PERCENT` views | Converted without the order, with a caveat that a 2000-level server honoured it |
+| The old `RAISERROR n 'text'` form | Generated |
+| `GROUP BY ALL` | Generated |
+| Ordered `TOP 100 PERCENT` views | Generated without the order, with a caveat that a 2000-level server honoured it |
 
 **SQL Server 2000 and 2005 are an unverified preview in v1** ([ADR 0015][adr15], amended): extraction and faithful conversion only, with every artefact "Not reconciled", and the same for compatibility levels 80 and 90 on any server. Full support (the FreeTDS and jTDS fallback clients, the guarded old-version test servers and their VM tests) stays designed in this section and is activated when a client needs it.
 
@@ -1262,7 +1262,7 @@ Decided in: [What does the testing module own, and how is it kept independent?][
 - **The sandbox:** [`sandbox/`](../../sandbox/), a SQL Server 2022 CU27 container and a toolbox container (Python 3.12, PySpark 4.0.0, Delta 4.0.0, JDK 17, Microsoft's ODBC Driver 18 and `pyodbc` as the test record), pinned to Databricks Runtime 17.3 LTS.
 - **The corpus:** [`corpus/`](../../corpus/), rebuilt by `python corpus/build.py`, with [`corpus/manifest.json`](../../corpus/manifest.json) listing 133 artefacts: a 35-artefact sample corpus (`RetailSample`, written to exercise every converted type and the silent differences) and a 98-artefact public corpus (AdventureWorks2022 and WideWorldImporters). 69 stored procedures, 8 to 2,413 lines. The manifest's construct tags come from pattern matching, not a parser.
 - **The inferred-difference tests:** [`corpus/differences/`](../../corpus/differences/), 13 of 14 inferred differences confirmed on SQL Server and local Spark, 1 refuted.
-- **The hand conversion:** [`prototype/hand-conversion/`](../../prototype/hand-conversion/), nine artefacts converted by hand with a classified step log and the support-library calls they needed. Unverified: nothing was run.
+- **The hand conversion:** [`prototype/hand-conversion/`](../../prototype/hand-conversion/), nine artefacts translated by hand with a classified step log and the support-library calls they needed. Unverified: nothing was run.
 - **The report prototype:** [`prototype/report/`](../../prototype/report/), the winning layouts (sign-off variant A, engineering variant B) rendered from one data file, with PDFs byte-identical across renders.
 - **The vocabulary check:** `corpus/tools/vocabulary_check.py`.
 - **Driver probes:** [`corpus/tools/odbc_errors.py`](../../corpus/tools/odbc_errors.py), [`corpus/tools/sqlclient_errors/`](../../corpus/tools/sqlclient_errors/) and [`corpus/tools/jdbc_errors/`](../../corpus/tools/jdbc_errors/), comparing clients after a failed statement.

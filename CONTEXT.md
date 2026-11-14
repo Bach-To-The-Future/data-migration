@@ -156,7 +156,7 @@ _Avoid_: Few-shot example, sample
 ### Conversion output
 
 **Conversion report**:
-What a run reports: its report data and the two documents rendered from it, the sign-off document and the engineering report. For each artefact it gives a status, and for each construct whether it was converted, converted with a caveat, raised, left as manual work, failed or blocked, and why.
+What a run reports: its report data and the two documents rendered from it, the sign-off document and the engineering report. For each artefact it gives a status, and for each construct whether it was generated, generated with a caveat, raised, left as manual work, failed or blocked, and why.
 
 **Report data**:
 The one deterministic record of a run's results from which both report documents are rendered, in HTML and PDF, so that they cannot disagree. It ships with them.
