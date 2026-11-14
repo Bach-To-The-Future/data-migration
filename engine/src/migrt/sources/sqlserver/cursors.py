@@ -42,6 +42,8 @@ class Cursors(Transactions):
         options = {str(o.OptionKind) for o in definition.Options}
         scope = "local" if "Local" in options else "global" if "Global" in options else "database_default"
         stated = [KINDS[o] for o in options if o in KINDS and o != "Insensitive"]
+        if len(stated) > 1:
+            raise Opaque(s, "a cursor declared with more than one of STATIC, KEYSET, DYNAMIC and FAST_FORWARD")
         kind = stated[0] if stated else ("static" if "Insensitive" in options else "dynamic")
         if "Scroll" in options:
             scrollable = True

@@ -215,3 +215,14 @@ def test_the_checker_refuses_a_transaction_scope_that_differs_from_the_one_deriv
     [select] = of_kind(artefact, "emit_result_set")
     select.attrs["scope"]["transaction"]["min"] = 0
     assert any("scope" in f.message and "derived" in f.message for f in checked(artefact, reader))
+
+
+def test_a_transaction_begun_in_a_loop_may_be_opened_once_for_every_pass_so_the_depth_is_unbounded(corpus_snapshot):
+    artefact = lowered_script(corpus_snapshot,
+                              "DECLARE @n int = 0;\nWHILE @n < 3\nBEGIN\n  BEGIN TRAN;\n  SET @n += 1;\nEND\nSELECT 1;\n")
+
+    [batch] = artefact.body.children_with("batch")
+    [loop] = [s for s in statements(batch) if s.kind == "while"]
+    [begin, step] = loop.children_with("body")
+    assert (tx(begin)["min"], tx(begin)["max"]) == (0, None)         # the second pass starts with one open
+    assert (tx(statements(batch)[-1])["min"], tx(statements(batch)[-1])["max"]) == (0, None)

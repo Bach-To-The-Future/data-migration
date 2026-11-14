@@ -207,6 +207,12 @@ def _visit(node: Node, state: State, out: list[tuple[Node, dict]]) -> None:
         _join(state, then_state, else_state)
     elif kind == "while":
         body_state = state.copy()
+        probe = state.copy()                       # a pass over the body to see what it does to the open transactions
+        for child in _statements(node, "body"):
+            _visit(child, probe, [])
+        if probe.tx_max is None or (state.tx_max is not None and probe.tx_max > state.tx_max):
+            body_state.tx_max = None               # each pass may open one more: no bound
+        body_state.tx_min = min(state.tx_min, probe.tx_min)
         for child in _statements(node, "body"):
             _visit(child, body_state, out)
         _join(state, body_state, state.copy())     # the body may run no times
