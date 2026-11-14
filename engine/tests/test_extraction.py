@@ -7,7 +7,7 @@ import pytest
 from migrt import engine
 from migrt.sources.sqlserver.connection import Connection
 
-from conftest import sandbox_server
+from conftest import RUN, sandbox_server
 
 VIEW = "RetailSample.sales.vOrderTotals"
 
@@ -100,4 +100,29 @@ def test_re_extracting_an_unchanged_server_gives_the_same_snapshot(engagement, e
     second = engine.extract(engagement, extractor_server)
 
     assert first.id == second.id
-    assert [o.content_hash for o in first.objects] == [o.content_hash for o in second.objects]
+    # What the identity leaves out (ADR 0023) may differ between two reads of an unchanged server, so the objects are
+    # compared as the identity sees them: Query Store keeps moving the row counts of RetailSample's partitions.
+    assert [o.identity_hash for o in first.objects] == [o.identity_hash for o in second.objects]
+
+
+def test_a_database_created_between_two_extractions_leaves_the_snapshot_identity_unchanged(engagement, extractor_server, dba):
+    name = f"MigrtUnrelated_{RUN}"
+    first = engine.extract(engagement, extractor_server)
+    dba.query(f"IF DB_ID(N'{name}') IS NOT NULL DROP DATABASE [{name}]; CREATE DATABASE [{name}]")
+    try:
+        second = engine.extract(engagement, extractor_server)
+    finally:
+        dba.query(f"DROP DATABASE [{name}]")
+    assert first.id == second.id
+
+
+def test_queries_run_against_the_database_between_two_extractions_leave_the_snapshot_identity_unchanged(engagement, extractor_server, dba):
+    """Query Store writes to its internal tables while queries run, which moves the raw capture of sys.partitions."""
+    first = engine.extract(engagement, extractor_server)
+    dba.query("USE RetailSample")
+    for i in range(30):
+        dba.query(f"SELECT COUNT(*) AS c FROM RetailSample.sales.[Order] AS o JOIN RetailSample.sales.OrderLine AS l "
+                  f"ON l.OrderId = o.OrderId WHERE o.OrderId > {i}")
+    dba.query("EXEC RetailSample.sys.sp_query_store_flush_db")
+    second = engine.extract(engagement, extractor_server)
+    assert first.id == second.id
