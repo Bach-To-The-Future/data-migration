@@ -294,7 +294,8 @@ def test_every_statement_says_what_is_in_scope_before_it(corpus_snapshot):
 
     declare, create, row_set, first, drop, last = statements(artefact)
     assert scope_of(declare) == {"parameters": ["@p"], "variables": [], "row_sets": [], "temp_tables": [],
-                                 "barrier": None}
+                                 "cursors": [], "open_cursors": [], "barrier": None,
+                                 "transaction": {"min": 0, "max": None, "begun": [], "save_points": []}}
     assert scope_of(create)["variables"] == ["@a"]
     assert scope_of(row_set)["temp_tables"] == ["#t"]
     assert scope_of(first)["row_sets"] == ["@r"] and scope_of(first)["temp_tables"] == ["#t"]
@@ -336,19 +337,18 @@ def test_a_scope_barrier_marks_everything_after_it_as_uncertain(corpus_snapshot)
 
 def test_an_opaque_statement_records_what_it_touches_or_is_a_barrier(corpus_snapshot):
     artefact = lowered(corpus_snapshot,
-                       "DECLARE @n int = 1;\nPRINT 'n is ' + CAST(@n AS varchar(10));\n"
-                       "BEGIN TRY SET @n = 2; END TRY BEGIN CATCH SET @n = 3; END CATCH")
+                       "DECLARE @n int = 1;\nRAISERROR(50001, 16, 1, @n);\nSET ROWCOUNT 5;")
 
-    _, printed, guarded = statements(artefact)
-    # PRINT can change nothing but what it names, so it is not a barrier and says what it touches
-    assert printed.kind == "opaque_fragment" and printed.attrs["scope_barrier"] is False
-    assert printed.attrs["touches"] == {"variables": ["@n"], "temp_tables": [], "undeclared": []}
-    # TRY/CATCH is lowered by #85 and may run anything: it is a barrier
-    assert guarded.kind == "opaque_fragment" and guarded.attrs["scope_barrier"] is True
+    _, raised, session = statements(artefact)
+    # RAISERROR can change nothing but what it names, so it is not a barrier and says what it touches
+    assert raised.kind == "opaque_fragment" and raised.attrs["scope_barrier"] is False
+    assert raised.attrs["touches"] == {"variables": ["@n"], "temp_tables": [], "undeclared": []}
+    # a session option that changes how later statements behave may change anything: it is a barrier
+    assert session.kind == "opaque_fragment" and session.attrs["scope_barrier"] is True
 
 
 def test_an_opaque_statement_touching_a_name_not_in_scope_is_a_checker_finding(corpus_snapshot):
-    artefact, reader = proc(corpus_snapshot, "DECLARE @n int = 1;\nPRINT @n;")
+    artefact, reader = proc(corpus_snapshot, "DECLARE @n int = 1;\nRAISERROR(50001, 16, 1, @n);")
     assert checked(artefact, reader) == []
     [printed] = [n for n in of_kind(artefact, "opaque_fragment")]
     printed.attrs["touches"] = {"variables": ["@ghost"], "temp_tables": [], "undeclared": []}

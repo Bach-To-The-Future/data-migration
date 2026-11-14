@@ -12,7 +12,7 @@ import itertools
 from typing import TYPE_CHECKING
 
 from . import deltaops
-from .errors import RestoreRefused, VersionVacuumed
+from .errors import RestoreRefused, ScopeAborted, VersionVacuumed
 from .state import lit
 
 if TYPE_CHECKING:
@@ -52,7 +52,10 @@ class _Real:
 
 class Transaction:
     """One BEGIN TRANSACTION, as a block. `commit` and `rollback` end it early; leaving the block commits, and leaving it
-    with an exception rolls everything back, as a failed statement under XACT_ABORT ON does."""
+    with an exception rolls everything back, as a failed statement under XACT_ABORT ON does. The one exception that leaves
+    it open is `ScopeAborted`: an error that ends the scope of a procedure ends neither the transaction the procedure
+    opened nor the caller, which goes on inside it and may commit it or roll it back (ADR 0004, amended). With XACT_ABORT
+    on the error is not a `ScopeAborted` but the batch's end, and rolls the transaction back."""
 
     def __init__(self, ss: "SessionState"):
         self.ss, self._real = ss, None
@@ -64,6 +67,9 @@ class Transaction:
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._real is None or self.ss._tx.real is not self._real:
             return                                          # already ended by a commit, or a rollback of the whole
+        if exc_type is not None and issubclass(exc_type, ScopeAborted):
+            self._real = None                               # the scope ended; the transaction is still open in its caller
+            return
         if exc_type is not None:
             self.ss._tx.rollback()
         else:

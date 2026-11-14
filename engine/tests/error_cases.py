@@ -27,6 +27,7 @@ SETUP = [
     "INSERT {s}.C (PId, Tag) VALUES (10, 'x')",
     "INSERT {s}.K (Id, U) VALUES (1, 'a')",
     "CREATE PROCEDURE {s}.Recurse AS EXEC {s}.Recurse",
+    "CREATE PROCEDURE {s}.Unbalanced AS BEGIN TRAN",
 ]
 
 SPARK_SETUP = [
@@ -163,6 +164,8 @@ def cases(database: str) -> list[Case]:
         Case("commit_without_begin", "transaction_request_without_begin", "COMMIT TRANSACTION", {"request": "COMMIT"}),
         Case("rollback_without_begin", "transaction_request_without_begin", "ROLLBACK TRANSACTION", {"request": "ROLLBACK"}),
         Case("save_without_begin", "transaction_request_without_begin", "SAVE TRANSACTION s1", {"request": "SAVE"}, ends=BATCH),
+        Case("procedure_leaves_a_transaction_open", "transaction_count_mismatch", "EXEC {s}.Unbalanced",
+             {"previous": 0, "current": 1}, cleanup="WHILE @@TRANCOUNT > 0 ROLLBACK"),
         Case("rollback_to_unknown_savepoint", "savepoint_not_found", "BEGIN TRAN; ROLLBACK TRAN nope", {"name": "nope"},
              cleanup="WHILE @@TRANCOUNT > 0 ROLLBACK"),
         Case("raiserror_16", "raised_error", "RAISERROR('boom %s', 16, 3, 'x')",

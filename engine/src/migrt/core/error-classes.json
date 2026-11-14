@@ -267,6 +267,20 @@
       ]
     },
     {
+      "name": "transaction_count_mismatch",
+      "meaning": "A procedure ended with a different number of transactions open than it began with: it opened one it did not close, or closed more than it opened. The caller goes on.",
+      "details": [
+        {
+          "name": "previous",
+          "meaning": "The number of transactions open when the procedure was called."
+        },
+        {
+          "name": "current",
+          "meaning": "The number open when it ended."
+        }
+      ]
+    },
+    {
       "name": "raised_error",
       "meaning": "The code raised an error of its own at a severity that transfers control to a handler, and processing goes on after it unless the setting that aborts on error is on. Number, message, severity and state are the code's.",
       "details": [

@@ -271,6 +271,13 @@
       "ends": "statement",
       "message": "Cannot roll back {name}. No transaction or savepoint of that name was found."
     },
+    "transaction_count_mismatch": {
+      "number": 266,
+      "severity": 16,
+      "state": 2,
+      "ends": "statement",
+      "message": "Transaction count after EXECUTE indicates a mismatching number of BEGIN and COMMIT statements. Previous count = {previous}, current count = {current}."
+    },
     "raised_error": {
       "number": 50000,
       "severity": {

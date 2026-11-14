@@ -365,11 +365,16 @@ class SessionState:
     # ------------------------------------------------------------------ call depth, temp tables and scratch tables
 
     @contextlib.contextmanager
-    def scope(self, procedure: "str | None | Any" = UNKNOWN) -> Iterator[None]:
+    def scope(self, procedure: "str | None | Any" = UNKNOWN, *, procedure_call: bool = False) -> Iterator[None]:
         """A call depth: a procedure, function or trigger, named for ERROR_PROCEDURE(). Temp tables created inside are dropped
         when it ends. An error that leaves it is an error of this call depth: a TRY beside the statement that failed does not
         see a name that did not resolve, and the TRY of the caller does (finding 7.6). A guarded statement that ended the
-        procedure ends it here, and the caller goes on."""
+        procedure ends it here, and the caller goes on.
+
+        `procedure_call` is for a procedure called with EXEC: when it ends, normally or by an error that ended only its
+        scope, with a different number of transactions open than it was called with, SQL Server raises error 266 in the
+        caller, which goes on. A transaction the procedure opened and did not close is still open there."""
+        entered = self._tx.trancount
         scope = _Scope(procedure=procedure)
         self._scopes.append(scope)
         try:
@@ -387,6 +392,8 @@ class SessionState:
                 self._drop_physical(spec.target)
             for name in scope.owned:
                 self._drop_physical(name)
+        if procedure_call and self._tx.trancount != entered:
+            raise self.fail("transaction_count_mismatch", previous=entered, current=self._tx.trancount)
 
     def tables_in_scope(self) -> list[str]:
         return sorted(self._scopes[-1].names.values())
@@ -545,8 +552,36 @@ class SessionState:
         return self.state.advance("rowversion", spec.database, n, 1, 0, self.job, self.run)
 
     def transaction(self) -> Transaction:
-        """BEGIN TRANSACTION, as a block: `with ss.transaction() as tx:`. Leaving it commits, an exception rolls back."""
+        """BEGIN TRANSACTION, as a block: `with ss.transaction() as tx:`. Leaving it commits, an exception rolls back (an
+        error that ends only the scope of a procedure leaves the transaction open: see `Transaction`)."""
         return Transaction(self)
+
+    # The transaction statements, one call each, for code that is not block-shaped: a transaction a procedure opens and does
+    # not close is still open in its caller, which commits it or rolls it back.
+
+    def begin_transaction(self) -> None:
+        """`BEGIN TRANSACTION`: open one, or nest one level deeper in the open one."""
+        self._tx.begin()
+
+    def commit_transaction(self) -> None:
+        """`COMMIT TRANSACTION`: close one level; closing the outermost keeps the changes."""
+        self._tx.commit()
+
+    def rollback_transaction(self) -> None:
+        """`ROLLBACK TRANSACTION`: undo everything since the outermost level began and close every level."""
+        self._tx.rollback()
+
+    def save_transaction(self, name: str) -> None:
+        """`SAVE TRANSACTION name`."""
+        self._tx.save(name, self._tx.real)
+
+    def rollback_to_save_point(self, name: str) -> None:
+        """`ROLLBACK TRANSACTION name` of a savepoint: undo what came after it and leave the transaction open."""
+        self._tx.rollback_to(name, self._tx.real)
+
+    def xact_state(self) -> int:
+        """`XACT_STATE()`: 1 while a transaction is open, 0 when there is none."""
+        return 1 if self._tx.real is not None and self._tx.real.depth > 0 else 0
 
     # ------------------------------------------------------------------ writes: the public statements
 
@@ -1032,6 +1067,8 @@ class Guard:
             return False
         ss.at_error = error.number
         inside_try = bool(ss._tries)                               # a TRY anywhere up the call stack takes the error
+        if ss.xact_abort and not inside_try:
+            ss._tx.doom()                                          # XACT_ABORT ON: the error rolls the transaction back
         if inside_try or ss.xact_abort or error.ends == "batch" or (error.ends == "scope" and len(ss._scopes) == 1):
             if error is exc:
                 return False

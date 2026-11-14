@@ -10,8 +10,7 @@ Artefacts handled here: a view (`view_body`, one query), an inline table-valued 
 (`table_function_body`, one query), a scalar or multi-statement function, a procedure (`procedure_body`),
 a trigger (`trigger_body`, with the table, timing and events the catalog holds) and a script of batches
 (`batch_script_body`, one `batch` per GO). The statements of the last four are lowered by procedural.py;
-what it does not lower yet (cursors, transactions, TRY/CATCH, errors and messages are ticket 08b) is an
-opaque fragment, and dynamic SQL has its own node kind. Every statement carries its scope (core.scopes).
+what it does not lower is an opaque fragment, and dynamic SQL has its own node kind. Every statement carries its scope (core.scopes).
 """
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ from . import collations, names
 from . import types as T
 from .expressions import Opaque, as_role, type_name
 from .parser import Parsed, walk
-from .procedural import Procedural
+from .errors import Errors
 
 VIEWS = {"CreateViewStatement", "CreateOrAlterViewStatement", "AlterViewStatement"}
 FUNCTIONS = {"CreateFunctionStatement", "CreateOrAlterFunctionStatement", "AlterFunctionStatement"}
@@ -33,7 +32,7 @@ TRIGGERS = {"CreateTriggerStatement", "CreateOrAlterTriggerStatement", "AlterTri
 FUNCTION_TYPES = ("scalar_function", "inline_function", "table_function")
 
 
-class Lowering(Procedural):
+class Lowering(Errors):
     def __init__(self, reader: CatalogReader, identity: str, parsed: Parsed):
         super().__init__(reader, identity, parsed)
         self.opaque_dependencies: set[str] = set()
@@ -189,7 +188,7 @@ class Lowering(Procedural):
         """One `batch` per GO. Variables and table variables end with their batch; temp tables do not."""
         out = []
         for batch in batches:
-            self.variables, self.row_sets = {}, {}
+            self.begin_batch()
             statements = self.statement_list(list(batch.Statements), "statement")
             out.append(Node("batch", self.span(batch), None, {}, statements, role="batch"))
         return Node("batch_script_body", self.parsed.span(self.parsed.tree), None,
@@ -232,6 +231,10 @@ class Lowering(Procedural):
                 found.add(n.attrs["procedure"])
             elif n.kind in ("insert_rows", "update_rows", "delete_rows") and n.attrs["target_kind"] == "table":
                 found.add(n.attrs["target"])
+            elif n.kind == "write_current_row":
+                found.add(n.attrs["target"])
+            elif n.kind in ("last_identity", "set_session_option") and n.attrs.get("table"):
+                found.add(n.attrs["table"])
         if self.reader.has_fact(self.identity, "references"):
             found |= {r["resolved"] for r in self.reader.value(self.identity, "references") if r.get("resolved")}
         found.discard(self.identity)

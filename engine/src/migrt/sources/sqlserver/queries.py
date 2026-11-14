@@ -135,9 +135,9 @@ class Queries(Expressions):
     # ------------------------------------------------------------------ one query specification
 
     def specification(self, spec) -> tuple[Node, list[tuple[str, VType]]]:
-        if spec.ForClause is not None:
+        if spec.ForClause is not None and type_name(spec.ForClause) not in ("UpdateForClause", "ReadOnlyForClause"):
             raise Opaque(spec, "FOR XML is not lowered yet" if "Xml" in type_name(spec.ForClause)
-                         else "FOR JSON is not lowered yet")
+                         else "FOR JSON is not lowered yet")      # FOR UPDATE and FOR READ ONLY are a cursor's (cursors.py)
         source = Node("read_values", self.span(spec), None, {"columns": [], "rows": 1, "alias": None})
         self.scopes.append({})
         try:

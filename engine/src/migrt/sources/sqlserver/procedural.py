@@ -21,8 +21,10 @@ again. What this module keeps is the lowering-time view of the same facts (which
 temp tables are declared) so that every name resolves to its declaration and its type.
 
 A statement lowering cannot express is an opaque fragment. If it can change nothing but the names it mentions
-(a PRINT, an INSERT whose OUTPUT clause is not lowered) it records those names in `touches` and is not a scope
-barrier; any other (a TRY block, a transaction, a cursor, a call to something unresolved) is a scope barrier.
+(a PRINT, an INSERT whose OUTPUT clause is not lowered, a FETCH) it records those names in `touches` and is not a
+scope barrier; any other (a transaction statement, a cursor declaration, a call to something unresolved) is a scope
+barrier. TRY/CATCH, transactions, cursors, errors, messages, row counts and identity are lowered by `transactions`,
+`cursors` and `errors`, which extend this class.
 """
 from __future__ import annotations
 
@@ -51,12 +53,7 @@ SCHEMA_CHANGES = {"CreateTableStatement", "AlterTableStatement", "DropTableState
 # touch and are not scope barriers. Every other statement kept as written is a barrier.
 NAMED_ONLY = {"PrintStatement", "RaiseErrorStatement", "ThrowStatement", "SelectStatement", "InsertStatement",
               "UpdateStatement", "DeleteStatement", "MergeStatement", "SetVariableStatement", "ReturnStatement",
-              "WaitForStatement", "CreateIndexStatement", "TruncateTableStatement"}
-LATER = {"TryCatchStatement": "TRY/CATCH", "ThrowStatement": "THROW", "RaiseErrorStatement": "RAISERROR",
-         "PrintStatement": "PRINT", "BeginTransactionStatement": "transactions", "CommitTransactionStatement":
-         "transactions", "RollbackTransactionStatement": "transactions", "SaveTransactionStatement": "savepoints",
-         "DeclareCursorStatement": "cursors", "OpenCursorStatement": "cursors", "FetchCursorStatement": "cursors",
-         "CloseCursorStatement": "cursors", "DeallocateCursorStatement": "cursors"}
+              "WaitForStatement", "CreateIndexStatement", "TruncateTableStatement", "FetchCursorStatement"}
 COMPOUND = {"AddEquals": "Add", "SubtractEquals": "Subtract", "MultiplyEquals": "Multiply",
             "DivideEquals": "Divide", "ModEquals": "Modulo"}
 BINARY_NAMES = {"Add": "add", "Subtract": "subtract", "Multiply": "multiply", "Divide": "divide", "Modulo": "modulo"}
@@ -71,6 +68,10 @@ NULLABLE_ASSUMPTION = ("A column of a temp table or table variable with neither 
 
 class Procedural(Queries):
     return_type: VType | None = None          # what a scalar function returns, set while lowering its body
+
+    def begin_batch(self) -> None:
+        """A batch of a script starts with no variables and no table variables; temp tables survive it."""
+        self.variables, self.row_sets = {}, {}
 
     # ------------------------------------------------------------------ statement lists
 
@@ -93,9 +94,7 @@ class Procedural(Queries):
                 if self.temp_target(s):
                     raise Opaque(s, f"{kind} on a temp table is not lowered yet")
                 return [self.schema_change(s)]
-            later = LATER.get(kind)
-            raise Opaque(s, f"{kind} ({later}) is lowered by ticket 08b (#85): until then it is kept as written"
-                         if later else f"{kind} is not lowered yet: it is kept as written")
+            raise Opaque(s, f"{kind} is not lowered yet: it is kept as written")
         except Opaque as opaque:
             return [self.opaque_statement(s, opaque.reason)]
 

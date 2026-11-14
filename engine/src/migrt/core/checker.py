@@ -7,7 +7,10 @@ fragment is accounted for. It checks the shape of the plan and the types of the 
 lowering produces for views and functions, and the procedural part (issue #43): every statement's scope is
 derived again and compared with the one lowering wrote, every variable, table variable and temp table a node
 reads is in the scope of its statement, every jump has its label, and every opaque statement either says what it
-touches or is a scope barrier.
+touches or is a scope barrier. Cursors, transactions, errors and messages (issue #85): every cursor a statement
+names is in scope, a fetch names variables in scope and as many as the cursor has columns, a rollback to a savepoint
+names one that may be set, and the values these statements read (the row count, the error number, the transaction
+depth, an error field, the identity value) have their types.
 """
 from __future__ import annotations
 
@@ -31,7 +34,13 @@ PLAN_ROLES = {
     "in_query": {"argument", "query"}, "window": {"function"},
     "if": {"condition"}, "while": {"condition"}, "assign": {"argument"}, "assign_from_rows": {"query"},
     "emit_result_set": {"query"}, "insert_rows": {"source"}, "update_rows": {"input"}, "delete_rows": {"input"},
+    "declare_cursor": {"query"}, "emit_message": {"argument"},
 }
+# Reads of session state: each must say its type.
+TYPED_READS = {"rows_affected", "last_statement_error", "transaction_depth", "transaction_state", "fetch_status",
+               "error_field", "last_identity"}
+CURSOR_STATEMENTS = ("open_cursor", "fetch_cursor", "close_cursor", "deallocate_cursor", "write_current_row")
+RAISE_FORMS = {"raiserror": {"message", "severity", "state"}, "throw": {"number", "message", "state"}}
 # Operations that compare strings by a comparison rule, and where the rule goes.
 RULED = {"compare", "between", "in_list", "like", "null_if_equal", "minimum", "maximum", "position_of",
          "replace_text", "in_query"}
@@ -114,6 +123,11 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
     declared_types = {n.attrs["name"].casefold(): n.type for n in artefact.nodes()
                       if n.kind in ("declare_parameter", "declare_variable") and n.type is not None}
     labels = {n.attrs["name"].casefold() for n in artefact.nodes() if n.kind == "declare_label"}
+    cursor_columns: dict[str, list[int | None]] = {}
+    for n in artefact.nodes():
+        if n.kind == "declare_cursor":
+            cursor_columns.setdefault(n.attrs["name"].casefold(), []).append(
+                None if n.attrs["columns"] is None else len(n.attrs["columns"]))
     in_loop: set[int] = set()
     for loop in (n for n in artefact.nodes() if n.kind == "while"):
         in_loop |= {id(n) for n in loop.walk()}
@@ -193,6 +207,10 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
                 fail(node, f"writes the table variable {target}, which is not in scope")
             elif target_kind == "table" and target not in artefact.dependencies:
                 fail(node, f"writes {target}, which is not among the dependencies")
+        if node.kind in ("write_current_row", "last_identity", "set_session_option"):
+            named = node.attrs.get("target" if node.kind == "write_current_row" else "table")
+            if named is not None and named not in artefact.dependencies:
+                fail(node, f"names {named}, which is not among the dependencies")
         if node.kind in CALLS:
             called = node.attrs["procedure"] if node.kind == "call_procedure" else node.attrs["function"]
             if called not in artefact.dependencies:
@@ -200,10 +218,40 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
         if node.kind == "variable" and not in_scope(node, node.attrs["name"]):
             fail(node, f"{node.attrs['name']} is not in scope: it is neither a parameter nor a variable declared "
                        "before this point")
+        if node.kind in CURSOR_STATEMENTS:
+            scope = scope_for.get(id(node))
+            name = node.attrs["cursor"]
+            if scope is not None and not scopes.cursor_known(scope, name):
+                fail(node, f"names the cursor {name}, which is not in scope: no cursor of that name is declared before "
+                           "this point")
+            if node.kind == "fetch_cursor":
+                counts = cursor_columns.get(name.casefold(), [])
+                if counts and None not in counts and len(node.attrs["variables"]) not in counts:
+                    fail(node, f"fetches into {len(node.attrs['variables'])} variables from a cursor of "
+                               f"{counts} columns")
+                if len(node.attrs["targets"]) != len(node.attrs["variables"]):
+                    fail(node, "names a different number of conversions than variables")
+        if node.kind == "rollback_to_save_point":
+            scope = scope_for.get(id(node))
+            if scope is not None and not scope["barrier"] and not any(
+                    p.casefold() == node.attrs["save_point"].casefold() for p in scope["transaction"]["save_points"]):
+                fail(node, f"rolls back to the savepoint {node.attrs['save_point']}, which is not set before this point")
+        if node.kind in TYPED_READS and (node.type is None or node.type.name == "unknown"):
+            fail(node, f"{node.kind} reads session state and says no type")
+        if node.kind == "emit_message" and node.children_with("argument"):
+            message = node.child("argument")
+            if message.kind != "opaque_fragment" and message.type is not None and message.type.name != "string":
+                fail(node, "sends a message that is not text, without converting it")
+        if node.kind == "raise_error":
+            form = node.attrs.get("form")
+            if form not in RAISE_FORMS:
+                fail(node, f"raises an error in the form {form!r}, which is neither raiserror nor throw")
+            elif RAISE_FORMS[form] - {c.role for c in node.children}:
+                fail(node, f"{form} lacks {sorted(RAISE_FORMS[form] - {c.role for c in node.children})}")
         written: list[str] = []
         if node.kind == "assign":
             written = [node.attrs["variable"]]
-        elif node.kind == "assign_from_rows":
+        elif node.kind in ("assign_from_rows", "fetch_cursor"):
             written = list(node.attrs["variables"])
         elif node.kind == "call_procedure" and node.attrs.get("return_variable"):
             written = [node.attrs["return_variable"]]

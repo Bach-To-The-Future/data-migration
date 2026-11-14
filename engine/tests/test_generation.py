@@ -276,7 +276,7 @@ def test_untranslatable_constructs_are_detected_before_generation_and_reported_w
         corpus_snapshot,
         "CREATE PROCEDURE sales.uspTest AS BEGIN\nDECLARE @n int = 1;\nEXEC('SELECT 1');\n"
         "GRANT SELECT ON sales.[Order] TO PUBLIC;\nCREATE INDEX IX ON sales.[Order] (OrderId);\n"
-        "BEGIN TRY SET @n = 2; END TRY BEGIN CATCH SET @n = 3; END CATCH;\nEND", kind="procedure", name="uspTest")
+        "SET ROWCOUNT 5;\nEND", kind="procedure", name="uspTest")
 
     found = generator.detect(artefact)
 

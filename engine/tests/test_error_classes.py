@@ -33,8 +33,8 @@ def test_the_list_holds_the_errors_the_corpus_raises_catches_or_tests_for_and_th
                 "primary_key_violation", "unique_constraint_violation", "unique_index_violation", "object_not_found",
                 "column_not_found", "object_already_exists", "drop_target_not_found", "identity_insert_not_allowed",
                 "identity_update_not_allowed", "nesting_level_exceeded", "transaction_request_without_begin",
-                "savepoint_not_found", "raised_error", "thrown_error", "throw_number_out_of_range",
-                "raise_severity_not_permitted", "raise_format_invalid", "raise_argument_mismatch"}
+                "savepoint_not_found", "transaction_count_mismatch", "raised_error", "thrown_error",
+                "throw_number_out_of_range", "raise_severity_not_permitted", "raise_format_invalid", "raise_argument_mismatch"}
     assert expected <= set(error_classes.classes())
 
 
