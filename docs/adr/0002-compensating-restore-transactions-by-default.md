@@ -30,3 +30,7 @@ The single-writer assumption is restated and enforced by a write lease, and deli
 Before restoring, the helper reads each table's Delta commit history since the start version. If any commit was not made by this job run, identified by the job-run id the write wrapper writes into each commit, it refuses to restore, raises a named error, and marks the transaction for manual reconciliation in the state table (finding A7). A rollback can now fail loudly where it would otherwise have discarded another writer's commits silently.
 
 Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).
+
+## Amendment, 14 November 2026: transactions are statements as well as blocks
+
+A transaction a procedure opens and does not close is still open in its caller, so a `transaction()` block cannot express every transaction. Lowering keeps `BEGIN`, `COMMIT`, `ROLLBACK` and `SAVE` as statements ([issue #85](https://github.com/Bach-To-The-Future/data-migration/issues/85)), and the support library offers one call for each besides the block (`begin_transaction()`, `commit_transaction()`, `rollback_transaction()`, `save_transaction()`, `rollback_to_save_point()`), on the same mechanism. The block is the form for a transaction that begins and ends in the same place.
