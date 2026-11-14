@@ -41,3 +41,13 @@ Decided in [Independent review of the assembled spec](https://github.com/Bach-To
 **Generalisation by anti-unification is deferred from v1**; its trigger is measured repeated near-identical repairs. **Promoting a client lesson to global is deferred**; its trigger is a second client engagement. v1 keeps exact lessons, reviewer wildcards and the confirmation gate (finding A18).
 
 Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).
+
+## Amendment, 14 November 2026: after the agent-architecture review
+
+- **Repair's one-line hypothesis is never rendered into any model's context.** It is evidence for reviewers, kept in the repair record and shown in the report. A lesson no longer carries it, so a repair-drafted lesson's fix is the repaired region as a worked example, alone. This supersedes the 18 October amendment, which kept the hypothesis in a client lesson as evidence.
+- **A lesson's worked example meets the worked-example pool's qualification rules** (spec section 8): the artefact it comes from is "Reconciled" with mutation testing run and passed, is not weakly tested, and does not rest on an accepted dependency. A lesson whose example does not qualify stays a candidate.
+- **Lesson content is client-derived text,** so it goes in delimited data blocks like any other client text, never in the instructions.
+- **The applicable-lessons slot has a cap** (provisional: 5 lessons per call, ordered by specificity, client lessons first when specificity is equal). A matched lesson that does not fit is recorded with the call and counted in the report, so a cap that bites can be seen. Within the cap the slot is still never trimmed.
+- **A code-level repair patch drafts no lesson** (ADR 0008, amended).
+
+Decided by the owner, 14 November 2026.

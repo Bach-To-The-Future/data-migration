@@ -131,7 +131,7 @@ A natural-language account of an artefact rendered by fixed rules from its inter
 _Avoid_: Summary, documentation
 
 **Intent summary**:
-An AI-written account of what an artefact is for, written for readers of the conversion report. It is labelled as such, is never shown to a conversion step, and is never the source of truth.
+An AI-written account of what an artefact is for, written for readers of the conversion report. It is labelled as such, is never shown to a conversion step, and is never the source of truth. It is shown only after a deterministic check: one line of at most 160 characters, its tables and verbs matching the artefact's effects, every word from the artefact's own identifiers or a fixed plain-English list, and no assurance word such as "verified", "safe" or "tested".
 _Avoid_: Description (which is generated), explanation
 
 **Context builder**:
@@ -143,7 +143,7 @@ A sub-pattern of the intermediate representation that recurs across an engagemen
 _Avoid_: Template, snippet, cluster (which is a whole artefact)
 
 **Worked example**:
-An earlier input and its accepted output, shown to an AI step as a model of what to produce. It comes only from an artefact that reconciled, and is withdrawn if later found wrong.
+An earlier input and its accepted output, shown to an AI step as a model of what to produce. It comes only from an artefact that reconciled and passed the pool's qualification rules, and is withdrawn if later found wrong. An artefact is never shown an example made from itself, and a benchmark run draws none from the benchmark half of the development corpus.
 _Avoid_: Few-shot example, sample
 
 ### Conversion output
@@ -311,6 +311,10 @@ A set of artefacts used to judge the tool. The sample corpus is written for this
 A fix repair made to a region produced by deterministic rules, kept and reapplied on every regeneration while the region's inputs are unchanged, and flagged as model-produced.
 _Avoid_: Hand edit, override
 
+**Code-level patch**:
+A repair patch made to generated code because the representation cannot express the fix. It states why, is listed in the report for a reviewer, marks the region's generated description as not generated from the representation, and drafts no lesson. Repair otherwise changes the representation, and the target's generator turns it into code again.
+_Avoid_: Hand edit, hotfix
+
 **Lesson**:
 A recorded correction the tool applies to later conversions: a lesson pattern, the symptom it answers, a fix, its evidence and a status. A reviewer's fix is a lesson with a human source.
 _Avoid_: Rule (which is fixed code in the tool), memory, feedback
@@ -370,8 +374,12 @@ _Avoid_: Difficulty (which suggests a judgement)
 A model in a loop that chooses its own next step and tools.
 _Avoid_: Using "agent" for any module or any component that calls an LLM
 
+**Fixed loop**:
+An LLM step that code calls a bounded number of times, handing each stateless call the evidence it needs and the results of the earlier calls. The code, not the model, chooses what each call is shown and when to stop. It is the comparator an agent has to beat.
+_Avoid_: Agent (the model chooses nothing)
+
 **Orchestrator**:
-The component that decides which step runs next for each artefact in a run.
+The component that decides which step runs next for each artefact in a run. In v1 it is the plain pipeline, ordinary code; an agentic orchestrator is deferred (ADR 0020, amended).
 
 **Run plan**:
 The order a run must keep: its phases, and which artefacts must be verified before which. It is computed by code before any conversion and recorded in the run catalog. Within it, the orchestrator chooses what to take next.

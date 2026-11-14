@@ -50,3 +50,34 @@ Rule 3 makes a re-run that replays the run catalog identical. A cold run without
   - **(c) the advisory code-quality agent,** lowest priority: it chooses at the fixed picking rule's point, among candidates that passed layers 1 to 4, and is judged on a fixed maintainability score (helper calls, code length, nesting, flagged constructs) at equal converted share. It never changes a status.
 
 Decided by the owner on [the architecture review](https://github.com/Bach-To-The-Future/data-migration/issues/35#issuecomment-6707883287).
+
+## Amendment, 14 November 2026: after the agent-architecture review
+
+Decided by the owner after an agent-architecture review on Claude Fable (14 November 2026). The count of places where AI takes part stays five.
+
+**The promotion rules and the arms**
+
+- **Rule 1 is reworded:** an agent never decides a verdict, a test or a threshold, and may add inputs to the visible set, never remove, replace or select hold-out data.
+- **Arm (c), the advisory code-quality agent, is dropped.** Candidates are picked by the fixed picking rule. Why: a fixed maintainability score is one that code can maximise, so the agent could not lose; its choice decides which candidate meets the hold-out seeds, against "it never changes a status"; its flags would be model text in a report where no model writes prose; and it would be a sixth place where AI takes part, which ADR 0010 rejected.
+- **Arm (a), the exploring test-input agent:** mutants killed is the deciding measure and coverage of the original gained is a guardrail, since coverage is the agent's own loop signal. Its sandbox runs are budgeted like any attempt. Its comparator is the step as it now is, a code-driven multi-round loop.
+- **Arm (b), the convert-check-retry agent for hard raising,** is built only if the code-driven retry, which now carries the evidence of layers 3 and 4 on visible seeds, leaves room for it: the share of hard-case regions that still fall back to the faithful form must exceed the arm's minimum effect, because an agent cannot win by more than what is left to win.
+- **Repair gets a third arm,** a fixed loop ([ADR 0020](0020-orchestrators-are-policies-over-a-fixed-engine.md), amended). Every arm states its minimum effect, variance test, guardrails and cost parity before it is built (ADR 0020).
+
+**The LLM steps**
+
+- **Hard raising:** a retry gets the checker's message and the evidence from layers 3 and 4 on visible seeds, not only the checker's message.
+- **The generation fallback** produces 3 candidates, like lowering assist, checked and picked the same way; its output stays flagged as model-produced.
+- **Proposing test inputs** is a code-driven multi-round loop: each round is one stateless call, and code recomputes the coverage gaps between rounds.
+- **Intent summaries:** the deterministic check of 17 October is tightened. A summary is one line of at most 160 characters; every word comes from the artefact's own identifiers or from a fixed plain-English word list; it contains no assurance word (verified, safe, tested, and the like), since it is context and never a claim about the conversion.
+
+**Repair**
+
+- **A loop contract:** limits on patches proposed, visible-check runs and tool calls; a cap on each tool result; a no-progress stop (two successive patches that fail at the same first diverging checkpoint with the same difference); and an explicit `submit` of a patch that has passed the visible checks, the only way the model ends a run. Provisional values are in the spec's section 2.
+- **A ceiling check between attempts:** a running repair run starts no further attempt once the cost ceiling is reached.
+- **Hold-out disclosure rounds are capped per artefact** (provisional: 2). After that the artefact is manual work, with repair's evidence in the report.
+- **Code rejects a patch that introduces a literal taken from the failing input,** before any check runs (the exact rule is in the spec's section 9). Each repair run is otherwise free to try again, so without this a patch could pass by fitting the input it was shown.
+- **Repair changes the representation wherever the fix is expressible there.** Generated code is patched directly only where it is not. That is a **code-level patch**: flagged, listed in the report, the region's generated description marked as not generated from the representation, and it drafts no lesson (it is still kept as a repair patch, with an open problem for the maintainers).
+- **The one-line hypothesis is evidence for reviewers only,** never rendered into any model's context ([ADR 0010](0010-lessons-are-drafted-and-generalised-by-code.md), amended).
+- **The report gives the final-validator failure rate separately** for repaired artefacts and for artefacts delivered through an agent arm, beside the rate for the rest.
+
+Decided by the owner, 14 November 2026.
