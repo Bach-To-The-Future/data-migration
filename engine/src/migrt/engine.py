@@ -30,7 +30,7 @@ from .sources.sqlserver.extractor import (ExtractorPermissionError, SettingsRequ
                                           UnsupportedServer)
 from .sources.sqlserver.folders import DuplicateCreate, FolderExtractionError
 from .sources.sqlserver.shapes import SandboxUnavailable
-from .targets.pyspark import differences as target_differences, generator, project
+from .targets.pyspark import differences as target_differences, generator, global_temp, project
 from .targets.pyspark import types as target_types
 from .targets.pyspark.layer1 import Layer1Result
 from .targets.pyspark import names as target_names
@@ -501,7 +501,8 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
         degradations=[{"kind": "assumption", "where": found, "text": text}
                       for text in [*artefact.assumptions, *generated.assumptions]],
         hints=[{**h, "status": report.HINT_NOT_APPLICABLE} for h in artefact.hints],
-        global_temp_tables=report.global_temp_tables(artefact.body),
+        global_temp_tables=report.global_temp_tables(artefact.body, treatment=global_temp.TREATMENT,
+                                                     caveat=global_temp.CAVEAT),
         flags=[error_comparisons.flag(c) for c in error_comparisons.flagged(error_comparisons.find(parsed) if parsed is not None else [])],
         secrets=[{"setting": name, "text": reads_setting if name in generated.settings_used else unread_setting}
                  for name in artefact.secret_settings],

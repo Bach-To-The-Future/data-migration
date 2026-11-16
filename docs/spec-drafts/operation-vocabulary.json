@@ -407,7 +407,7 @@
         },
         {
           "name": "create_global_temp_table",
-          "meaning": "A temp table visible to every session. Reported, not private. Generated as a run-scoped scratch table, with a caveat that cross-session visibility is not reproduced. Lowered by ticket 08d (#104).",
+          "meaning": "A temp table visible to every session. Reported, not private. Lowered by ticket 08d (#104).",
           "tsql": [],
           "x": false,
           "detect": "(?<![\\w#])##\\w+"

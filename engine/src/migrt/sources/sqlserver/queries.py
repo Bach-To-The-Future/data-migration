@@ -16,6 +16,7 @@ Table, join and query hints are kept as `hints` and `query_hints` and listed on 
 from __future__ import annotations
 
 from ...core.ir import UNKNOWN, Node, VType
+from ...core.scopes import is_global_temp_table
 from . import names
 from . import types as T
 from .expressions import Expressions, Opaque, Relation, as_role, type_name
@@ -362,7 +363,7 @@ class Queries(Expressions):
     def temp_table_reference(self, ref, parts: tuple[str, ...], alias: str) -> Node:
         base = parts[-1]
         found = self.temp_tables.get(base.casefold()) if len(parts) == 1 else None
-        if base.startswith("##"):
+        if is_global_temp_table(base):
             if found is None:       # made by another session: nothing here creates it, so this read is manual work
                 node = self.external(ref, ".".join(parts), GLOBAL_NOT_CREATED.format(".".join(parts)), alias)
                 node.attrs = dict(node.attrs, global_temp_table=base, manual=True)

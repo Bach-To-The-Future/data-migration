@@ -11,10 +11,12 @@ import dataclasses
 import json
 from typing import Any
 
-FORMAT_VERSION = "ir-0.6"   # 0.2: secret_settings. 0.3: hints; the plan and expression conventions of issue #42.
+FORMAT_VERSION = "ir-0.7"   # 0.2: secret_settings. 0.3: hints; the plan and expression conventions of issue #42.
 #                             0.4: procedural bodies, a `scope` on every statement, opaque `touches` (issue #43)
 #                             0.5: cursors and the open transaction in the scope, `try_catch` with `body` and `handler`
 #                             0.6: `merge_rows`, `return_changed_rows`, global temp tables apart in the scope (issue #104)
+#                             0.7: the TOP of a MERGE is a `limit` child (`top`) over the full join of target and source;
+#                                  a global temp table says only what SQL Server makes it (no `generation`, `caveat`)
 #                             statements, transactions, cursors, errors, messages and session reads (issue #85)
 DETERMINISTIC = "deterministic"
 

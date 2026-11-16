@@ -22,8 +22,8 @@ BY TARGET are kept, NOT MATCHED alone is BY TARGET), whose `action` is `update`,
 optional `condition` and its `value`s. The OUTPUT clause of any write is a `return_changed_rows` child: the rows
 before (`deleted`) and after (`inserted`) as `read_changed_rows` children, one `value` per output column, and where they
 go (`into_kind`: `result_set`, `table`, `temp_table`, `global_temp_table` or `row_set`, with `into` and
-`into_columns`). The TOP of a write is a `limit` over the rows it works on (a MERGE keeps it in `top` and `top_count`),
-marked `ordered: False`: the TOP of a write cannot have an ORDER BY, so which rows it keeps is not defined. In
+`into_columns`). The TOP of a write is a `limit` over the rows it works on (a MERGE's is its `top` child, over the full
+join of target and source), marked `ordered: False`: the TOP of a write cannot have an ORDER BY, so which rows it keeps is not defined. In
 `INSERT ... EXEC` the `source` is the `call_procedure`, with the callee's result columns. A global temp table (`##t`)
 is a `create_global_temp_table`, listed apart from private ones in the scope; one the artefact never creates is read
 as an `external_reference` that is manual work, since it depends on another session.
@@ -40,9 +40,11 @@ barrier. TRY/CATCH, transactions, cursors, errors, messages, row counts and iden
 """
 from __future__ import annotations
 
+import copy
 import re
 
 from ...core.ir import Node, VType
+from ...core.scopes import is_global_temp_table
 from . import collations, names
 from . import types as T
 from .expressions import Opaque, Relation, as_role, type_name
@@ -70,11 +72,9 @@ COMPOUND = {"AddEquals": "Add", "SubtractEquals": "Subtract", "MultiplyEquals": 
             "DivideEquals": "Divide", "ModEquals": "Modulo"}
 BINARY_NAMES = {"Add": "add", "Subtract": "subtract", "Multiply": "multiply", "Divide": "divide", "Modulo": "modulo"}
 OPTIONS = {"NoCount": "NOCOUNT"}
-# What a global temp table is lowered as (ticket #104): reported, not private, and generated as a scratch table for the run.
-GLOBAL_TEMP = {"private": False, "reported": True, "generation": "run_scoped_scratch_table",
-               "caveat": "A global temp table is visible to every session. It is to be generated as a scratch table "
-                         "scoped to this run, and cross-session visibility is not reproduced: another session cannot "
-                         "see it."}
+# What SQL Server makes a global temp table: visible to every session, so reported and not private. How the target
+# treats it, and what that does not reproduce, is the target half's to say (ADR 0019).
+GLOBAL_TEMP = {"private": False, "reported": True}
 TEMPDB_ASSUMPTION = ("The collation of tempdb is assumed to be the server's default collation: the catalog does not "
                      "read tempdb, and a temp table's text columns without COLLATE take tempdb's.")
 NULLABLE_ASSUMPTION = ("A column of a temp table or table variable with neither NULL nor NOT NULL is assumed "
@@ -374,7 +374,7 @@ class Procedural(Queries):
         columns, types, keys = self.table_definition(s.Definition, label, tempdb=True)
         self.temp_tables[name.casefold()] = (name, types)
         attrs = dict({"name": name, "columns": columns}, **keys)
-        if name.startswith("##"):
+        if is_global_temp_table(name):
             return [Node("create_global_temp_table", self.span(s), None, dict(attrs, **GLOBAL_TEMP))]
         return [Node("create_temp_table", self.span(s), None, attrs)]
 
@@ -428,7 +428,7 @@ class Procedural(Queries):
         columns = [{"name": n, "type": t.to_json(), "nullable": None, "identity": None} for n, t in outputs]
         self.temp_tables[name.casefold()] = (name, types)
         attrs = {"name": name, "columns": columns, "from_query": True}
-        if name.startswith("##"):
+        if is_global_temp_table(name):
             return Node("create_global_temp_table", self.span(s), None, dict(attrs, **GLOBAL_TEMP),
                         [as_role(plan, "query")])
         return Node("create_temp_table", self.span(s), None, attrs, [as_role(plan, "query")])
@@ -453,12 +453,12 @@ class Procedural(Queries):
             raise Opaque(ref, "writing through a linked server is not lowered yet")
         if parts[-1].startswith("#"):
             found = self.temp_tables.get(parts[-1].casefold()) if len(parts) == 1 else None
-            if found is None and parts[-1].startswith("##"):
+            if found is None and is_global_temp_table(parts[-1]):
                 raise Opaque(ref, GLOBAL_NOT_CREATED.format(".".join(parts)))
             if found is None:
                 raise Opaque(ref, f"the temp table {'.'.join(parts)} is not in scope here: no statement before this "
                                   "one in its batch creates it")
-            kind = "global_temp_table" if parts[-1].startswith("##") else "temp_table"
+            kind = "global_temp_table" if is_global_temp_table(parts[-1]) else "temp_table"
             return kind, found[0], dict(found[1]), [n for n in found[1]]
         try:
             table = self.reader.resolve(parts, dict(self.name_context, kinds={"table"}))
@@ -771,12 +771,12 @@ class Procedural(Queries):
             children = [as_role(target, "target"), as_role(source, "source"), as_role(condition, "condition")] + clauses
             attrs: dict = {"target": name, "target_kind": kind, "target_alias": alias}
             if spec.TopRowFilter is not None:
-                top = spec.TopRowFilter
-                if top.WithTies:
-                    raise Opaque(top, "TOP ... WITH TIES in a write needs an ORDER BY, which the TOP of a write "
-                                      "cannot have")
-                attrs["top"] = {"percent": bool(top.Percent), "ordered": False}
-                children.append(as_role(self.expression(top.Expression), "top_count"))
+                # The rows a MERGE works on are target and source joined on the condition (a full join: each side may
+                # have rows the other lacks). The limit takes copies of the three, so the clauses keep the originals.
+                joined = Node("join", self.span(spec), None, {"kind": "full"},
+                              [as_role(copy.deepcopy(target), "left"), as_role(copy.deepcopy(source), "right"),
+                               as_role(copy.deepcopy(condition), "condition")])
+                children.append(as_role(self.limited(spec.TopRowFilter, joined), "top"))
             output = self.output_clause(spec, s, kind, name, columns, relation.table, ("deleted", "inserted"), merge=True)
             if output is not None:
                 children.append(output)

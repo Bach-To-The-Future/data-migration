@@ -7,7 +7,7 @@ and, in a MERGE, `$action`; the rows a TOP of a write touches are not ordered (a
 a global temp table is visible to every session and lives until the session that made it ends."""
 from __future__ import annotations
 
-from migrt.core import scopes
+from migrt.core import scopes, vocabulary
 from migrt.core.catalog import CatalogObject, Fact, Provenance, Snapshot
 from migrt.sources.sqlserver import extractor
 
@@ -267,14 +267,22 @@ def test_top_of_an_insert_limits_the_rows_it_reads_whatever_their_order(corpus_s
     assert "sort" in kinds(limit.child("input").walk())
 
 
-def test_top_of_a_merge_keeps_its_count(corpus_snapshot):
+def test_top_of_a_merge_is_a_limit_over_the_rows_the_merge_works_on(corpus_snapshot):
     artefact = lowered(corpus_snapshot,
-                       "MERGE TOP (5) ref.Customer AS t USING stg.CustomerImport AS s ON t.CustomerCode = s.CustomerCode\n"
+                       "MERGE TOP (5) PERCENT ref.Customer AS t USING stg.CustomerImport AS s "
+                       "ON t.CustomerCode = s.CustomerCode "
                        "WHEN MATCHED THEN UPDATE SET Name = s.Name;")
 
     [merge] = statements(artefact)
-    assert merge.attrs["top"] == {"percent": False, "ordered": False}
-    assert merge.child("top_count").attrs["value"] == 5
+    limit = merge.child("top")
+    assert limit.kind == "limit" and limit.attrs == {"percent": True, "with_ties": False, "ordered": False}
+    assert limit.child("count").attrs["value"] == 5
+    # the rows are those of target and source joined on the condition, as the clauses see them
+    rows = limit.child("input")
+    assert rows.kind == "join" and rows.attrs["kind"] == "full"
+    assert [rows.child("left").kind, rows.child("right").kind, rows.child("condition").kind] == [
+        "read_table", "read_table", "compare"]
+    assert "top" not in merge.attrs and merge.children_with("top_count") == []
 
 
 # ---------------------------------------------------------------- INSERT ... EXEC
@@ -360,6 +368,11 @@ def test_insert_exec_with_a_different_number_of_columns_is_a_checker_finding(cor
 
 # ---------------------------------------------------------------- global temp tables
 
+def test_one_helper_names_a_global_temp_table():
+    assert scopes.is_global_temp_table("##g") and not scopes.is_global_temp_table("#t")
+    assert not scopes.is_global_temp_table("t")
+
+
 def test_a_global_temp_table_is_lowered_reported_and_not_private(corpus_snapshot):
     artefact = lowered(corpus_snapshot,
                        "CREATE TABLE ##g (Id int NOT NULL, Name varchar(10) NULL);\n"
@@ -391,12 +404,22 @@ def test_the_scope_lists_global_temp_tables_apart_from_private_ones(corpus_snaps
     assert scope_of(last)["temp_tables"] == ["#p"] and scope_of(last)["global_temp_tables"] == []
 
 
-def test_a_global_temp_table_is_generated_as_a_run_scoped_scratch_table_with_a_caveat(corpus_snapshot):
+def test_the_source_half_says_only_how_sql_server_behaves_of_a_global_temp_table(corpus_snapshot):
     artefact = lowered(corpus_snapshot, "CREATE TABLE ##g (Id int NOT NULL);")
 
     [create] = statements(artefact)
-    assert create.attrs["generation"] == "run_scoped_scratch_table"
-    assert "cross-session visibility is not reproduced" in create.attrs["caveat"]
+    # how the target treats it, and the caveat that goes with that, are the target half's to say (ADR 0019)
+    assert not {"generation", "caveat", "treatment"} & set(create.attrs)
+    meaning = next(o for g in vocabulary._data()["groups"] for o in g["operations"]
+                   if o["name"] == "create_global_temp_table")["meaning"]
+    assert "scratch" not in meaning and "reproduced" not in meaning and "every session" in meaning
+
+
+def test_the_target_half_says_how_a_global_temp_table_is_treated_and_what_is_not_reproduced():
+    from migrt.targets.pyspark import global_temp
+
+    assert "scratch table" in global_temp.TREATMENT and "run" in global_temp.TREATMENT
+    assert "cross-session visibility is not reproduced" in global_temp.CAVEAT
 
 
 def test_select_into_a_global_temp_table(corpus_snapshot):
@@ -462,11 +485,11 @@ def test_the_report_lists_global_temp_tables_apart_from_private_ones(corpus_snap
                        "SELECT g.Id FROM ##g AS g;\n"
                        "SELECT e.Id FROM ##elsewhere AS e;")
 
-    listed = report.global_temp_tables(artefact.body)
+    listed = report.global_temp_tables(artefact.body, treatment="a scratch table", caveat="not reproduced")
     assert [(g["name"], g["created_in_artefact"]) for g in listed] == [("##g", True), ("##elsewhere", False)]
-    assert "cross-session visibility is not reproduced" in listed[0]["caveat"]
+    assert listed[0]["caveat"] == "not reproduced"
     assert listed[1]["treatment"] == "manual work" and "another session" in listed[1]["text"]
-    assert listed[0]["treatment"].startswith("planned: a run-scoped scratch table")
+    assert listed[0]["treatment"] == "a scratch table"
     assert all(g["name"] != "#p" for g in listed)
 
 

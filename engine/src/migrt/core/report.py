@@ -59,18 +59,17 @@ def recognised_artefact(*, name: str, type: str, inventory: dict, references: li
     }
 
 
-def global_temp_tables(body: Node) -> list[dict]:
+def global_temp_tables(body: Node, *, treatment: str, caveat: str) -> list[dict]:
     """The global temp tables (`##t`, visible to every session) an artefact makes or reads, apart from its private
-    ones. One it makes is to be generated as a scratch table for the run (the construct itself is manual work until
-    procedural generation is built), and cross-session visibility is not reproduced.
-    One it reads without ever making it depends on another session: that read is manual work."""
+    ones. For one it makes, `treatment` and `caveat` are the target's own words for what it does with it and what
+    that does not reproduce. One it reads without ever making it depends on another session: that read is manual
+    work, in the source's words."""
     found: dict[str, dict] = {}
     for n in body.walk():
         if n.kind == "create_global_temp_table":
             found.setdefault(n.attrs["name"].casefold(), {
                 "name": n.attrs["name"], "created_in_artefact": True, "node": n.id, "source_position": str(n.span),
-                "treatment": "planned: a run-scoped scratch table, once procedural generation is built",
-                "caveat": n.attrs["caveat"]})
+                "treatment": treatment, "caveat": caveat})
         elif n.kind == "external_reference" and n.attrs.get("global_temp_table"):
             found.setdefault(n.attrs["global_temp_table"].casefold(), {
                 "name": n.attrs["global_temp_table"], "created_in_artefact": False, "node": n.id,

@@ -133,9 +133,15 @@ def _remove(names: list[str], name: str) -> None:
     names[:] = [n for n in names if n.casefold() != name.casefold()]
 
 
+def is_global_temp_table(name: str) -> bool:
+    """Whether a temp table's name is a global temp table's (`##t`, visible to every session). The one place this
+    naming rule is read."""
+    return name.startswith("##")
+
+
 def _tables(state: State, name: str) -> list[str]:
     """The list a temp table of this name belongs to: global temp tables (`##`) are kept apart from private ones."""
-    return state.global_temp_tables if name.startswith("##") else state.temp_tables
+    return state.global_temp_tables if is_global_temp_table(name) else state.temp_tables
 
 
 def _journal(state: State, entry: str, name: str) -> None:
@@ -386,7 +392,7 @@ def known(scope: dict, name: str, *, row_set: bool = False) -> bool:
 
 def temp_table_known(scope: dict, name: str) -> bool:
     """Whether a temp table, private (#t) or global (##t, listed apart), may exist in scope."""
-    return _has(scope["global_temp_tables" if name.startswith("##") else "temp_tables"], name)
+    return _has(scope["global_temp_tables" if is_global_temp_table(name) else "temp_tables"], name)
 
 
 def global_temp_table_known(scope: dict, name: str) -> bool:

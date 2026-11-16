@@ -93,7 +93,7 @@ Carried on nodes. None is an operation and none changes what a node means.
 | `declare_variable` | A typed variable, null until assigned unless given an initial value. | `DECLARE` | 64 | ✓ |
 | `declare_row_set_variable` | A variable holding a row set. A rollback does not undo changes to it. |  | 8 |  |
 | `create_temp_table` | A table private to the session, visible to called routines, dropped when the routine that created it returns. May declare keys and constraints. | `KEY` | 10 | ✓ |
-| `create_global_temp_table` | A temp table visible to every session. Reported, not private. Generated as a run-scoped scratch table, with a caveat that cross-session visibility is not reproduced. Lowered by ticket 08d (#104). |  | 0 |  |
+| `create_global_temp_table` | A temp table visible to every session. Reported, not private. Lowered by ticket 08d (#104). |  | 0 |  |
 | `drop_temp_table` | Drop a temp table before its routine ends. |  | 9 | ✓ |
 | `declare_label` | A named point in a statement list that a jump can target. |  |  | ✓ |
 

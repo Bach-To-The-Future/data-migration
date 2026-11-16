@@ -64,3 +64,11 @@ def test_one_command_generates_one_view_as_a_preview(tmp_path, capsys, engagemen
     assert summary["preview"] is True
     assert [a["status"] for a in summary["artefacts"]] == ["Not reconciled"]
     assert (tmp_path / "generated/RetailSample/sales/views/vOrderTotals.py").is_file()
+
+
+def test_the_rule_that_names_a_global_temp_table_is_written_once():
+    """`##` is read in one helper, `scopes.is_global_temp_table`; everything else asks it."""
+    source = PACKAGE
+    found = [str(p.relative_to(source)) for p in source.rglob("*.py")
+             if 'startswith("##")' in p.read_text(encoding="utf-8") and p.name != "scopes.py"]
+    assert found == []
