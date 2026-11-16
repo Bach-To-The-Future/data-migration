@@ -71,10 +71,10 @@ COMPOUND = {"AddEquals": "Add", "SubtractEquals": "Subtract", "MultiplyEquals": 
 BINARY_NAMES = {"Add": "add", "Subtract": "subtract", "Multiply": "multiply", "Divide": "divide", "Modulo": "modulo"}
 OPTIONS = {"NoCount": "NOCOUNT"}
 # What a global temp table is lowered as (ticket #104): reported, not private, and generated as a scratch table for the run.
-GLOBAL_TEMP = {"private": False, "reported": True, "visibility": "every session",
-               "generation": "run_scoped_scratch_table",
-               "caveat": "A global temp table is visible to every session. It is generated as a scratch table scoped to "
-                         "this run, and cross-session visibility is not reproduced: another session cannot see it."}
+GLOBAL_TEMP = {"private": False, "reported": True, "generation": "run_scoped_scratch_table",
+               "caveat": "A global temp table is visible to every session. It is to be generated as a scratch table "
+                         "scoped to this run, and cross-session visibility is not reproduced: another session cannot "
+                         "see it."}
 TEMPDB_ASSUMPTION = ("The collation of tempdb is assumed to be the server's default collation: the catalog does not "
                      "read tempdb, and a temp table's text columns without COLLATE take tempdb's.")
 NULLABLE_ASSUMPTION = ("A column of a temp table or table variable with neither NULL nor NOT NULL is assumed "
@@ -395,10 +395,8 @@ class Procedural(Queries):
         out = []
         for name in temp:
             found = self.temp_tables.pop(str(name).casefold(), None)
-            attrs = {"name": found[0] if found else name, "if_exists": bool(s.IsIfExists)}
-            if str(name).startswith("##"):
-                attrs["global"] = True
-            out.append(Node("drop_temp_table", self.span(s), None, attrs))
+            out.append(Node("drop_temp_table", self.span(s), None,
+                            {"name": found[0] if found else name, "if_exists": bool(s.IsIfExists)}))
         return out
 
     # ------------------------------------------------------------------ SELECT
@@ -559,6 +557,8 @@ class Procedural(Queries):
         """The TOP of a write: the first rows of what it works on. A write's TOP has no ORDER BY, so which rows is
         not defined, and the node says so. WITH TIES is not legal in a write (it needs an ORDER BY): the parser
         refuses it, and a text that does not parse is kept as written."""
+        if top.WithTies:       # not legal in a write, and the parser refuses it; never dropped if one ever accepts it
+            raise Opaque(top, "TOP ... WITH TIES in a write needs an ORDER BY, which the TOP of a write cannot have")
         count = self.expression(top.Expression)
         return Node("limit", self.span(top), None, {"percent": bool(top.Percent), "with_ties": False, "ordered": False},
                     [as_role(plan, "input"), as_role(count, "count")])
@@ -772,6 +772,9 @@ class Procedural(Queries):
             attrs: dict = {"target": name, "target_kind": kind, "target_alias": alias}
             if spec.TopRowFilter is not None:
                 top = spec.TopRowFilter
+                if top.WithTies:
+                    raise Opaque(top, "TOP ... WITH TIES in a write needs an ORDER BY, which the TOP of a write "
+                                      "cannot have")
                 attrs["top"] = {"percent": bool(top.Percent), "ordered": False}
                 children.append(as_role(self.expression(top.Expression), "top_count"))
             output = self.output_clause(spec, s, kind, name, columns, relation.table, ("deleted", "inserted"), merge=True)

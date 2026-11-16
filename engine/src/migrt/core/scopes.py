@@ -90,7 +90,8 @@ class State:
         transaction = value["transaction"]
         return State(parameters=list(value["parameters"]), variables=list(value["variables"]),
                      row_sets=list(value["row_sets"]), temp_tables=list(value["temp_tables"]),
-                     global_temp_tables=list(value["global_temp_tables"]), barrier=value["barrier"], cursors=list(value["cursors"]), open_cursors=list(value["open_cursors"]),
+                     global_temp_tables=list(value["global_temp_tables"]), barrier=value["barrier"],
+                     cursors=list(value["cursors"]), open_cursors=list(value["open_cursors"]),
                      global_cursors=list(value["global_cursors"]), tx_min=transaction["min"], tx_max=transaction["max"],
                      begun=list(transaction["begun"]), save_points=list(transaction["save_points"]),
                      journal=[(e[0], e[1], e[2]) for e in value["journal"]])
@@ -98,7 +99,8 @@ class State:
     def scope(self) -> dict:
         return {"parameters": list(self.parameters), "variables": list(self.variables),
                 "row_sets": list(self.row_sets), "temp_tables": list(self.temp_tables),
-                "global_temp_tables": list(self.global_temp_tables), "cursors": list(self.cursors), "open_cursors": list(self.open_cursors),
+                "global_temp_tables": list(self.global_temp_tables), "cursors": list(self.cursors),
+                "open_cursors": list(self.open_cursors),
                 "transaction": {"min": self.tx_min, "max": self.tx_max, "begun": list(self.begun),
                                 "save_points": list(self.save_points)},
                 "barrier": self.barrier}

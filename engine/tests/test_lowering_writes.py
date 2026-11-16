@@ -375,7 +375,7 @@ def test_a_global_temp_table_is_lowered_reported_and_not_private(corpus_snapshot
         "##g", "global_temp_table")
     [read] = [n for n in emit.walk() if n.kind == "read_table"]
     assert read.attrs["global_temp_table"] == "##g" and "temp_table" not in read.attrs
-    assert drop.kind == "drop_temp_table" and drop.attrs["global"] is True
+    assert drop.kind == "drop_temp_table" and drop.attrs["name"] == "##g"
 
 
 def test_the_scope_lists_global_temp_tables_apart_from_private_ones(corpus_snapshot):
@@ -466,7 +466,7 @@ def test_the_report_lists_global_temp_tables_apart_from_private_ones(corpus_snap
     assert [(g["name"], g["created_in_artefact"]) for g in listed] == [("##g", True), ("##elsewhere", False)]
     assert "cross-session visibility is not reproduced" in listed[0]["caveat"]
     assert listed[1]["treatment"] == "manual work" and "another session" in listed[1]["text"]
-    assert listed[0]["treatment"] == "run-scoped scratch table"
+    assert listed[0]["treatment"].startswith("planned: a run-scoped scratch table")
     assert all(g["name"] != "#p" for g in listed)
 
 
