@@ -273,14 +273,6 @@ def test_a_reference_to_a_temp_table_or_table_variable_that_is_not_in_scope_is_a
     assert any("#u" in f.message for f in checked(artefact, reader))
 
 
-def test_a_global_temp_table_is_kept_as_an_opaque_barrier_with_its_reason(corpus_snapshot):
-    artefact = lowered(corpus_snapshot, "CREATE TABLE ##g (Id int);")
-
-    [fragment] = statements(artefact)
-    assert fragment.kind == "opaque_fragment" and fragment.attrs["scope_barrier"] is True
-    assert "global temp table" in fragment.attrs["reason"]
-
-
 # ---------------------------------------------------------------- scopes
 
 def test_every_statement_says_what_is_in_scope_before_it(corpus_snapshot):
@@ -294,7 +286,7 @@ def test_every_statement_says_what_is_in_scope_before_it(corpus_snapshot):
 
     declare, create, row_set, first, drop, last = statements(artefact)
     assert scope_of(declare) == {"parameters": ["@p"], "variables": [], "row_sets": [], "temp_tables": [],
-                                 "cursors": [], "open_cursors": [], "barrier": None,
+                                 "global_temp_tables": [], "cursors": [], "open_cursors": [], "barrier": None,
                                  "transaction": {"min": 0, "max": None, "begun": [], "save_points": []}}
     assert scope_of(create)["variables"] == ["@a"]
     assert scope_of(row_set)["temp_tables"] == ["#t"]
@@ -437,7 +429,8 @@ THIS_TICKET = {"BeginEndBlockStatement", "DeclareVariableStatement", "SetVariabl
                "WhileStatement", "BreakStatement", "ContinueStatement", "GoToStatement", "LabelStatement",
                "ReturnStatement", "SelectStatement", "DeclareTableVariableStatement", "CreateTableStatement",
                "DropTableStatement", "InsertStatement", "UpdateStatement", "DeleteStatement", "ExecuteStatement",
-               "PredicateSetStatement", "CreateProcedureStatement", "CreateTriggerStatement"}
+               "PredicateSetStatement", "CreateProcedureStatement", "CreateTriggerStatement",
+               "MergeStatement"}      # MERGE, with the OUTPUT clause and TOP of writes: issue #104
 
 
 def procedural_modules(snapshot):
@@ -483,7 +476,7 @@ def test_every_corpus_batch_lowers_and_passes_the_checker(corpus_snapshot):
 # that an earlier ticket deferred (issue #42's list) and no ticket has taken yet. Anything else kept as written in
 # an artefact made only of these constructs is this ticket's gap, and fails.
 DEFERRED_ELSEWHERE = ("refers to itself: recursive named queries", "FOR JSON", "FOR XML", "FullTextTableReference",
-                      "FOR SYSTEM_TIME", "the OUTPUT clause", "on a temp table is not lowered yet",
+                      "FOR SYSTEM_TIME", "on a temp table is not lowered yet",
                       "not exactly one of the row sources in FROM", "does not resolve to a procedure in the catalog")
 
 

@@ -160,4 +160,4 @@ def test_hints_assumptions_and_string_comparisons_reach_the_report_data(engageme
     waiting = [c for c in item["constructs"] if c["status"] == "manual work" and "waits_for" in c]
     assert waiting and all(c["waits_for"] == ["#47"] for c in waiting), waiting      # the comparison helpers
     assert all("#" not in c["reason"] for c in waiting)                          # a reason may reach a client
-    assert data["schema_version"] == "report-data/0.7"
+    assert data["schema_version"] == "report-data/0.8"

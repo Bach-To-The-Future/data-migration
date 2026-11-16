@@ -1158,21 +1158,26 @@ def unresolved_external_references(snapshot: Snapshot) -> list[dict]:
 
 # ---------------------------------------------------------------------------- recognised artefacts
 
-RECOGNISED = {"agent_job": "SQL Agent job", "ssis_package": "SSIS package"}
+RECOGNISED = {"agent_job": "SQL Agent job", "ssis_package": "SSIS package",
+              "database_trigger": "Database (DDL) trigger"}
 INVENTORY = {"agent_job": ("enabled", "description", "category", "start_step", "steps", "schedules",
                            "not_interpreted"),
              "ssis_package": ("file", "package_name", "protection_level", "format_version", "inventoried",
                               "not_inventoried_reason", "connections", "variables", "parameters", "tasks",
-                              "components", "precedence_constraints", "sensitive_properties")}
+                              "components", "precedence_constraints", "sensitive_properties"),
+             # a database-level (DDL) trigger fires on events of the database, not on a table: it is not lowered, and
+             # is manual work with its events and its whole text
+             "database_trigger": ("events", "timing", "firing_order", "enabled", "source_text",
+                                  "not_extractable_reason")}
 # The cells of an inventory that may hold a marked secret, masked wherever the inventory is shown.
-MASKED = {"agent_job": {"steps": ("command",)},
+MASKED = {"agent_job": {"steps": ("command",)}, "database_trigger": {},
           "ssis_package": {"connections": ("connection_string", "expression"), "tasks": ("sql",),
                            "components": ("sql",), "variables": ("value",), "parameters": ("value",),
                            "sensitive_properties": ("value",)}}
 
 
 def recognised(snapshot: Snapshot) -> list[dict]:
-    """Every SSIS package and SQL Agent job in the snapshot, a recognised artefact type: its
+    """Every SSIS package, SQL Agent job and database-level (DDL) trigger in the snapshot, a recognised artefact type: its
     inventory with every marked secret masked by its named setting, its references to
     catalog objects, the objects they reach (its entry points), and what was not read."""
     out = []
@@ -1184,6 +1189,13 @@ def recognised(snapshot: Snapshot) -> list[dict]:
         inventory = {}
         for name in INVENTORY[o.kind]:
             if not o.has_fact(name):
+                continue
+            if name == "source_text":                   # the text of a trigger, with its marked secrets masked
+                text = o.fact(name).value
+                spans = [core_secrets.SecretSpan.from_json(m) for m in marked if m.get("fact") == "source_text"]
+                masked, used = core_secrets.mask(text, spans, prefix=o.identity) if text is not None else (None, [])
+                settings += [u for u in used if u not in settings]
+                inventory[name] = masked
                 continue
             value = copy.deepcopy(o.fact(name).value)
             for column in MASKED[o.kind].get(name, ()):

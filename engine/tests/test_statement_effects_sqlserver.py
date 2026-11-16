@@ -37,7 +37,12 @@ CASES = [
     Case("assign_from_rows", f"{SOURCE} DECLARE @x int;", "SELECT @x = a FROM #src WHERE a > 100;", n=0),
     Case("create_temp_table", "", "CREATE TABLE #made (a int);"),
     Case("create_temp_table", SOURCE, "SELECT a INTO #made FROM #src WHERE a <= 2;", n=2),
+    Case("create_global_temp_table", "", "CREATE TABLE ##gmade (a int);"),
+    Case("create_global_temp_table", SOURCE, "SELECT a INTO ##gmade FROM #src WHERE a <= 2;", n=2),
     Case("drop_temp_table", "CREATE TABLE #made (a int);", "DROP TABLE #made;"),
+    Case("merge_rows", SOURCE + " CREATE TABLE #tgt (a int); INSERT #tgt VALUES (1), (2);",
+         "MERGE #tgt AS t USING #src AS s ON t.a = s.a WHEN MATCHED THEN UPDATE SET a = s.a "
+         "WHEN NOT MATCHED THEN INSERT (a) VALUES (s.a);", n=3),
     Case("if", "", "IF 1 = 0 PRINT 'x';"),
     Case("while", "", "WHILE 1 = 0 PRINT 'x';"),
     Case("break", SOURCE, "WHILE 1 = 1 BEGIN UPDATE #src SET a = a WHERE a <= 2; BREAK; END", prior_rows=2,
@@ -99,7 +104,7 @@ def run(conn, sql: str):
 
 def clean(conn) -> None:
     run(conn, "WHILE @@TRANCOUNT > 0 ROLLBACK;")
-    for name in ("#src", "#made", "#seed", "#read"):
+    for name in ("#src", "#made", "#seed", "#read", "#tgt", "##gmade"):
         run(conn, f"IF OBJECT_ID('tempdb..{name}') IS NOT NULL DROP TABLE {name};")
     run(conn, "IF OBJECT_ID('tempdb..#callee') IS NOT NULL DROP PROCEDURE #callee;")
 

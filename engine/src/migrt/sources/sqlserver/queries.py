@@ -26,6 +26,11 @@ OUTPUT = "(output)"
 PIVOT_AGGREGATES = {"SUM": "sum", "AVG": "average", "MIN": "minimum", "MAX": "maximum", "COUNT": "count_values"}
 
 
+# Why a read of a global temp table that nothing in the artefact creates is manual work.
+GLOBAL_NOT_CREATED = ("the global temp table {0} is not created by any statement before this one in the artefact: it "
+                      "depends on another session, so it is manual work")
+
+
 class Queries(Expressions):
     def __init__(self, *args):
         super().__init__(*args)
@@ -235,7 +240,7 @@ class Queries(Expressions):
 
     def star(self, item) -> list[Node]:
         if item.Qualifier is not None:
-            alias = str(item.Qualifier.Identifiers[-1].Value)
+            alias = str(list(item.Qualifier.Identifiers)[-1].Value)
             relation = self.relation_of(alias)
             if relation is None:
                 raise Opaque(item, f"{alias} is not a table or alias in scope")
@@ -356,9 +361,20 @@ class Queries(Expressions):
 
     def temp_table_reference(self, ref, parts: tuple[str, ...], alias: str) -> Node:
         base = parts[-1]
-        if base.startswith("##"):
-            raise Opaque(ref, "a global temp table is not lowered yet: it is visible to every session")
         found = self.temp_tables.get(base.casefold()) if len(parts) == 1 else None
+        if base.startswith("##"):
+            if found is None:       # made by another session: nothing here creates it, so this read is manual work
+                node = self.external(ref, ".".join(parts), GLOBAL_NOT_CREATED.format(".".join(parts)), alias)
+                node.attrs = dict(node.attrs, global_temp_table=base, manual=True)
+                return node
+            name, columns = found
+            self.register(ref, Relation(alias, dict(columns), None))
+            global_attrs: dict = {"global_temp_table": name, "alias": alias, "columns": list(columns),
+                                  "source": "global_temp_table"}
+            global_hints = self.hints_of(ref.TableHints)
+            if global_hints:
+                global_attrs["hints"] = global_hints
+            return Node("read_table", self.span(ref), None, global_attrs)
         if found is None:
             raise Opaque(ref, f"the temp table {'.'.join(parts)} is not in scope here: no statement before this one "
                               "in its batch creates it (a table made by a calling procedure is not visible to "

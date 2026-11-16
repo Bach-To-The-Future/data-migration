@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import json
 
+from .ir import Node
+
 # 0.3: the extraction section; secrets and name adjustments per artefact. 0.4: recognised
 # artefacts as manual work; the extraction section's completeness summary, assumed
 # collations, skipped cross-checks and folders. 0.5: the hints of each artefact, reported as not applicable on
 # the target. 0.6: the delivered project's files, and every kind of artefact (issue #44). 0.7: a construct that is
-# manual work only for want of something not built yet carries `waits_for`, the tickets it waits for.
-SCHEMA_VERSION = "report-data/0.7"
+# manual work only for want of something not built yet carries `waits_for`, the tickets it waits for. 0.8: the global
+# temp tables of each artefact, listed apart from private ones (issue #104).
+SCHEMA_VERSION = "report-data/0.8"
 PREVIEW_BANNER = ("Preview run: reconciliation was off. Nothing in this report was checked against the "
                   "original, and nothing in it is converted.")
 NOT_RECONCILED = "Not reconciled"
@@ -56,10 +59,27 @@ def recognised_artefact(*, name: str, type: str, inventory: dict, references: li
     }
 
 
+def global_temp_tables(body: Node) -> list[dict]:
+    """The global temp tables (`##t`, visible to every session) an artefact makes or reads, apart from its private
+    ones. One it makes is generated as a scratch table for the run, and cross-session visibility is not reproduced.
+    One it reads without ever making it depends on another session: that read is manual work."""
+    found: dict[str, dict] = {}
+    for n in body.walk():
+        if n.kind == "create_global_temp_table":
+            found.setdefault(n.attrs["name"].casefold(), {
+                "name": n.attrs["name"], "created_in_artefact": True, "node": n.id, "source_position": str(n.span),
+                "treatment": "run-scoped scratch table", "caveat": n.attrs["caveat"]})
+        elif n.kind == "external_reference" and n.attrs.get("global_temp_table"):
+            found.setdefault(n.attrs["global_temp_table"].casefold(), {
+                "name": n.attrs["global_temp_table"], "created_in_artefact": False, "node": n.id,
+                "source_position": str(n.span), "treatment": CONSTRUCT_MANUAL, "text": n.attrs["reason"]})
+    return list(found.values())
+
+
 def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, layer1: dict,
                      constructs: list[dict], degradations: list[dict], secrets: list[dict],
                      name_adjustments: dict[str, dict[str, str]], hints: list[dict] | None = None,
-                     flags: list[dict] | None = None) -> dict:
+                     flags: list[dict] | None = None, global_temp_tables: list[dict] | None = None) -> dict:
     return {
         "name": name,
         "type": artefact_type,
@@ -73,6 +93,7 @@ def preview_artefact(*, name: str, artefact_type: str, area: str, output: str, l
         "layer1": layer1,
         "constructs": constructs,
         "hints": hints or [],
+        "global_temp_tables": global_temp_tables or [],
         "degradations": degradations,
         "secrets": secrets,
         "name_adjustments": name_adjustments,

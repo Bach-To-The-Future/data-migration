@@ -37,7 +37,7 @@ from .ir import Artefact, Node, SourceSpan
 
 DECLARING = {"declare_parameter": "parameters", "declare_variable": "variables",
              "declare_row_set_variable": "row_sets", "create_temp_table": "temp_tables",
-             "declare_cursor": "cursors"}
+             "create_global_temp_table": "global_temp_tables", "declare_cursor": "cursors"}
 
 
 def divide(artefact: Artefact, budget: int) -> list[Artefact]:
@@ -151,7 +151,7 @@ def _declarations(body: Node, scope: dict, first: Node) -> list[dict]:
             declared[("row_sets", node.attrs["name"].casefold())] = node
         declared[(group, node.attrs["name"].casefold())] = node
     out = []
-    for group in ("parameters", "variables", "row_sets", "temp_tables", "cursors"):
+    for group in ("parameters", "variables", "row_sets", "temp_tables", "global_temp_tables", "cursors"):
         for name in scope[group]:
             node = declared.get((group, name.casefold()))
             if node is None and group == "row_sets" and name == body.attrs.get("return_variable"):

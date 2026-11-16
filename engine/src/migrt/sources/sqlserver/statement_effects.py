@@ -43,6 +43,7 @@ BY_KIND: dict[str, Effect] = {
     "assign_from_rows": ROWS,
     # temp tables
     "create_temp_table": ZERO,            # from a query it is a SELECT INTO: see effect()
+    "create_global_temp_table": ZERO,     # the same, for ##t
     "drop_temp_table": ZERO,
     # control flow
     "if": ZERO,
@@ -57,6 +58,7 @@ BY_KIND: dict[str, Effect] = {
     "insert_rows": ROWS,
     "update_rows": ROWS,
     "delete_rows": ROWS,
+    "merge_rows": ROWS,                   # the rows inserted, updated and deleted, all clauses together
     "write_current_row": ROWS,
     "call_procedure": Effect("callee", "reset"),
     # transactions
@@ -97,7 +99,7 @@ def effect(node: Node) -> Effect:
     """What the statement leaves in `@@ROWCOUNT` and `@@ERROR`."""
     if node.kind == "declare_variable" and node.children_with("initial"):
         return ONE                                      # DECLARE @x int = 1 assigns, as SET does
-    if node.kind == "create_temp_table" and node.attrs.get("from_query"):
+    if node.kind in ("create_temp_table", "create_global_temp_table") and node.attrs.get("from_query"):
         return ROWS                                     # SELECT ... INTO #t
     try:
         return BY_KIND[node.kind]

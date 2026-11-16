@@ -15,8 +15,8 @@ This is the first list of what the intermediate representation can say: its type
 
 ## Size
 
-- 18 types, 14 node kinds, 7 annotations.
-- 177 operations, of which the hand conversion in `prototype/hand-conversion/` exercised 85. The other 92 are on paper only.
+- 18 types, 15 node kinds, 7 annotations.
+- 178 operations, of which the hand conversion in `prototype/hand-conversion/` exercised 85. The other 92 are on paper only.
 
 ## How to read the tables
 
@@ -61,6 +61,7 @@ A type carries the behaviour that matters, not the source's name for it. The sou
 | `trigger_body` | The table, the timing (after or instead of), the events, and a statement list that can read the inserted and deleted rows. | `TRIGGER` |  | ✓ |
 | `batch_script_body` | An ordered list of batches. Variables do not survive from one batch to the next. | `USE` |  | ✓ |
 | `batch` | One batch of a script, a statement list of its own. Its variables and table variables end with it; temp tables do not. Added by ticket 08a (#43). | `GO` |  |  |
+| `merge_clause` | One WHEN clause of a `merge_rows`: which rows it acts on (`match`: matched, not matched by target, or not matched by source), an optional further condition, and its action (`update`, `delete` or `insert`, with its columns and values). Added by ticket 08d (#104). | `WHEN` |  |  |
 | `part_body` | One part of an artefact the divider split along its block boundaries: a run of consecutive statements of one block, in source order, with the state they start in (`start_state`), the enclosing blocks (`path`), the declarations in scope and the labels. Added with the divider. |  |  |  |
 | `opaque_fragment` | Source kept verbatim because lowering could not express it, with its position and the reason. It records what it reads and writes in scope where detectable, and is otherwise a scope barrier. |  |  |  |
 | `dynamic_sql_execution` | Execution of SQL text built at run time. The expressions that build the text are lowered; the text itself is not. Always a scope barrier, always manual. | `EXECUTE(`, `EXEC(`, `SP_EXECUTESQL` | 15 |  |
@@ -92,7 +93,7 @@ Carried on nodes. None is an operation and none changes what a node means.
 | `declare_variable` | A typed variable, null until assigned unless given an initial value. | `DECLARE` | 64 | ✓ |
 | `declare_row_set_variable` | A variable holding a row set. A rollback does not undo changes to it. |  | 8 |  |
 | `create_temp_table` | A table private to the session, visible to called routines, dropped when the routine that created it returns. May declare keys and constraints. | `KEY` | 10 | ✓ |
-| `create_global_temp_table` | A temp table visible to every session. Reported. |  | 0 |  |
+| `create_global_temp_table` | A temp table visible to every session. Reported, not private. Generated as a run-scoped scratch table, with a caveat that cross-session visibility is not reproduced. Lowered by ticket 08d (#104). |  | 0 |  |
 | `drop_temp_table` | Drop a temp table before its routine ends. |  | 9 | ✓ |
 | `declare_label` | A named point in a statement list that a jump can target. |  |  | ✓ |
 
@@ -236,6 +237,7 @@ The query part is a logical plan: each query is a sequence of these steps, keepi
 | `null` | The absent value, with a type. |  |  | ✓ |
 | `column` | A column of a named input, resolved against the catalog or scope. |  |  | ✓ |
 | `variable` | The current value of a variable or parameter. |  |  | ✓ |
+| `changed_row_action` | In the OUTPUT of a `merge_rows`, the action taken on a row: INSERT, UPDATE or DELETE (`$action`). Added by ticket 08d (#104). |  |  |  |
 | `scalar_query` | The single value of a query used as an expression: null for no row, an error for more than one. |  |  |  |
 | `call_scalar_function` | The value of a scalar function for given arguments. |  |  | ✓ |
 | `updated_column_test` | In a trigger, whether the statement named a column in its list of columns to set, whatever value it set. | `UPDATE(` | 7 | ✓ |

@@ -10,7 +10,11 @@ reads is in the scope of its statement, every jump has its label, and every opaq
 touches or is a scope barrier. Cursors, transactions, errors and messages (issue #85): every cursor a statement
 names is in scope, a fetch names variables in scope and as many as the cursor has columns, a rollback to a savepoint
 names one that may be set, and the values these statements read (the row count, the error number, the transaction
-depth, an error field, the identity value) have their types.
+depth, an error field, the identity value) have their types. Writes, MERGE, OUTPUT and global temp tables (issue
+#104): a MERGE has its source, its condition and clauses, and each clause's match and action agree (a row not matched
+by target is inserted, never updated); an OUTPUT names what it writes into and that is in scope; an INSERT ... EXEC
+takes as many columns as the callee's result set has; a global temp table is read and written only where it is in
+scope, and a read of one the artefact never creates is an external reference that says it is manual work.
 
 A part of a divided artefact (issue #86, core.divider) is checked as an artefact is: its scopes are derived from the
 state it starts in, and what lies outside it comes from what the divider carried: the types of the variables in scope,
@@ -38,6 +42,7 @@ PLAN_ROLES = {
     "in_query": {"argument", "query"}, "window": {"function"},
     "if": {"condition"}, "while": {"condition"}, "assign": {"argument"}, "assign_from_rows": {"query"},
     "emit_result_set": {"query"}, "insert_rows": {"source"}, "update_rows": {"input"}, "delete_rows": {"input"},
+    "merge_rows": {"target", "source", "condition", "clause"}, "return_changed_rows": {"value"},
     "declare_cursor": {"query"}, "emit_message": {"argument"},
 }
 # Reads of session state: each must say its type.
@@ -52,6 +57,10 @@ OUTPUT = "(output)"       # the relation a sort key reads a select-list column t
 SOURCES = ("read_table", "named_query", "call_table_function", "read_values", "shred_xml", "pivot",
            "external_reference", "read_changed_rows")
 CALLS = ("call_table_function", "call_scalar_function", "call_procedure")
+WRITE_KINDS = ("insert_rows", "update_rows", "delete_rows", "merge_rows")
+# What a MERGE clause may do to the rows its match selects.
+MERGE_ACTIONS = {"matched": ("update", "delete"), "not_matched_by_source": ("update", "delete"),
+                 "not_matched_by_target": ("insert",)}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -141,7 +150,7 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
         if carried["scope"] is not None and carried["scope"] != start.scope():
             fail(artefact.body, "its carried scope differs from the scope of the state it starts in")
         named = {(d["group"], d["name"].casefold()) for d in carried["declarations"]}
-        for group in ("parameters", "variables", "row_sets", "temp_tables", "cursors"):
+        for group in ("parameters", "variables", "row_sets", "temp_tables", "global_temp_tables", "cursors"):
             for name in getattr(start, group):
                 if (group, name.casefold()) not in named:
                     fail(artefact.body, f"{name} is in scope and the part carries no declaration of it")
@@ -179,6 +188,21 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
     def temp_in_scope(node: Node, name: str) -> bool:
         scope = scope_for.get(id(node))
         return scope is not None and scopes.temp_table_known(scope, name)
+
+    def global_in_scope(node: Node, name: str) -> bool:
+        scope = scope_for.get(id(node))
+        return scope is not None and scopes.global_temp_table_known(scope, name)
+
+    def target_in_scope(node: Node, kind: str, target: str, verb: str) -> None:
+        """What a write, or an OUTPUT INTO, names must be in scope (or, for a table, among the dependencies)."""
+        if kind == "temp_table" and not temp_in_scope(node, target):
+            fail(node, f"{verb} the temp table {target}, which is not in scope")
+        elif kind == "global_temp_table" and not global_in_scope(node, target):
+            fail(node, f"{verb} the global temp table {target}, which is not in scope")
+        elif kind == "row_set" and not in_scope(node, target, row_set=True):
+            fail(node, f"{verb} the table variable {target}, which is not in scope")
+        elif kind == "table" and target not in artefact.dependencies:
+            fail(node, f"{verb} {target}, which is not among the dependencies")
 
     for node in artefact.nodes():
         if not vocabulary.is_known(node.kind):
@@ -219,16 +243,41 @@ def check(artefact: Artefact, columns_of: Callable[[str], set[str]]) -> list[Fin
             elif node.attrs.get("row_set"):
                 if not in_scope(node, node.attrs["row_set"], row_set=True):
                     fail(node, f"reads the table variable {node.attrs['row_set']}, which is not in scope")
+            elif node.attrs.get("global_temp_table"):
+                if not global_in_scope(node, node.attrs["global_temp_table"]):
+                    fail(node, f"reads the global temp table {node.attrs['global_temp_table']}, which is not in scope")
             elif node.attrs["table"] not in artefact.dependencies:
                 fail(node, f"reads {node.attrs['table']}, which is not among the dependencies")
-        if node.kind in ("insert_rows", "update_rows", "delete_rows"):
-            target, target_kind = node.attrs["target"], node.attrs["target_kind"]
-            if target_kind == "temp_table" and not temp_in_scope(node, target):
-                fail(node, f"writes the temp table {target}, which is not in scope")
-            elif target_kind == "row_set" and not in_scope(node, target, row_set=True):
-                fail(node, f"writes the table variable {target}, which is not in scope")
-            elif target_kind == "table" and target not in artefact.dependencies:
-                fail(node, f"writes {target}, which is not among the dependencies")
+        if node.kind in WRITE_KINDS:
+            target_in_scope(node, node.attrs["target_kind"], node.attrs["target"], "writes")
+            source = node.children_with("source")
+            if node.kind == "insert_rows" and source and source[0].kind == "call_procedure":
+                counts = len(source[0].attrs["result_columns"]), len(node.attrs["columns"])
+                if counts[0] != counts[1]:
+                    fail(node, f"inserts {counts[1]} columns from a procedure whose result set has {counts[0]} columns")
+        if node.kind == "return_changed_rows":
+            if node.attrs["into_kind"] != "result_set":
+                target_in_scope(node, node.attrs["into_kind"], node.attrs["into"], "writes the changed rows into")
+                if len(node.attrs["into_columns"]) != len(node.children_with("value")):
+                    fail(node, f"returns {len(node.children_with('value'))} values into "
+                               f"{len(node.attrs['into_columns'])} columns")
+        if node.kind == "merge_clause":
+            allowed = MERGE_ACTIONS.get(node.attrs["match"])
+            if allowed is None:
+                fail(node, f"a merge clause for rows {node.attrs['match']!r}, which is not one MERGE has")
+            elif node.attrs["action"] not in allowed:
+                fail(node, f"a {node.attrs['action']} clause for rows that are {node.attrs['match'].replace('_', ' ')}: "
+                           f"SQL Server allows {' or '.join(allowed)} there")
+            if node.attrs["action"] in ("update", "insert") and \
+                    len(node.attrs["columns"]) != len(node.children_with("value")):
+                fail(node, "names a different number of columns than values")
+        if node.kind == "create_global_temp_table" and (node.attrs.get("private") is not False
+                                                        or node.attrs.get("reported") is not True):
+            fail(node, "a global temp table is visible to every session: it must be reported, not private")
+        if node.kind == "external_reference" and node.attrs.get("global_temp_table") \
+                and node.attrs.get("manual") is not True:
+            fail(node, f"reads the global temp table {node.attrs['global_temp_table']}, which the artefact never "
+                       "creates, and does not say it is manual work")
         if node.kind in ("write_current_row", "last_identity", "set_session_option"):
             named = node.attrs.get("target" if node.kind == "write_current_row" else "table")
             if named is not None and named not in artefact.dependencies:

@@ -84,6 +84,9 @@ def _findings(node: Node, handled: AbstractSet[str]) -> list[Finding]:
     if reason is not None:
         if node.kind == "opaque_fragment":
             reason = f"{node.attrs.get('reason', 'lowering could not express it')}; {reason}"
+        elif node.kind == "external_reference" and node.attrs.get("global_temp_table"):
+            # a read of a ##table the artefact never creates: never generated as if the table existed
+            reason = f"{node.attrs['reason']}; {reason}"
         out.append(Finding(node.id, node.kind, reason, waits_for_kind(node.kind, handled)))
     if node.type is not None and node.type.name == UNSUPPORTED_TYPE:
         out.append(Finding(node.id, UNSUPPORTED_TYPE,

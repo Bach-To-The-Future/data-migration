@@ -230,8 +230,10 @@ class Lowering(Errors):
                 found.add(n.attrs["function"])
             elif n.kind == "call_procedure":
                 found.add(n.attrs["procedure"])
-            elif n.kind in ("insert_rows", "update_rows", "delete_rows") and n.attrs["target_kind"] == "table":
+            elif n.kind in ("insert_rows", "update_rows", "delete_rows", "merge_rows")                     and n.attrs["target_kind"] == "table":
                 found.add(n.attrs["target"])
+            elif n.kind == "return_changed_rows" and n.attrs["into_kind"] == "table":
+                found.add(n.attrs["into"])
             elif n.kind == "write_current_row":
                 found.add(n.attrs["target"])
             elif n.kind in ("last_identity", "set_session_option") and n.attrs.get("table"):

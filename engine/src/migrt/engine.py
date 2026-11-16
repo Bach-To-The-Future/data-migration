@@ -501,6 +501,7 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
         degradations=[{"kind": "assumption", "where": found, "text": text}
                       for text in [*artefact.assumptions, *generated.assumptions]],
         hints=[{**h, "status": report.HINT_NOT_APPLICABLE} for h in artefact.hints],
+        global_temp_tables=report.global_temp_tables(artefact.body),
         flags=[error_comparisons.flag(c) for c in error_comparisons.flagged(error_comparisons.find(parsed) if parsed is not None else [])],
         secrets=[{"setting": name, "text": reads_setting if name in generated.settings_used else unread_setting}
                  for name in artefact.secret_settings],

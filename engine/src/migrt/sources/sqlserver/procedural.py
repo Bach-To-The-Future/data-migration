@@ -16,6 +16,18 @@ temp table or table variable is declared with `columns` (name, type, nullable, i
 insert has a `source` (a plan, or `read_values`), an update or delete has the `input` rows it works on (the
 row sources, joined, then filtered), its `target_alias` there, and an update has one `value` per column.
 
+A MERGE is a `merge_rows` with its `target` (the row source it writes), `source`, `condition` (ON) and one
+`merge_clause` per WHEN, whose `match` is `matched`, `not_matched_by_target` or `not_matched_by_source` (BY SOURCE and
+BY TARGET are kept, NOT MATCHED alone is BY TARGET), whose `action` is `update`, `delete` or `insert`, and which has an
+optional `condition` and its `value`s. The OUTPUT clause of any write is a `return_changed_rows` child: the rows
+before (`deleted`) and after (`inserted`) as `read_changed_rows` children, one `value` per output column, and where they
+go (`into_kind`: `result_set`, `table`, `temp_table`, `global_temp_table` or `row_set`, with `into` and
+`into_columns`). The TOP of a write is a `limit` over the rows it works on (a MERGE keeps it in `top` and `top_count`),
+marked `ordered: False`: the TOP of a write cannot have an ORDER BY, so which rows it keeps is not defined. In
+`INSERT ... EXEC` the `source` is the `call_procedure`, with the callee's result columns. A global temp table (`##t`)
+is a `create_global_temp_table`, listed apart from private ones in the scope; one the artefact never creates is read
+as an `external_reference` that is manual work, since it depends on another session.
+
 Scopes are not decided here: `core.scopes` derives them from the statements, and the checker derives them
 again. What this module keeps is the lowering-time view of the same facts (which variables, table variables and
 temp tables are declared) so that every name resolves to its declaration and its type.
@@ -35,7 +47,7 @@ from . import collations, names
 from . import types as T
 from .expressions import Opaque, Relation, as_role, type_name
 from .parser import walk
-from .queries import Queries
+from .queries import GLOBAL_NOT_CREATED, Queries
 
 PERMISSIONS = {"GrantStatement", "RevokeStatement", "DenyStatement", "RevertStatement"}
 SCHEMA_CHANGES = {"CreateTableStatement", "AlterTableStatement", "DropTableStatement", "CreateIndexStatement",
@@ -58,7 +70,11 @@ COMPOUND = {"AddEquals": "Add", "SubtractEquals": "Subtract", "MultiplyEquals": 
             "DivideEquals": "Divide", "ModEquals": "Modulo"}
 BINARY_NAMES = {"Add": "add", "Subtract": "subtract", "Multiply": "multiply", "Divide": "divide", "Modulo": "modulo"}
 OPTIONS = {"NoCount": "NOCOUNT"}
-GLOBAL_TEMP = "a global temp table is not lowered yet: it is visible to every session"
+# What a global temp table is lowered as (ticket #104): reported, not private, and generated as a scratch table for the run.
+GLOBAL_TEMP = {"private": False, "reported": True, "visibility": "every session",
+               "generation": "run_scoped_scratch_table",
+               "caveat": "A global temp table is visible to every session. It is generated as a scratch table scoped to "
+                         "this run, and cross-session visibility is not reproduced: another session cannot see it."}
 TEMPDB_ASSUMPTION = ("The collation of tempdb is assumed to be the server's default collation: the catalog does not "
                      "read tempdb, and a temp table's text columns without COLLATE take tempdb's.")
 NULLABLE_ASSUMPTION = ("A column of a temp table or table variable with neither NULL nor NOT NULL is assumed "
@@ -352,14 +368,15 @@ class Procedural(Queries):
         name = self.temp_name(s.SchemaObjectName)
         if name is None:
             return [self.schema_change(s)]
-        if name.startswith("##"):
-            raise Opaque(s, GLOBAL_TEMP)
         if s.AsFileTable or s.AsEdge or s.AsNode or s.Definition is None:
             raise Opaque(s, "this kind of CREATE TABLE is not lowered yet")
         label = collations.Label(self.server_collation(), collations.COLUMN)
         columns, types, keys = self.table_definition(s.Definition, label, tempdb=True)
         self.temp_tables[name.casefold()] = (name, types)
-        return [Node("create_temp_table", self.span(s), None, dict({"name": name, "columns": columns}, **keys))]
+        attrs = dict({"name": name, "columns": columns}, **keys)
+        if name.startswith("##"):
+            return [Node("create_global_temp_table", self.span(s), None, dict(attrs, **GLOBAL_TEMP))]
+        return [Node("create_temp_table", self.span(s), None, attrs)]
 
     def server_collation(self) -> str:
         servers = [o for o in self.reader.snapshot.objects if o.kind == "server" and o.has_fact("collation")]
@@ -377,11 +394,11 @@ class Procedural(Queries):
             return [self.schema_change(s)]
         out = []
         for name in temp:
-            if str(name).startswith("##"):
-                raise Opaque(s, GLOBAL_TEMP)
             found = self.temp_tables.pop(str(name).casefold(), None)
-            out.append(Node("drop_temp_table", self.span(s), None,
-                            {"name": found[0] if found else name, "if_exists": bool(s.IsIfExists)}))
+            attrs = {"name": found[0] if found else name, "if_exists": bool(s.IsIfExists)}
+            if str(name).startswith("##"):
+                attrs["global"] = True
+            out.append(Node("drop_temp_table", self.span(s), None, attrs))
         return out
 
     # ------------------------------------------------------------------ SELECT
@@ -406,16 +423,17 @@ class Procedural(Queries):
         name = self.temp_name(target)
         if name is None:
             raise Opaque(s, "SELECT INTO a permanent table creates a table: it is not lowered")
-        if name.startswith("##"):
-            raise Opaque(s, GLOBAL_TEMP)
         plan, outputs = self.select_statement(s, into=True)
         types = dict(outputs)
         if len(types) != len(outputs):
             raise Opaque(s, "SELECT INTO needs a distinct name for every column")
         columns = [{"name": n, "type": t.to_json(), "nullable": None, "identity": None} for n, t in outputs]
         self.temp_tables[name.casefold()] = (name, types)
-        return Node("create_temp_table", self.span(s), None, {"name": name, "columns": columns, "from_query": True},
-                    [as_role(plan, "query")])
+        attrs = {"name": name, "columns": columns, "from_query": True}
+        if name.startswith("##"):
+            return Node("create_global_temp_table", self.span(s), None, dict(attrs, **GLOBAL_TEMP),
+                        [as_role(plan, "query")])
+        return Node("create_temp_table", self.span(s), None, attrs, [as_role(plan, "query")])
 
     # ------------------------------------------------------------------ INSERT, UPDATE, DELETE
 
@@ -436,13 +454,14 @@ class Procedural(Queries):
         if obj.ServerIdentifier is not None:
             raise Opaque(ref, "writing through a linked server is not lowered yet")
         if parts[-1].startswith("#"):
-            if parts[-1].startswith("##"):
-                raise Opaque(ref, GLOBAL_TEMP)
             found = self.temp_tables.get(parts[-1].casefold()) if len(parts) == 1 else None
+            if found is None and parts[-1].startswith("##"):
+                raise Opaque(ref, GLOBAL_NOT_CREATED.format(".".join(parts)))
             if found is None:
                 raise Opaque(ref, f"the temp table {'.'.join(parts)} is not in scope here: no statement before this "
                                   "one in its batch creates it")
-            return "temp_table", found[0], dict(found[1]), [n for n in found[1]]
+            kind = "global_temp_table" if parts[-1].startswith("##") else "temp_table"
+            return kind, found[0], dict(found[1]), [n for n in found[1]]
         try:
             table = self.reader.resolve(parts, dict(self.name_context, kinds={"table"}))
         except names.AmbiguousName as ambiguous:
@@ -463,10 +482,6 @@ class Procedural(Queries):
 
     def s_InsertStatement(self, s) -> list[Node]:
         spec = s.InsertSpecification
-        if spec.OutputClause is not None or spec.OutputIntoClause is not None:
-            raise Opaque(s, "the OUTPUT clause of INSERT is not lowered yet")
-        if spec.TopRowFilter is not None:
-            raise Opaque(s, "INSERT TOP is not lowered yet")
         self.ctes.append({})
         try:
             definitions = self.common_tables(s)
@@ -505,10 +520,101 @@ class Procedural(Queries):
             if len(outputs) != len(listed):
                 raise Opaque(s, "the query returns a different number of columns than the INSERT names")
             self.convert_outputs(plan, wanted)
+        elif source_kind == "ExecuteInsertSource":
+            plan = self.insert_exec(s, source.Execute, listed)
         else:
             raise Opaque(s, f"{source_kind} as the source of INSERT is not lowered yet")
+        if spec.TopRowFilter is not None:
+            plan = self.limited(spec.TopRowFilter, plan)
+        children = [as_role(plan, "source")]
+        self.scopes.append({})
+        try:
+            output = self.output_clause(spec, s, kind, target, columns, target if kind == "table" else None,
+                                        ("inserted",))
+        finally:
+            self.scopes.pop()
         return [Node("insert_rows", self.span(s), None, {"target": target, "target_kind": kind, "columns": listed},
-                     [as_role(plan, "source")] + definitions)]
+                     children + ([output] if output is not None else []) + definitions)]
+
+    def insert_exec(self, s, execute, listed: list[str]) -> Node:
+        """`INSERT ... EXEC proc`: the rows the procedure returns are the source, and its result shape is the column list."""
+        if type_name(execute.ExecutableEntity) != "ExecutableProcedureReference":
+            raise Opaque(s, "INSERT ... EXEC of a string is dynamic SQL: it is not lowered")
+        call = self.procedure_call(s, execute)
+        procedure = call.attrs["procedure"]
+        if not self.reader.has_fact(procedure, "result_shape"):
+            why = (str(self.reader.value(procedure, "result_shape_unavailable"))
+                   if self.reader.has_fact(procedure, "result_shape_unavailable") else "it was not described")
+            raise Opaque(s, f"INSERT ... EXEC takes the result set of {procedure}, and its shape is not in the catalog "
+                            f"({why})")
+        shape = self.reader.value(procedure, "result_shape")
+        if len(shape) != len(listed):
+            raise Opaque(s, f"{procedure} returns {len(shape)} columns and the INSERT takes {len(listed)}")
+        call.attrs = dict(call.attrs, result_columns=[
+            {"name": c["name"], "type": T.from_column(c, default=self.default_label).to_json(),
+             "nullable": bool(c["nullable"])} for c in shape])
+        return as_role(call, "source")
+
+    def limited(self, top, plan: Node) -> Node:
+        """The TOP of a write: the first rows of what it works on. A write's TOP has no ORDER BY, so which rows is
+        not defined, and the node says so. WITH TIES is not legal in a write (it needs an ORDER BY): the parser
+        refuses it, and a text that does not parse is kept as written."""
+        count = self.expression(top.Expression)
+        return Node("limit", self.span(top), None, {"percent": bool(top.Percent), "with_ties": False, "ordered": False},
+                    [as_role(plan, "input"), as_role(count, "count")])
+
+    # ------------------------------------------------------------------ OUTPUT
+
+    merge_output = False          # lowering the OUTPUT of a MERGE: `$action` is allowed
+
+    def x_ColumnReferenceExpression(self, e) -> Node:
+        if str(e.ColumnType) == "PseudoColumnAction":
+            if not self.merge_output:
+                raise Opaque(e, "$action is only in the OUTPUT of a MERGE")
+            return self.node("changed_row_action", e, T.varchar(10, self.default_label, national=True))
+        return super().x_ColumnReferenceExpression(e)
+
+    def output_clause(self, spec, s, kind: str, target: str, columns: dict[str, VType], table: str | None,
+                      rows: tuple[str, ...], *, merge: bool = False) -> Node | None:
+        """The OUTPUT clause of a write, as a `return_changed_rows`. Called with the write's own scope open, so the
+        row sources it names are visible; `inserted` and `deleted` are added to it."""
+        into = spec.OutputIntoClause
+        clause = into if into is not None else spec.OutputClause
+        if clause is None:
+            return None
+        changed = []
+        for which in rows:
+            self.register(clause, Relation(which, dict(columns), table))
+            changed.append(Node("read_changed_rows", self.span(clause), None,
+                                {"rows": which, "table": table, "alias": which, "columns": list(columns)},
+                                role="before" if which == "deleted" else "after"))
+        self.merge_output = merge
+        try:
+            values: list[Node] = []
+            for element in clause.SelectColumns:
+                for node in self.select_item(element, len(values) + 1):
+                    node.role = "value"
+                    values.append(node)
+        finally:
+            self.merge_output = False
+        names = [v.attrs["output_name"] for v in values]
+        attrs: dict = {"into_kind": "result_set", "into": None, "into_columns": None, "names": names}
+        if into is not None:
+            into_kind, into_name, into_types, insertable = self.write_target(into.IntoTable)
+            listed = [self.find(into_types, str(list(c.MultiPartIdentifier.Identifiers)[-1].Value), s)
+                      for c in into.IntoTableColumns] \
+                if into.IntoTableColumns is not None and into.IntoTableColumns.Count else insertable
+            if len(listed) != len(values):
+                raise Opaque(into, "OUTPUT INTO names a different number of columns than the OUTPUT returns")
+            for i, column in enumerate(listed):
+                if values[i].kind != "opaque_fragment":
+                    converted = self.store(values[i], into_types[column])
+                    if converted is not values[i]:
+                        converted.role = "value"
+                        converted.attrs = dict(converted.attrs, output_name=names[i])
+                        values[i] = converted
+            attrs.update(into_kind=into_kind, into=into_name, into_columns=listed)
+        return Node("return_changed_rows", self.span(clause), None, attrs, changed + values, role="changed_rows")
 
     def convert_outputs(self, plan: Node, wanted: list[VType]) -> None:
         """Write out the conversions an INSERT makes of a query's columns to the target's types."""
@@ -527,13 +633,21 @@ class Procedural(Queries):
         elif plan.children_with("input"):
             self.convert_outputs(plan.child("input"), wanted)
 
-    def dml_input(self, spec, s, *, assigning: bool = False) -> tuple[Node, str, str, str, list[tuple[str, Node]]]:
-        """The rows an UPDATE or DELETE works on (its row sources joined and filtered), the alias, kind and name of
-        its target in them, and for an UPDATE (`assigning`) the column and value of each SET."""
-        if spec.OutputClause is not None or spec.OutputIntoClause is not None:
-            raise Opaque(s, "the OUTPUT clause is not lowered yet")
-        if spec.TopRowFilter is not None:
-            raise Opaque(s, "TOP in a write is not lowered yet")
+    def target_of(self, node: Node, s) -> tuple[str, str]:
+        """The kind and name of what a write changes, from the row source it names."""
+        if node.attrs.get("source") == "view":
+            raise Opaque(s, "writing through a view is not lowered yet")
+        for attr, kind in (("temp_table", "temp_table"), ("global_temp_table", "global_temp_table"),
+                           ("row_set", "row_set"), ("table", "table")):
+            if node.attrs.get(attr):
+                return kind, node.attrs[attr]
+        raise Opaque(s, "the target of the write is not a table")
+
+    def dml_input(self, spec, s, *, assigning: bool = False) \
+            -> tuple[Node, str, str, str, list[tuple[str, Node]], Node | None]:
+        """The rows an UPDATE or DELETE works on (its row sources joined and filtered, and cut to its TOP), the alias,
+        kind and name of its target in them, for an UPDATE (`assigning`) the column and value of each SET, and its
+        OUTPUT clause."""
         self.scopes.append({})
         try:
             if spec.FromClause is not None:
@@ -546,16 +660,7 @@ class Procedural(Queries):
             else:
                 source = self.table_reference(spec.Target)
                 alias, node = source.attrs["alias"], source
-            if node.attrs.get("source") == "view":
-                raise Opaque(s, "writing through a view is not lowered yet")
-            if node.attrs.get("temp_table"):
-                kind, target = "temp_table", node.attrs["temp_table"]
-            elif node.attrs.get("row_set"):
-                kind, target = "row_set", node.attrs["row_set"]
-            elif node.attrs.get("table"):
-                kind, target = "table", node.attrs["table"]
-            else:
-                raise Opaque(s, "the target of the write is not a table")
+            kind, target = self.target_of(node, s)
             relation = self.scopes[-1][self.fold(alias)]
             if spec.WhereClause is not None:
                 if spec.WhereClause.Cursor is not None:
@@ -563,10 +668,14 @@ class Procedural(Queries):
                 condition = self.predicate(spec.WhereClause.SearchCondition)
                 source = Node("filter", self.span(spec.WhereClause), None, {},
                               [as_role(source, "input"), as_role(condition, "condition")])
+            if spec.TopRowFilter is not None:
+                source = self.limited(spec.TopRowFilter, source)
             values = self.set_values(spec, relation) if assigning else []
+            output = self.output_clause(spec, s, kind, target, relation.columns or {}, relation.table,
+                                        ("deleted", "inserted") if assigning else ("deleted",))
         finally:
             self.scopes.pop()
-        return source, alias, kind, target, values
+        return source, alias, kind, target, values, output
 
     def target_in(self, target, source: Node) -> tuple[str, Node]:
         """Which row source of the FROM clause an UPDATE or DELETE target names (an alias, or the table's name)."""
@@ -586,7 +695,8 @@ class Procedural(Queries):
                         resolved = None
                 matches = [n for n in source.walk() if n.kind == "read_table" and (
                     (resolved and n.attrs.get("table") == resolved) or
-                    (parts[-1].startswith("#") and n.attrs.get("temp_table", "").casefold() == parts[-1].casefold()))]
+                    (parts[-1].startswith("#") and (n.attrs.get("temp_table") or n.attrs.get("global_temp_table")
+                                                    or "").casefold() == parts[-1].casefold()))]
         if len(matches) != 1:
             raise Opaque(target, "the target of the write is not exactly one of the row sources in FROM")
         return matches[0].attrs["alias"], matches[0]
@@ -611,23 +721,102 @@ class Procedural(Queries):
         self.ctes.append({})
         try:
             definitions = self.common_tables(s)
-            source, alias, kind, target, values = self.dml_input(spec, s, assigning=True)
+            source, alias, kind, target, values, output = self.dml_input(spec, s, assigning=True)
         finally:
             self.ctes.pop()
         return [Node("update_rows", self.span(s), None,
                      {"target": target, "target_kind": kind, "target_alias": alias, "columns": [c for c, _ in values]},
-                     [as_role(source, "input")] + [v for _, v in values] + definitions)]
+                     [as_role(source, "input")] + [v for _, v in values] + ([output] if output is not None else [])
+                     + definitions)]
 
     def s_DeleteStatement(self, s) -> list[Node]:
         self.ctes.append({})
         try:
             definitions = self.common_tables(s)
-            source, alias, kind, target, _ = self.dml_input(s.DeleteSpecification, s)
+            source, alias, kind, target, _, output = self.dml_input(s.DeleteSpecification, s)
         finally:
             self.ctes.pop()
         return [Node("delete_rows", self.span(s), None,
                      {"target": target, "target_kind": kind, "target_alias": alias},
-                     [as_role(source, "input")] + definitions)]
+                     [as_role(source, "input")] + ([output] if output is not None else []) + definitions)]
+
+    # ------------------------------------------------------------------ MERGE
+
+    def s_MergeStatement(self, s) -> list[Node]:
+        spec = s.MergeSpecification
+        self.ctes.append({})
+        try:
+            definitions = self.common_tables(s)
+            return [self.merge_rows(s, spec, definitions)]
+        finally:
+            self.ctes.pop()
+
+    def merge_rows(self, s, spec, definitions: list[Node]) -> Node:
+        self.scopes.append({})
+        try:
+            _, _, columns, insertable = self.write_target(spec.Target)
+            target = self.table_reference(spec.Target)
+            if spec.TableAlias is not None:             # MERGE t AS x: the alias is on the specification
+                alias = str(spec.TableAlias.Value)
+                relation = self.scopes[-1].pop(self.fold(target.attrs["alias"]))
+                relation.alias = alias
+                self.scopes[-1][self.fold(alias)] = relation
+                target.attrs = dict(target.attrs, alias=alias)
+            alias = target.attrs["alias"]
+            kind, name = self.target_of(target, s)
+            relation = self.scopes[-1][self.fold(alias)]
+            source = self.table_reference(spec.TableReference)
+            condition = self.predicate(spec.SearchCondition)
+            clauses = [self.merge_clause(c, relation, columns, insertable) for c in spec.ActionClauses]
+            children = [as_role(target, "target"), as_role(source, "source"), as_role(condition, "condition")] + clauses
+            attrs: dict = {"target": name, "target_kind": kind, "target_alias": alias}
+            if spec.TopRowFilter is not None:
+                top = spec.TopRowFilter
+                attrs["top"] = {"percent": bool(top.Percent), "ordered": False}
+                children.append(as_role(self.expression(top.Expression), "top_count"))
+            output = self.output_clause(spec, s, kind, name, columns, relation.table, ("deleted", "inserted"), merge=True)
+            if output is not None:
+                children.append(output)
+        finally:
+            self.scopes.pop()
+        return Node("merge_rows", self.span(s), None, attrs, children + definitions)
+
+    MERGE_MATCHES = {"Matched": "matched", "NotMatched": "not_matched_by_target",
+                     "NotMatchedByTarget": "not_matched_by_target", "NotMatchedBySource": "not_matched_by_source"}
+
+    def merge_clause(self, clause, relation: Relation, columns: dict[str, VType], insertable: list[str]) -> Node:
+        """One WHEN clause: which rows it acts on, its extra condition, and what it does. The match is kept as
+        written (BY SOURCE is never lost); NOT MATCHED alone means BY TARGET."""
+        match = self.MERGE_MATCHES.get(str(clause.Condition))
+        if match is None:
+            raise Opaque(clause, f"the merge condition {clause.Condition} is not lowered yet")
+        children: list[Node] = []
+        if clause.SearchCondition is not None:
+            children.append(as_role(self.predicate(clause.SearchCondition), "condition"))
+        action, kind = clause.Action, type_name(clause.Action)
+        if kind == "UpdateMergeAction":
+            values = self.set_values(action, relation)
+            attrs = {"action": "update", "columns": [c for c, _ in values]}
+            children += [v for _, v in values]
+        elif kind == "DeleteMergeAction":
+            attrs = {"action": "delete", "columns": []}
+        elif kind == "InsertMergeAction":
+            if action.Source is None or action.Source.IsDefaultValues:
+                raise Opaque(clause, "INSERT DEFAULT VALUES in a MERGE is not lowered yet")
+            rows = list(action.Source.RowValues)
+            listed = [self.find(columns, str(list(c.MultiPartIdentifier.Identifiers)[-1].Value), clause)
+                      for c in action.Columns] if action.Columns is not None and action.Columns.Count else insertable
+            if len(rows) != 1 or len(rows[0].ColumnValues) != len(listed):
+                raise Opaque(clause, "the INSERT of a MERGE clause has a different number of values than columns")
+            for column, expression in zip(listed, rows[0].ColumnValues):
+                value = self.lowered_or_opaque(expression)
+                if value.kind != "opaque_fragment":
+                    value = self.store(value, columns[column])
+                children.append(as_role(value, "value"))
+            attrs = {"action": "insert", "columns": listed}
+        else:
+            raise Opaque(clause, f"{kind} in a MERGE is not lowered yet")
+        return Node("merge_clause", self.span(clause), None, dict(attrs, match=match), children, role="clause")
 
     # ------------------------------------------------------------------ calls and session options
 
@@ -635,7 +824,10 @@ class Procedural(Queries):
         dynamic = self.dynamic_sql(s)
         if dynamic is not None:
             return [dynamic]
-        spec = s.ExecuteSpecification
+        return [self.procedure_call(s, s.ExecuteSpecification)]
+
+    def procedure_call(self, s, spec) -> Node:
+        """The call of a catalog procedure by EXEC, alone or as the source of INSERT ... EXEC."""
         entity = spec.ExecutableEntity
         if type_name(entity) != "ExecutableProcedureReference" or entity.ProcedureReference is None \
                 or entity.ProcedureReference.ProcedureReference is None:
@@ -677,8 +869,8 @@ class Procedural(Queries):
             node = as_role(value, "argument")
             node.attrs = dict(node.attrs, parameter=fact["name"], output=bool(p.IsOutput), named=named is not None)
             arguments.append(node)
-        return [Node("call_procedure", self.span(s), None, {"procedure": procedure, "return_variable": return_variable,
-                                                             "may_touch_temp_tables": True}, arguments)]
+        return Node("call_procedure", self.span(s), None, {"procedure": procedure, "return_variable": return_variable,
+                                                           "may_touch_temp_tables": True}, arguments)
 
     def dynamic_sql(self, statement) -> Node | None:
         """EXEC (string) and sp_executesql: the expressions that build the text are lowered; the statement is a

@@ -11,6 +11,9 @@ representation, not about one source:
   exist*: a table made in either branch may exist after it, and a table dropped in one branch may still exist.
   The lists hold what may be in scope, not what is certain;
 - a batch of a script starts with no variables and keeps the temporary tables;
+- a global temporary table (`##t`, visible to every session) is listed apart from the private ones, in
+  `global_temp_tables`, and follows the same rules for branches, loops, rollbacks and barriers: the report and
+  generation treat the two differently, so the scope must not mix them;
 - a scope barrier may have declared, changed or dropped anything, so the lists after one may be incomplete or
   stale. The scope says so with `barrier`; it does not guess, and the checker does not refuse a name only
   because a barrier came before it;
@@ -55,6 +58,7 @@ class State:
     variables: list[str] = dataclasses.field(default_factory=list)
     row_sets: list[str] = dataclasses.field(default_factory=list)
     temp_tables: list[str] = dataclasses.field(default_factory=list)
+    global_temp_tables: list[str] = dataclasses.field(default_factory=list)
     barrier: str | None = None
     cursors: list[str] = dataclasses.field(default_factory=list)
     open_cursors: list[str] = dataclasses.field(default_factory=list)
@@ -70,7 +74,8 @@ class State:
     def copy(self) -> "State":
         return dataclasses.replace(
             self, parameters=list(self.parameters), variables=list(self.variables), row_sets=list(self.row_sets),
-            temp_tables=list(self.temp_tables), cursors=list(self.cursors), open_cursors=list(self.open_cursors),
+            temp_tables=list(self.temp_tables), global_temp_tables=list(self.global_temp_tables),
+            cursors=list(self.cursors), open_cursors=list(self.open_cursors),
             global_cursors=list(self.global_cursors), begun=list(self.begun), save_points=list(self.save_points),
             journal=list(self.journal))
 
@@ -85,7 +90,7 @@ class State:
         transaction = value["transaction"]
         return State(parameters=list(value["parameters"]), variables=list(value["variables"]),
                      row_sets=list(value["row_sets"]), temp_tables=list(value["temp_tables"]),
-                     barrier=value["barrier"], cursors=list(value["cursors"]), open_cursors=list(value["open_cursors"]),
+                     global_temp_tables=list(value["global_temp_tables"]), barrier=value["barrier"], cursors=list(value["cursors"]), open_cursors=list(value["open_cursors"]),
                      global_cursors=list(value["global_cursors"]), tx_min=transaction["min"], tx_max=transaction["max"],
                      begun=list(transaction["begun"]), save_points=list(transaction["save_points"]),
                      journal=[(e[0], e[1], e[2]) for e in value["journal"]])
@@ -93,7 +98,7 @@ class State:
     def scope(self) -> dict:
         return {"parameters": list(self.parameters), "variables": list(self.variables),
                 "row_sets": list(self.row_sets), "temp_tables": list(self.temp_tables),
-                "cursors": list(self.cursors), "open_cursors": list(self.open_cursors),
+                "global_temp_tables": list(self.global_temp_tables), "cursors": list(self.cursors), "open_cursors": list(self.open_cursors),
                 "transaction": {"min": self.tx_min, "max": self.tx_max, "begun": list(self.begun),
                                 "save_points": list(self.save_points)},
                 "barrier": self.barrier}
@@ -126,6 +131,11 @@ def _remove(names: list[str], name: str) -> None:
     names[:] = [n for n in names if n.casefold() != name.casefold()]
 
 
+def _tables(state: State, name: str) -> list[str]:
+    """The list a temp table of this name belongs to: global temp tables (`##`) are kept apart from private ones."""
+    return state.global_temp_tables if name.startswith("##") else state.temp_tables
+
+
 def _journal(state: State, entry: str, name: str) -> None:
     state.journal.append((entry, name, len(state.save_points)))
 
@@ -148,9 +158,9 @@ def _undo(state: State, after: int) -> None:
         if saved < after:
             kept.append((entry, name, saved))
         elif entry == "dropped":
-            _add(state.temp_tables, name)
+            _add(_tables(state, name), name)
         elif state.tx_min > 0:
-            _remove(state.temp_tables, name)
+            _remove(_tables(state, name), name)
     state.journal = list(reversed(kept))
 
 
@@ -204,16 +214,18 @@ def _visit(node: Node, state: State, out: list[tuple[Node, State]]) -> None:
         _add(state.variables, node.attrs["name"])
     elif kind == "declare_row_set_variable":
         _add(state.row_sets, node.attrs["name"])
-    elif kind == "create_temp_table":
-        _add(state.temp_tables, node.attrs["name"])
+    elif kind in ("create_temp_table", "create_global_temp_table"):
+        _add(_tables(state, node.attrs["name"]), node.attrs["name"])
         if state.tx_min > 0:
             _journal(state, "created", node.attrs["name"])
     elif kind == "drop_temp_table":
-        _remove(state.temp_tables, node.attrs["name"])
+        _remove(_tables(state, node.attrs["name"]), node.attrs["name"])
         if state.tx_max is None or state.tx_max > 0:
             _journal(state, "dropped", node.attrs["name"])
     elif kind in TRANSACTION_KINDS or kind == "call_procedure":
         _transaction(node, state)
+    elif kind == "insert_rows" and any(c.role == "source" and c.kind == "call_procedure" for c in node.children):
+        _transaction(next(c for c in node.children if c.role == "source"), state)      # INSERT ... EXEC runs a call
     elif kind in CURSOR_KINDS:
         _cursor(node, state)
     elif kind in BARRIERS and node.attrs.get("scope_barrier") is True:
@@ -250,6 +262,7 @@ def _join(state: State, *paths: State) -> None:
     state.variables[:] = _merge(state.variables, *[p.variables for p in paths])
     state.row_sets[:] = _merge(state.row_sets, *[p.row_sets for p in paths])
     state.temp_tables[:] = _merge(state.temp_tables, *[p.temp_tables for p in paths])
+    state.global_temp_tables[:] = _merge(state.global_temp_tables, *[p.global_temp_tables for p in paths])
     state.cursors[:] = _merge(state.cursors, *[p.cursors for p in paths])
     state.open_cursors[:] = _merge(state.open_cursors, *[p.open_cursors for p in paths])
     state.global_cursors[:] = _merge(state.global_cursors, *[p.global_cursors for p in paths])
@@ -302,7 +315,8 @@ def derive_states(body: Node) -> list[tuple[Node, State]]:
     return out
 
 
-WRITES = ("insert_rows", "update_rows", "delete_rows")
+WRITES = ("insert_rows", "update_rows", "delete_rows", "merge_rows")
+TEMP_KINDS = ("temp_table", "row_set", "global_temp_table")
 
 
 def depends_on_scope(node: Node) -> bool:
@@ -314,9 +328,11 @@ def depends_on_scope(node: Node) -> bool:
                      "transaction_state"):
         return True
     if node.kind == "read_table":
-        return bool(node.attrs.get("temp_table") or node.attrs.get("row_set"))
+        return bool(node.attrs.get("temp_table") or node.attrs.get("row_set") or node.attrs.get("global_temp_table"))
     if node.kind in WRITES:
-        return node.attrs["target_kind"] in ("temp_table", "row_set")
+        return node.attrs["target_kind"] in TEMP_KINDS
+    if node.kind == "return_changed_rows":
+        return node.attrs["into_kind"] in TEMP_KINDS
     return node.kind == "opaque_fragment" and not node.attrs.get("scope_barrier") and any(
         node.attrs.get("touches", {}).get(k) for k in ("variables", "temp_tables"))
 
@@ -367,4 +383,9 @@ def known(scope: dict, name: str, *, row_set: bool = False) -> bool:
 
 
 def temp_table_known(scope: dict, name: str) -> bool:
-    return _has(scope["temp_tables"], name)
+    """Whether a temp table, private (#t) or global (##t, listed apart), may exist in scope."""
+    return _has(scope["global_temp_tables" if name.startswith("##") else "temp_tables"], name)
+
+
+def global_temp_table_known(scope: dict, name: str) -> bool:
+    return _has(scope["global_temp_tables"], name)
