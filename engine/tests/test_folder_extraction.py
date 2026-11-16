@@ -1,6 +1,7 @@
 """Extraction from folders, alone or beside a live server, and the inventories of SSIS
 packages and SQL Agent jobs (issue #40, spec section 3), through the engine's library
 interface, on the sandbox."""
+import dataclasses
 import json
 import os
 import pathlib
@@ -14,10 +15,10 @@ from migrt.sources.sqlserver import extractor, folders, names
 from conftest import SCRATCH, SCRATCH_BATCHES, sandbox_server
 
 SAMPLE = pathlib.Path(__file__).parents[2] / "corpus" / "sample"
-DB = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": 160})
+DB = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": 160}, "us_english")
 SAMPLE_FOLDERS = [engine.Folder(SAMPLE / "database", "RetailSample"), engine.Folder(SAMPLE / "artefacts", "RetailSample")]
 RETAIL = engine.FolderSettings(collations={"RetailSample": "SQL_Latin1_General_CP1_CI_AS"}, time_zone="UTC",
-                               version="2022", compatibility_levels={"RetailSample": 160})
+                               version="2022", compatibility_levels={"RetailSample": 160}, language="us_english")
 JOB = "agent_job:RetailSample - Nightly sales roll-up"
 PACKAGE = "ssis_package:RetailSample/recognised/ssis/LoadDailySales.dtsx"
 
@@ -96,7 +97,7 @@ def test_folders_alone_rebuild_a_case_sensitive_database_with_every_kind_of_obje
     (tmp_path / "scratch.sql").write_text("\nGO\n".join(SCRATCH_BATCHES) + "\nGO\n", encoding="utf-8")
     folder = engine.extract(engagement, None, [engine.Folder(tmp_path, scratch_database)],
                             engine.FolderSettings({scratch_database: "Latin1_General_CS_AS"}, "UTC", "2022",
-                                                  {scratch_database: 160}))
+                                                  {scratch_database: 160}, "us_english"))
     live = engine.extract(engagement, sandbox_server(databases=(scratch_database,)))
 
     assert differences(live, folder, unnamed_ok=True) == []
@@ -299,6 +300,7 @@ def test_the_collation_time_zone_version_and_level_are_required_without_a_server
         engine.extract(engagement, None, SAMPLE_FOLDERS, engine.FolderSettings())
 
     assert raised.value.missing == ["the time zone, which a server would have supplied",
+                                    "the default language, which a server would have supplied",
                                     "the SQL Server version, which selects the sandbox",
                                     "the default collation of database RetailSample",
                                     "the compatibility level of database RetailSample, which selects the parser"]
@@ -348,8 +350,9 @@ def test_the_report_has_a_completeness_summary_and_flags_every_assumed_collation
     expected |= {(o.identity, c["name"]) for o in snapshot.objects if o.kind == "table_function"
                  for c in o.fact("result_shape").value if c["system_type"] in folders.COLLATABLE}
     assert collations == expected and ("RetailSample.ref.Customer", "Name") in collations
-    assert data["run"]["source"]["assumed"] == ["build", "collation", "edition", "engine_edition", "nested_triggers",
-                                                "time_zone", "version"]
+    assert data["run"]["source"]["assumed"] == ["build", "collation", "datefirst", "dateformat", "edition",
+                                                "engine_edition", "language", "nested_triggers", "time_zone",
+                                                "version"]
     assert extraction["folders"]["lost_without_a_server"] == list(folders.LOST_WITHOUT_A_SERVER)
     kinds = {d["kind"] for d in data["degradations"]}
     assert {"assumption", "reduced coverage", "skipped check"} <= kinds
@@ -392,6 +395,10 @@ def test_one_command_previews_a_view_from_folders_alone(engagement, tmp_path, ca
 
     assert cli.main(common) == 3
     assert "the default collation of database RetailSample" in capsys.readouterr().err
+    assert cli.main(common + ["--collation", "RetailSample=SQL_Latin1_General_CP1_CI_AS",
+                              "--sql-server-version", "2022", "--compatibility-level", "RetailSample=160"]) == 3
+    assert "the default language" in capsys.readouterr().err
+    common += ["--language", "us_english"]
     assert cli.main(common + ["--collation", "RetailSample=SQL_Latin1_General_CP1_CI_AS",
                               "--sql-server-version", "2022", "--compatibility-level", "RetailSample=160"]) == 0
     summary = json.loads(capsys.readouterr().out)
@@ -493,3 +500,67 @@ def test_packages_and_jobs_are_listed_as_manual_work_with_secrets_masked(engagem
     assert locked["inventory"]["inventoried"] is False and "encrypt all" in locked["inventory"]["not_inventoried_reason"]
     assert recognised[JOB]["entry_points"] == ["RetailSample.sales.uspCloseStaleOrders",
                                                "RetailSample.sales.uspRecalculateDailySales"]
+
+
+# ---------------------------------------------------------------- the language, without a server
+
+def server_facts(snapshot):
+    server = snapshot.get(folders.NO_SERVER)
+    return {n: server.fact(n, extractor.SOURCE) for n in ("language", "datefirst", "dateformat")}
+
+
+def with_language(language):
+    return dataclasses.replace(RETAIL, language=language)
+
+
+def test_datefirst_and_dateformat_are_derived_from_the_language_and_recorded_as_assumed(engagement):
+    snapshot = engine.extract(engagement, None, SAMPLE_FOLDERS, RETAIL)
+
+    found = server_facts(snapshot)
+    assert {n: f.value for n, f in found.items()} == {"language": "us_english", "datefirst": 7, "dateformat": "mdy"}
+    assert {f.provenance.kind for f in found.values()} == {"assumed"}
+    assert found["language"].provenance.detail == "the language setting"
+    assert found["datefirst"].provenance.detail == found["dateformat"].provenance.detail == (
+        "derived from the language setting by the table of SQL Server's built-in languages")
+
+
+@pytest.mark.parametrize("given, name, dateformat, datefirst", [
+    ("British English", "British", "dmy", 1), ("British", "British", "dmy", 1),
+    ("German", "Deutsch", "dmy", 1), ("Deutsch", "Deutsch", "dmy", 1),
+    ("japanese", "日本語", "ymd", 7), ("English", "us_english", "mdy", 7)])
+def test_several_languages_give_their_own_datefirst_and_dateformat(engagement, given, name, dateformat, datefirst):
+    snapshot = engine.extract(engagement, None, SAMPLE_FOLDERS, with_language(given))
+
+    found = server_facts(snapshot)
+    assert (found["language"].value, found["dateformat"].value, found["datefirst"].value) == (
+        name, dateformat, datefirst)
+
+
+def test_a_language_the_table_does_not_hold_is_refused(engagement):
+    with pytest.raises(engine.UnknownLanguage, match="Klingon"):
+        engine.extract(engagement, None, SAMPLE_FOLDERS, with_language("Klingon"))
+    assert engine.UnknownLanguage in engine.EXTRACTION_ERRORS
+
+
+def test_the_command_line_takes_the_language(engagement, tmp_path, capsys):
+    common = ["preview", "--engagement", engagement.name, "--control-dsn", os.environ["MIGRT_CONTROL_DSN"],
+              "--no-server", "--folder", f"RetailSample={SAMPLE / 'database'}",
+              "--folder", f"RetailSample={SAMPLE / 'artefacts'}", "--time-zone", "UTC",
+              "--collation", "RetailSample=SQL_Latin1_General_CP1_CI_AS", "--sql-server-version", "2022",
+              "--compatibility-level", "RetailSample=160",
+              "--artefact", "RetailSample.sales.vOrderTotals", "--out", str(tmp_path)]
+
+    assert cli.main(common + ["--language", "Klingon"]) == 3
+    assert "Klingon" in capsys.readouterr().err
+    assert cli.main(common + ["--language", "German"]) == 0
+    settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))["semantic"]
+    assert (settings["language"]["value"], settings["datefirst"]["value"], settings["dateformat"]["value"]) == (
+        "Deutsch", 1, "dmy")
+    assert settings["datefirst"]["origin"].startswith("assumed")
+
+
+def test_a_language_beside_a_server_is_refused_by_the_command_line(engagement, tmp_path, capsys):
+    assert cli.main(["preview", "--engagement", engagement.name, "--control-dsn", os.environ["MIGRT_CONTROL_DSN"],
+                     "--database", "RetailSample", "--language", "German", "--artefact", "x", "--out",
+                     str(tmp_path)]) == 2
+    assert "--language" in capsys.readouterr().err

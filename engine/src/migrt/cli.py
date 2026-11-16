@@ -4,7 +4,7 @@ interface and prints the structured result as JSON. It holds no conversion logic
     python -m migrt preview --engagement NAME --database DB --artefact DB.schema.name --out DIR
     python -m migrt preview ... --folder DB=PATH            (folders beside the server)
     python -m migrt preview ... --sandbox HOST[:PORT]       (describe procedure result shapes there)
-    python -m migrt preview --no-server --folder DB=PATH --collation DB=COLLATION --time-zone ZONE ...
+    python -m migrt preview --no-server --folder DB=PATH --collation DB=COLLATION --time-zone ZONE --language LANGUAGE ...
 
 Connection settings come from options or the environment: the extractor's password only
 from the environment variable named by --password-env, never from the command line.
@@ -39,6 +39,9 @@ def _parser() -> argparse.ArgumentParser:
     preview.add_argument("--folder", action="append", default=[], metavar="DB=PATH",
                          help="a folder of exported files for database DB; repeatable")
     preview.add_argument("--no-server", action="store_true", help="extract from the folders alone")
+    preview.add_argument("--language", help="without a server: the server's default language, a name or alias "
+                                            "from sys.syslanguages such as us_english or German (required); "
+                                            "DATEFIRST and DATEFORMAT follow from it")
     preview.add_argument("--collation", action="append", default=[], metavar="DB=COLLATION",
                          help="without a server: database DB's default collation (required); repeatable")
     preview.add_argument("--compatibility-level", action="append", default=[], metavar="DB=LEVEL",
@@ -75,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         settings = engine.FolderSettings(dict(_pairs(args.collation, "--collation")), args.time_zone,
                                          args.sql_server_version,
                                          {k: int(v) for k, v in _pairs(args.compatibility_level,
-                                                                      "--compatibility-level")})
+                                                                      "--compatibility-level")}, args.language)
     except ValueError as exc:
         print(f"migrt: {exc}", file=sys.stderr)
         return 2
@@ -85,8 +88,10 @@ def main(argv: list[str] | None = None) -> int:
         print("migrt: --database names a database on the server; without one, name it in --folder DB=PATH",
               file=sys.stderr)
         return 2
-    if not args.no_server and (args.collation or args.compatibility_level or args.sql_server_version):
-        print("migrt: --collation, --compatibility-level and --sql-server-version apply only with --no-server",
+    if not args.no_server and (args.collation or args.compatibility_level or args.sql_server_version
+                               or args.language):
+        print("migrt: --collation, --compatibility-level, --sql-server-version and --language apply only with "
+              "--no-server",
               file=sys.stderr)
         return 2
     if not args.no_server:

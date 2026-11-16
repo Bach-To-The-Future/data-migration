@@ -36,14 +36,15 @@ from typing import Any, Sequence
 
 from ...core import secrets as core_secrets
 from ...core.catalog import IGNORED_FOR_IDENTITY as IGNORED_FACT, CatalogObject, Fact, Provenance, Snapshot
-from . import folders, jobs, names, parser, references, resolution, secrets
+from . import folders, jobs, languages, names, parser, references, resolution, secrets
+from .languages import UnknownLanguage
 from .names import split_name
 from .connection import Connection, SqlServerError
 
 SOURCE = "sqlserver"
 MSDB_TABLES = ("sysjobs", "sysjobsteps", "sysschedules", "sysjobschedules", "syscategories")
 # Every metadata view the extractor reads, by where it reads it. Nothing else is read.
-SERVER_VIEWS = ("sys.configurations", "sys.servers")
+SERVER_VIEWS = ("sys.configurations", "sys.servers", "sys.syslanguages")
 DATABASE_VIEWS = ("sys.databases", "sys.schemas", "sys.objects", "sys.tables", "sys.views", "sys.columns", "sys.types",
                   "sys.default_constraints", "sys.check_constraints", "sys.key_constraints", "sys.foreign_keys",
                   "sys.foreign_key_columns", "sys.indexes", "sys.index_columns", "sys.identity_columns",
@@ -298,6 +299,9 @@ class Settings:
     collations: dict[str, str] = dataclasses.field(default_factory=dict)   # each database's default
     version: str | None = None                                             # a release, such as "2019"
     compatibility_levels: dict[str, int] = dataclasses.field(default_factory=dict)   # each database's
+    # The server's default language, a name or alias from sys.syslanguages. DATEFIRST and DATEFORMAT follow from it
+    # by the table of built-in languages, and are assumed (spec section 3, "Language").
+    language: str | None = None
 
 
 class SettingsRequired(Exception):
@@ -326,6 +330,7 @@ def extract(address: ServerAddress | None, databases: list[str], *, time_zone: s
 
 def _require(folder_inputs, settings: Settings, time_zone: str | None) -> None:
     missing = [] if time_zone else ["the time zone, which a server would have supplied"]
+    missing += [] if settings.language else ["the default language, which a server would have supplied"]
     missing += [] if settings.version else ["the SQL Server version, which selects the sandbox"]
     for d in _folder_databases(folder_inputs):
         missing += [] if _setting(settings.collations, d) else [f"the default collation of database {d}"]
@@ -335,6 +340,7 @@ def _require(folder_inputs, settings: Settings, time_zone: str | None) -> None:
         missing.append("a folder of files, or a live server")
     if missing:
         raise SettingsRequired(missing)
+    languages.require(settings.language or "")    # a language the table does not hold is refused, not guessed at
 
 
 def _folder_databases(folder_inputs) -> list[str]:
@@ -468,6 +474,8 @@ def _folder_server(settings: Settings, time_zone: str | None, major: str,
     version = Provenance("assumed", f"the version setting: SQL Server {release}")
     unknown = Provenance("assumed", "no server: not known")
     first = min(databases, key=str.casefold)   # whatever order the folders were given in
+    language = languages.require(settings.language or "")     # required: _require checked it
+    derived = Provenance("assumed", "derived from the language setting by the table of SQL Server's built-in languages")
     server = CatalogObject(folders.NO_SERVER, "server", (
         Fact("skeleton", "version", f"{major}.0", version),
         Fact("skeleton", "edition", None, unknown),
@@ -477,6 +485,9 @@ def _folder_server(settings: Settings, time_zone: str | None, major: str,
         Fact(SOURCE, "engine_edition", None, unknown),
         Fact(SOURCE, "nested_triggers", True, Provenance("assumed", "SQL Server's default: nested triggers on")),
         Fact("skeleton", "time_zone", time_zone, Provenance("assumed", "the time zone setting")),
+        Fact(SOURCE, "language", language.name, Provenance("assumed", "the language setting")),
+        Fact(SOURCE, "datefirst", language.datefirst, derived),
+        Fact(SOURCE, "dateformat", language.dateformat, derived),
     ))
     out = []
     for name in databases:
@@ -532,6 +543,7 @@ def _server_object(reading: Reading, time_zone: str | None) -> CatalogObject:
              Fact(SOURCE, "engine_edition", int(props["EngineEdition"]), sp),
              Fact(SOURCE, "nested_triggers", bool(int(nested[0]["value_in_use"])),
                   Provenance("server", "sys.configurations"))]
+    facts += _server_language(configurations, reading.server["sys.syslanguages"])
     if reading.time_zone is not None:
         facts.append(Fact("skeleton", "time_zone", reading.time_zone, Provenance("server", "CURRENT_TIMEZONE()")))
     else:
@@ -542,6 +554,26 @@ def _server_object(reading: Reading, time_zone: str | None) -> CatalogObject:
         facts.append(Fact("skeleton", "time_zone", time_zone,
                           Provenance("assumed", f"time zone setting; CURRENT_TIMEZONE() failed: {failed}")))
     return CatalogObject(props["ServerName"], "server", tuple(facts))
+
+
+def _server_language(configurations: Capture, syslanguages: Capture) -> list[Fact]:
+    """The server's default language in use, and that language's `DATEFIRST` and `DATEFORMAT`, from the two views
+    read whole: `default language` in sys.configurations holds a language id, and sys.syslanguages the row for it."""
+    in_use = [r for r in configurations.rows if r["name"] == "default language"]
+    if len(in_use) != 1:
+        raise UnknownLanguage("", "sys.configurations has no single `default language` row, so the server's default "
+                                  "language is not known; nothing was read")
+    langid = int(in_use[0]["value_in_use"])
+    rows = [r for r in syslanguages.rows if int(r["langid"]) == langid]
+    if len(rows) != 1:
+        raise UnknownLanguage(str(langid), f"the server's default language is language id {langid}, which "
+                                           "sys.syslanguages does not hold, so its DATEFIRST and DATEFORMAT are not "
+                                           "known; nothing was read")
+    row = rows[0]
+    p = Provenance("server", "sys.configurations, sys.syslanguages")
+    return [Fact(SOURCE, "language", row["name"], p),
+            Fact(SOURCE, "datefirst", int(row["datefirst"]), Provenance("server", "sys.syslanguages")),
+            Fact(SOURCE, "dateformat", row["dateformat"], Provenance("server", "sys.syslanguages"))]
 
 
 # ---------------------------------------------------------------------------- one database

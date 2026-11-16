@@ -304,7 +304,8 @@ def test_on_the_corpus_39_of_69_procedures_are_described_and_the_two_gaps_are_na
 # ---------------------------------------------------------------- folders alone
 
 RETAIL = engine.FolderSettings(collations={"RetailSample": "SQL_Latin1_General_CP1_CI_AS"}, time_zone="UTC",
-                               version="2022", compatibility_levels={"RetailSample": 160})
+                               version="2022", compatibility_levels={"RetailSample": 160},
+                               language="us_english")
 RETAIL_FOLDERS = [engine.Folder(SAMPLE / "database", "RetailSample"), engine.Folder(SAMPLE / "artefacts", "RetailSample")]
 
 
@@ -348,7 +349,7 @@ def test_the_compatibility_level_is_the_clients(engagement, tmp_path):
         "CREATE PROCEDURE dbo.uspSplit AS SELECT value FROM STRING_SPLIT('a,b', ',')\n", encoding="utf-8")
 
     def extract(level):
-        settings = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": level})
+        settings = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": level}, "us_english")
         return engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], settings, sandbox=sandbox())
 
     assert [c[0] for c in shape(extract(160), "Db.dbo.uspSplit")] == ["value"]
@@ -357,7 +358,7 @@ def test_the_compatibility_level_is_the_clients(engagement, tmp_path):
 
 def test_a_level_no_sandbox_accepts_is_not_described_and_says_why(engagement, tmp_path):
     (tmp_path / "p.sql").write_text("CREATE PROCEDURE dbo.uspOne AS SELECT 1 AS one\n", encoding="utf-8")
-    settings = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": 90})
+    settings = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": 90}, "us_english")
 
     snapshot = engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], settings, sandbox=sandbox())
 
@@ -436,7 +437,7 @@ def test_the_export_gives_shapes_where_no_sandbox_accepts_the_level(engagement, 
               "user_type_name,max_length,precision,scale,is_nullable,error_number,error_message\r\n"
               "dbo,uspOne,1,one,int,,,4,10,0,0,,\r\n")
     (tmp_path / "shapes.csv").write_text(export, encoding="utf-8")
-    settings = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": 90})
+    settings = engine.FolderSettings({"Db": "Latin1_General_CI_AS"}, "UTC", "2022", {"Db": 90}, "us_english")
 
     snapshot = engine.extract(engagement, None, [engine.Folder(tmp_path, "Db")], settings, sandbox=sandbox())
 

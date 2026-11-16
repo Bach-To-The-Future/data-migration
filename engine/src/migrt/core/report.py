@@ -17,8 +17,9 @@ from .ir import Node
 # collations, skipped cross-checks and folders. 0.5: the hints of each artefact, reported as not applicable on
 # the target. 0.6: the delivered project's files, and every kind of artefact (issue #44). 0.7: a construct that is
 # manual work only for want of something not built yet carries `waits_for`, the tickets it waits for. 0.8: the global
-# temp tables of each artefact, listed apart from private ones (issue #104).
-SCHEMA_VERSION = "report-data/0.8"
+# temp tables of each artefact, listed apart from private ones (issue #104). 0.9: the extraction section's
+# `login_language`, the server's language with the assumption that stands in for a specific login's (issue #105).
+SCHEMA_VERSION = "report-data/0.9"
 PREVIEW_BANNER = ("Preview run: reconciliation was off. Nothing in this report was checked against the "
                   "original, and nothing in it is converted.")
 NOT_RECONCILED = "Not reconciled"

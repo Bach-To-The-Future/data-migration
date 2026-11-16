@@ -194,3 +194,20 @@ def test_queries_run_against_the_database_between_two_extractions_leave_the_snap
     assert uncovered == []
     # Whether Query Store moves a count here depends on its collection interval, so the test cannot demand it; the test above
     # shows that a cell the lists do not name is found. What it holds is that whatever moved is a cell the lists name.
+
+
+def test_a_login_holding_exactly_annex_fs_grants_reads_the_servers_language(engagement, make_login):
+    """The language needs no grant beyond Annex F: sys.syslanguages and the `default language` row of
+    sys.configurations are readable by a login that holds nothing else."""
+    name, password = make_login()
+
+    snapshot = engine.extract(engagement, sandbox_server(name, password))
+
+    [server] = [o for o in snapshot.objects if o.kind == "server"]
+    assert [(f.value, f.provenance.kind) for f in (server.fact(n, "sqlserver")
+                                                   for n in ("language", "datefirst", "dateformat"))] == [
+        ("us_english", "server"), (7, "server"), ("mdy", "server")]
+    with Connection(os.environ.get("MSSQL_HOST", "sqlserver"), 1433, name, password) as login:
+        assert len(login.query("SELECT * FROM sys.syslanguages")) == len(snapshot.get(
+            "raw:server/sys.syslanguages").fact("rows").value)
+        assert login.query("SELECT value_in_use FROM sys.configurations WHERE name = 'default language'")

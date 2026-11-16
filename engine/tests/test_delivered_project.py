@@ -65,7 +65,8 @@ def test_a_query_batch_read_from_a_folder_is_generated_under_its_databases_batch
     from migrt import engine
 
     settings = engine.FolderSettings(collations={"RetailSample": "SQL_Latin1_General_CP1_CI_AS"}, time_zone="UTC",
-                                     version="2022", compatibility_levels={"RetailSample": 160})
+                                     version="2022", compatibility_levels={"RetailSample": 160},
+                                     language="us_english")
     folders = [engine.Folder(ROOT / "corpus" / "sample" / "database", "RetailSample"),
                engine.Folder(ROOT / "corpus" / "sample" / "artefacts", "RetailSample")]
     result = engine.preview_run(engagement, None, artefacts=[BATCH], out_dir=tmp_path, folders=folders, settings=settings)
@@ -138,8 +139,10 @@ def test_the_settings_file_holds_the_catalogs_semantic_settings_with_their_origi
     assert semantic["time_zone"]["origin"].startswith(("read from the server", "assumed"))
     assert semantic["transaction_mechanism"] == {"value": "compensating restore", "origin": "default (ADR 0002)"}
     assert semantic["identity_mechanism"]["value"] == "write wrapper counters"
-    for name in ("datefirst", "dateformat", "language"):
-        assert semantic[name]["origin"].startswith("assumed")
+    assert {name: semantic[name] for name in ("language", "datefirst", "dateformat")} == {
+        "language": {"value": "us_english", "origin": "read from the server"},
+        "datefirst": {"value": 7, "origin": "read from the server"},
+        "dateformat": {"value": "mdy", "origin": "read from the server"}}
     assert settings["fingerprint"] and len(settings["fingerprint"]) == 64
     assert {"SUSER_SNAME", "HOST_NAME", "DB_NAME", "SPID"} <= set(settings["runtime_identity"])
     assert all(v["override"] is None for v in settings["runtime_identity"].values())
@@ -198,7 +201,8 @@ def test_a_dependency_between_generated_artefacts_is_an_import_and_otherwise_man
         "CREATE VIEW sales.vRatios AS SELECT o.OrderId, ref.fnSafeRatio(o.Status, o.CustomerId) AS Ratio\n"
         "FROM sales.[Order] AS o;\nGO\n", encoding="utf-8")
     settings = engine.FolderSettings(collations={"RetailSample": "SQL_Latin1_General_CP1_CI_AS"}, time_zone="UTC",
-                                     version="2022", compatibility_levels={"RetailSample": 160})
+                                     version="2022", compatibility_levels={"RetailSample": 160},
+                                     language="us_english")
     folders = [engine.Folder(files, "RetailSample")]
     view, function = "RetailSample.sales.vRatios", "RetailSample.ref.fnSafeRatio"
     together = engine.preview_run(engagement, None, artefacts=[view, function], out_dir=tmp_path / "together",
@@ -267,12 +271,37 @@ def test_the_type_mapping_version_is_among_the_reports_versions(engagement, extr
     assert read_json(result.report_data_path)["run"]["versions"]["type_mapping"] == types.version()
 
 
-def test_generated_assumptions_reach_the_report(engagement, extractor_server, tmp_path):
+def test_the_report_assumes_the_servers_language_for_the_logins_the_clients_applications_use(
+        engagement, extractor_server, tmp_path):
     result = run(engagement, extractor_server, tmp_path)
 
     report = read_json(result.report_data_path)
-    text = json.dumps(report["degradations"])
-    assert "DATEFIRST" in text and "DATEFORMAT" in text and "not read from the server" in text
+    [assumption] = [d for d in report["degradations"] if d["where"] == "settings.json"]
+    assert assumption["kind"] == "assumption"
+    # A specific login's language is not read (no security metadata), and the report says what stands in for it.
+    for phrase in ("login", "default language", "DATEFIRST", "DATEFORMAT", "not read"):
+        assert phrase in assumption["text"]
+    assert "were not read from the server" not in assumption["text"]    # the old run-level assumption is gone
+    assert report["extraction"]["login_language"] == {
+        "language": "us_english", "datefirst": 7, "dateformat": "mdy", "origin": "read from the server",
+        "assumption": assumption["text"]}
+
+
+def test_the_login_language_assumption_holds_for_folders_alone_too(engagement, tmp_path):
+    from migrt import engine
+
+    settings = engine.FolderSettings(collations={"RetailSample": "SQL_Latin1_General_CP1_CI_AS"}, time_zone="UTC",
+                                     version="2022", compatibility_levels={"RetailSample": 160}, language="German")
+    folders = [engine.Folder(ROOT / "corpus" / "sample" / "database", "RetailSample"),
+               engine.Folder(ROOT / "corpus" / "sample" / "artefacts", "RetailSample")]
+    result = engine.preview_run(engagement, None, artefacts=[BATCH], out_dir=tmp_path, folders=folders,
+                                settings=settings)
+
+    login = read_json(result.report_data_path)["extraction"]["login_language"]
+    assert (login["language"], login["datefirst"], login["dateformat"]) == ("Deutsch", 1, "dmy")
+    assert login["origin"].startswith("assumed")
+    semantic = read_json(tmp_path / "settings.json")["semantic"]
+    assert semantic["language"]["origin"] == login["origin"] or semantic["language"]["origin"].startswith("assumed")
 
 
 def test_the_project_carries_the_sources_half_of_the_error_mapping_for_session_state_to_read(engagement, extractor_server, tmp_path):

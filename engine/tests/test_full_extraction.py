@@ -2,6 +2,7 @@
 the engine's library interface, on the sandbox: the scratch database (conftest) for what the
 corpus lacks, and RetailSample for the corpus."""
 import copy as copy_module
+import dataclasses
 import json
 import pathlib
 import re
@@ -35,12 +36,70 @@ def test_the_server_and_the_database_levels(engagement, scratch):
     assert s["version"].startswith("16.") and s["edition"] and s["collation"] == "SQL_Latin1_General_CP1_CI_AS"
     assert s["build"]["release"] == "2022" and s["build"]["update_level"] == "CU27"
     assert s["time_zone"] and s["nested_triggers"] is True
+    assert (s["language"], s["datefirst"], s["dateformat"]) == ("us_english", 7, "mdy")
     db = facts(snapshot, f"{SCRATCH}")
     assert db["collation"] == "Latin1_General_CS_AS"
     assert db["compatibility_level"] == 160 and db["recursive_triggers"] is False
     assert set(db["ansi_defaults"]) == {"ansi_nulls", "ansi_padding", "ansi_warnings", "arithabort",
                                         "concat_null_yields_null", "numeric_roundabort", "quoted_identifier",
                                         "ansi_null_default"}
+
+
+def server_object(snapshot):
+    [server] = [o for o in snapshot.objects if o.kind == "server"]
+    return server
+
+
+def test_the_servers_default_language_with_its_datefirst_and_dateformat_is_read_with_server_provenance(
+        engagement, scratch):
+    snapshot = engine.extract(engagement, scratch)
+
+    server = server_object(snapshot)
+    found = {name: server.fact(name, extractor.SOURCE) for name in ("language", "datefirst", "dateformat")}
+    assert {name: f.value for name, f in found.items()} == {"language": "us_english", "datefirst": 7,
+                                                            "dateformat": "mdy"}
+    assert {f.provenance.kind for f in found.values()} == {"server"}
+    assert found["language"].provenance.detail == "sys.configurations, sys.syslanguages"
+
+
+def test_the_language_read_is_the_one_in_use_not_the_one_configured(scratch):
+    address = extractor.ServerAddress(scratch.host, scratch.port, scratch.login, scratch.password)
+    reading = extractor.read(address, scratch.databases)
+    configurations = reading.server["sys.configurations"]
+    # British is langid 23: configured (value) as another, in use (value_in_use) as 23.
+    rows = [{**r, "value": 1, "value_in_use": 23} if r["name"] == "default language" else r
+            for r in configurations.rows]
+    changed = dataclasses.replace(reading, server={**reading.server, "sys.configurations": dataclasses.replace(
+        configurations, rows=rows)})
+
+    server = server_object(extractor.build(changed))
+
+    assert [server.fact(n, extractor.SOURCE).value for n in ("language", "datefirst", "dateformat")] == [
+        "British", 1, "dmy"]
+
+
+def test_a_default_language_the_server_does_not_describe_fails_loudly(scratch):
+    address = extractor.ServerAddress(scratch.host, scratch.port, scratch.login, scratch.password)
+    reading = extractor.read(address, scratch.databases)
+    configurations = reading.server["sys.configurations"]
+    rows = [{**r, "value_in_use": 9999} if r["name"] == "default language" else r for r in configurations.rows]
+    changed = dataclasses.replace(reading, server={**reading.server, "sys.configurations": dataclasses.replace(
+        configurations, rows=rows)})
+
+    with pytest.raises(extractor.UnknownLanguage, match="9999"):
+        extractor.build(changed)
+
+
+def test_the_raw_capture_keeps_both_language_views_whole(engagement, scratch):
+    snapshot = engine.extract(engagement, scratch)
+
+    languages = facts(snapshot, extractor.raw_identity("server", "sys.syslanguages"))
+    with sa_connection() as sa:
+        assert len(languages["rows"]) == sa.query("SELECT COUNT(*) AS n FROM sys.syslanguages")[0]["n"]
+    assert {"langid", "dateformat", "datefirst", "name", "alias", "months", "shortmonths", "days"} <= set(
+        languages["columns"])
+    configurations = facts(snapshot, extractor.raw_identity("server", "sys.configurations"))
+    assert [r["value_in_use"] for r in configurations["rows"] if r["name"] == "default language"] == [0]
 
 
 def test_a_table_with_its_columns_constraints_and_row_count(engagement, scratch):

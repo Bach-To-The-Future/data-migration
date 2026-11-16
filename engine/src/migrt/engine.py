@@ -27,7 +27,7 @@ from .core import vocabulary
 from .sources.sqlserver import differences as source_differences, error_comparisons, error_mapping as source_errors, extractor, lowering, names, shapes
 from .sources.sqlserver import folders as folder_source
 from .sources.sqlserver.extractor import (ExtractorPermissionError, SettingsRequired, TimeZoneRequired,
-                                          UnsupportedServer)
+                                          UnknownLanguage, UnsupportedServer)
 from .sources.sqlserver.folders import DuplicateCreate, FolderExtractionError
 from .sources.sqlserver.shapes import SandboxUnavailable
 from .targets.pyspark import differences as target_differences, generator, global_temp, project
@@ -37,6 +37,7 @@ from .targets.pyspark import names as target_names
 
 __all__ = ["Engagement", "SqlServerSource", "Sandbox", "Folder", "FolderSettings", "ArtefactResult", "RunResult",
            "ExtractorPermissionError", "UnsupportedServer", "TimeZoneRequired", "SettingsRequired",
+           "UnknownLanguage",
            "FolderExtractionError", "DuplicateCreate", "SandboxUnavailable", "EXTRACTION_ERRORS", "extract",
            "read_snapshot",
            "name_adjustments", "extraction_findings", "recognised_artefacts", "preview_run",
@@ -104,16 +105,17 @@ class Folder:
 @dataclasses.dataclass(frozen=True)
 class FolderSettings:
     """What a server would have supplied, for databases extracted from folders alone, all
-    required: each database's default collation and compatibility level, the time zone,
-    and the SQL Server release."""
+    required: each database's default collation and compatibility level, the time zone, the
+    server's default language (DATEFIRST and DATEFORMAT follow from it), and the SQL Server release."""
     collations: dict[str, str] = dataclasses.field(default_factory=dict)
     time_zone: str | None = None
     version: str | None = None
     compatibility_levels: dict[str, int] = dataclasses.field(default_factory=dict)
+    language: str | None = None
 
 
 # Every error an extraction raises before storing anything, for front ends to report.
-EXTRACTION_ERRORS = (ExtractorPermissionError, UnsupportedServer, TimeZoneRequired, SettingsRequired,
+EXTRACTION_ERRORS = (ExtractorPermissionError, UnsupportedServer, TimeZoneRequired, SettingsRequired, UnknownLanguage,
                      FolderExtractionError, SandboxUnavailable)
 
 
@@ -171,7 +173,8 @@ def extract(engagement: Engagement, source: SqlServerSource | None, folders: Seq
         address = extractor.ServerAddress(source.host, source.port, source.login, source.password)
         snapshot = extractor.extract(address, source.databases, time_zone=source.time_zone, folder_inputs=inputs)
     else:
-        options = extractor.Settings(settings.collations, settings.version, settings.compatibility_levels)
+        options = extractor.Settings(settings.collations, settings.version, settings.compatibility_levels,
+                                     settings.language)
         snapshot = extractor.extract(None, [], time_zone=settings.time_zone, folder_inputs=inputs, settings=options)
     snapshot = shapes.attach(snapshot, None if sandbox is None else shapes.SandboxAddress(
         sandbox.host, sandbox.port, sandbox.login, sandbox.password, sandbox.label))
@@ -213,8 +216,17 @@ def extraction_findings(snapshot: Snapshot) -> dict:
     found = extractor.findings(snapshot)
     found["secrets"]["note"] = secrets.MISSES_SOME
     found["result_shapes"] = shapes.findings(snapshot)
+    found["login_language"] = login_language(snapshot)
     return found
 
+
+def login_language(snapshot: Snapshot) -> dict:
+    """The server's default language with its DATEFIRST and DATEFORMAT, and the assumption that stands in for a
+    specific login's language, which the extractor does not read (it reads no security metadata)."""
+    server = next(o for o in snapshot.objects if o.kind == "server")
+    language, datefirst, dateformat = (server.fact(n, extractor.SOURCE) for n in ("language", "datefirst", "dateformat"))
+    return {"language": language.value, "datefirst": datefirst.value, "dateformat": dateformat.value,
+            "origin": _origin(language), "assumption": LOGIN_LANGUAGE_ASSUMPTION}
 
 def recognised_artefacts(snapshot: Snapshot) -> list[dict]:
     """Every SSIS package and SQL Agent job, as the report lists it: manual work, with its
@@ -285,7 +297,7 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
                     for name, check in sorted(findings["dependency_cross_check"]["databases"].items())
                     if check["status"] == "skipped"]
     degradations += _extraction_degradations(findings)
-    degradations.append(SETTINGS_ASSUMPTION)
+    degradations.append({"kind": "assumption", "where": "settings.json", "text": findings["login_language"]["assumption"]})
     finished = _now()
     data = report.preview_report(
         engagement=engagement.name,
@@ -394,11 +406,12 @@ RUNTIME_IDENTITY = {
     "DB_NAME": "the catalog the job runs in",
     "SPID": "the Spark session's id",
 }
-SETTINGS_ASSUMPTION = {
-    "kind": "assumption", "where": "settings.json",
-    "text": "DATEFIRST, DATEFORMAT and the language were not read from the server (the extractor does not read "
-            "them): the settings file holds SQL Server's defaults for us_english, marked as assumed. Set them to the "
-            "client's values before verifying; changing a semantic setting means generating and verifying again."}
+LOGIN_LANGUAGE_ASSUMPTION = (
+    "The settings file's language, DATEFIRST and DATEFORMAT are the server's default language and what follows from "
+    "it. A specific login's language (its default language, a contained user's database default) is not read, "
+    "because the extractor reads no security metadata, so the server's default is assumed for the logins the "
+    "client's applications use. If one of them uses another language, set it in the settings file before verifying; "
+    "changing a semantic setting means generating and verifying again.")
 
 
 def _resolve(reader: CatalogReader, snapshot: Snapshot, identity: str) -> str:
@@ -442,13 +455,14 @@ def _semantic_settings(snapshot: Snapshot) -> dict:
         collation, level = o.fact("collation"), o.fact("compatibility_level", extractor.SOURCE)
         databases[o.identity] = {"default_collation": {"value": collation.value, "origin": _origin(collation)},
                                  "compatibility_level": {"value": level.value, "origin": _origin(level)}}
-    not_read = "assumed: not read from the server; SQL Server's default for the us_english language"
+    language, datefirst, dateformat = (server.fact(n, extractor.SOURCE) for n in ("language", "datefirst",
+                                                                                 "dateformat"))
     return {
         "databases": databases,
         "time_zone": {"value": zone.value, "origin": _origin(zone)},
-        "datefirst": {"value": 7, "origin": not_read},
-        "dateformat": {"value": "mdy", "origin": not_read},
-        "language": {"value": "us_english", "origin": not_read},
+        "datefirst": {"value": datefirst.value, "origin": _origin(datefirst)},
+        "dateformat": {"value": dateformat.value, "origin": _origin(dateformat)},
+        "language": {"value": language.value, "origin": _origin(language)},
         "transaction_mechanism": {"value": "compensating restore", "origin": "default (ADR 0002)"},
         "identity_mechanism": {"value": "write wrapper counters", "origin": "default (spec section 6)"},
     }
