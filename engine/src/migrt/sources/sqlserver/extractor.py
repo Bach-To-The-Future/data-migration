@@ -35,7 +35,8 @@ import json
 from typing import Any, Sequence
 
 from ...core import secrets as core_secrets
-from ...core.catalog import IGNORED_FOR_IDENTITY as IGNORED_FACT, CatalogObject, Fact, Provenance, Snapshot
+from ...core.catalog import (IGNORED_FOR_IDENTITY as IGNORED_FACT, CatalogObject, Fact, Provenance, Snapshot,
+                             origin)
 from . import folders, jobs, languages, names, parser, references, resolution, secrets
 from .languages import UnknownLanguage
 from .names import split_name
@@ -571,9 +572,24 @@ def _server_language(configurations: Capture, syslanguages: Capture) -> list[Fac
                                            "known; nothing was read")
     row = rows[0]
     p = Provenance("server", "sys.configurations, sys.syslanguages")
+    from_row = Provenance("server", "sys.syslanguages")
     return [Fact(SOURCE, "language", row["name"], p),
-            Fact(SOURCE, "datefirst", int(row["datefirst"]), Provenance("server", "sys.syslanguages")),
-            Fact(SOURCE, "dateformat", row["dateformat"], Provenance("server", "sys.syslanguages"))]
+            Fact(SOURCE, "datefirst", int(row["datefirst"]), from_row),
+            Fact(SOURCE, "dateformat", row["dateformat"], from_row)]
+
+
+def language_facts(server: CatalogObject) -> tuple[Fact, Fact, Fact]:
+    """The server's language, its DATEFIRST and its DATEFORMAT."""
+    return server.fact("language", SOURCE), server.fact("datefirst", SOURCE), server.fact("dateformat", SOURCE)
+
+
+# What stands in for a specific login's language, which the extractor does not read (it reads no security metadata).
+LOGIN_LANGUAGE_ASSUMPTION = (
+    "The settings file's language, DATEFIRST and DATEFORMAT are the server's default language and what follows from "
+    "it. A specific login's language (its default language, a contained user's database default) is not read, "
+    "because the extractor reads no security metadata, so the server's default is assumed for the logins the "
+    "client's applications use. If one of them uses another language, set it in the settings file before verifying; "
+    "changing a semantic setting means generating and verifying again.")
 
 
 # ---------------------------------------------------------------------------- one database
@@ -1163,6 +1179,10 @@ def findings(snapshot: Snapshot) -> dict:
              "completeness": {"facts": counts, "assumed_values": assumed_values},
              "assumed_collations": collations}
     found["unresolved_external_references"] = unresolved_external_references(snapshot)
+    language, datefirst, dateformat = language_facts(next(o for o in snapshot.objects if o.kind == "server"))
+    found["login_language"] = {"language": language.value, "datefirst": datefirst.value,
+                               "dateformat": dateformat.value, "origin": origin(language),
+                               "assumption": LOGIN_LANGUAGE_ASSUMPTION}
     if snapshot.has(folders.FOLDERS_IDENTITY):
         found["folders"] = {f.name: f.value for f in snapshot.get(folders.FOLDERS_IDENTITY).facts}
     return found

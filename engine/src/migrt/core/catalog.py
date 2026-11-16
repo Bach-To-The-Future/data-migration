@@ -50,6 +50,14 @@ class Fact:
     provenance: Provenance
 
 
+def origin(fact: Fact) -> str:
+    """Where a fact came from, as the settings file and the report word it."""
+    kind = fact.provenance.kind
+    if kind == "server":
+        return "read from the server"
+    return f"{'read from' if kind == 'file' else kind}: {fact.provenance.detail}"
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
 

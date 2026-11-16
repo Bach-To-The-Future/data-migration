@@ -301,7 +301,8 @@ def test_the_login_language_assumption_holds_for_folders_alone_too(engagement, t
     assert (login["language"], login["datefirst"], login["dateformat"]) == ("Deutsch", 1, "dmy")
     assert login["origin"].startswith("assumed")
     semantic = read_json(tmp_path / "settings.json")["semantic"]
-    assert semantic["language"]["origin"] == login["origin"] or semantic["language"]["origin"].startswith("assumed")
+    assert semantic["language"]["origin"] == login["origin"]
+    assert semantic["datefirst"]["origin"].startswith("assumed: derived from the language setting")
 
 
 def test_the_project_carries_the_sources_half_of_the_error_mapping_for_session_state_to_read(engagement, extractor_server, tmp_path):

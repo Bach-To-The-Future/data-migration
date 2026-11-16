@@ -21,7 +21,7 @@ from typing import Sequence
 
 from .core import checker, control_db, report, secrets
 from .core.differences import Catalogue
-from .core.catalog import CatalogReader, Snapshot
+from .core.catalog import CatalogReader, Snapshot, origin
 from .core.ir import FORMAT_VERSION, Artefact
 from .core import vocabulary
 from .sources.sqlserver import differences as source_differences, error_comparisons, error_mapping as source_errors, extractor, lowering, names, shapes
@@ -216,17 +216,8 @@ def extraction_findings(snapshot: Snapshot) -> dict:
     found = extractor.findings(snapshot)
     found["secrets"]["note"] = secrets.MISSES_SOME
     found["result_shapes"] = shapes.findings(snapshot)
-    found["login_language"] = login_language(snapshot)
     return found
 
-
-def login_language(snapshot: Snapshot) -> dict:
-    """The server's default language with its DATEFIRST and DATEFORMAT, and the assumption that stands in for a
-    specific login's language, which the extractor does not read (it reads no security metadata)."""
-    server = next(o for o in snapshot.objects if o.kind == "server")
-    language, datefirst, dateformat = (server.fact(n, extractor.SOURCE) for n in ("language", "datefirst", "dateformat"))
-    return {"language": language.value, "datefirst": datefirst.value, "dateformat": dateformat.value,
-            "origin": _origin(language), "assumption": LOGIN_LANGUAGE_ASSUMPTION}
 
 def recognised_artefacts(snapshot: Snapshot) -> list[dict]:
     """Every SSIS package and SQL Agent job, as the report lists it: manual work, with its
@@ -406,12 +397,6 @@ RUNTIME_IDENTITY = {
     "DB_NAME": "the catalog the job runs in",
     "SPID": "the Spark session's id",
 }
-LOGIN_LANGUAGE_ASSUMPTION = (
-    "The settings file's language, DATEFIRST and DATEFORMAT are the server's default language and what follows from "
-    "it. A specific login's language (its default language, a contained user's database default) is not read, "
-    "because the extractor reads no security metadata, so the server's default is assumed for the logins the "
-    "client's applications use. If one of them uses another language, set it in the settings file before verifying; "
-    "changing a semantic setting means generating and verifying again.")
 
 
 def _resolve(reader: CatalogReader, snapshot: Snapshot, identity: str) -> str:
@@ -438,11 +423,7 @@ def _project_kinds(snapshot: Snapshot, artefacts: list[str]) -> dict[str, str]:
     return found
 
 
-def _origin(fact) -> str:
-    kind = fact.provenance.kind
-    if kind == "server":
-        return "read from the server"
-    return f"{'read from' if kind == 'file' else kind}: {fact.provenance.detail}"
+_origin = origin
 
 
 def _semantic_settings(snapshot: Snapshot) -> dict:
@@ -455,8 +436,7 @@ def _semantic_settings(snapshot: Snapshot) -> dict:
         collation, level = o.fact("collation"), o.fact("compatibility_level", extractor.SOURCE)
         databases[o.identity] = {"default_collation": {"value": collation.value, "origin": _origin(collation)},
                                  "compatibility_level": {"value": level.value, "origin": _origin(level)}}
-    language, datefirst, dateformat = (server.fact(n, extractor.SOURCE) for n in ("language", "datefirst",
-                                                                                 "dateformat"))
+    language, datefirst, dateformat = extractor.language_facts(server)
     return {
         "databases": databases,
         "time_zone": {"value": zone.value, "origin": _origin(zone)},
