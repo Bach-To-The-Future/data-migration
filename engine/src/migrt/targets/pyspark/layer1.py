@@ -13,7 +13,7 @@ import builtins
 import dataclasses
 import re
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 import pyflakes.api
 import pyflakes.messages
@@ -62,14 +62,18 @@ class Layer1Result:
 def run(text: str, *, links: dict[int, list[str]], node_spans: dict[str, str | None],
         manual_items: list[str], escape_hatch_uses: list[str], expressions: dict[str, Span],
         expression_nodes: list[str], library_module: str | None = None,
-        project_package: str = "generated", variables: Iterable[str] = ()) -> Layer1Result:
+        project_package: str = "generated", variables: Iterable[str] = (),
+        readable: Mapping[str, Iterable[str]] | None = None) -> Layer1Result:
     """links: generated line -> node ids; node_spans: every node id in the artefact's
     representation -> its source position (None if it has none); manual_items: the ids
     ('M1', ...) generation declared; expressions: the span of the code of each expression generation
     emitted; expression_nodes: every expression node whose code is in the file, each of which must have one;
-    variables: the Python names of the source's variables, which procedural code holds in locals: an expression may read
-    one, and one assigned and never read is the source's own dead assignment, not a defect of the code."""
+    variables: the Python names of the source's declared variables, which procedural code holds in locals: one assigned
+    and never read is the source's own dead assignment, not a defect of the code, and the lint check ignores it for these
+    names only (any other local that is never read is still a finding); readable: for an expression node, the Python
+    names of the source variables in scope at its statement, per the representation: it may read those and no other local."""
     variables = frozenset(variables)
+    readable = {node: frozenset(names) for node, names in (readable or {}).items()}
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
@@ -83,7 +87,7 @@ def run(text: str, *, links: dict[int, list[str]], node_spans: dict[str, str | N
         _escape_hatch(tree, escape_hatch_uses),
         _positions(tree, text, links, node_spans),
         _manual(text, manual_items),
-        _expressions(tree, text, expressions, expression_nodes, node_spans, variables),
+        _expressions(tree, text, expressions, expression_nodes, node_spans, readable),
     ))
 
 
@@ -236,9 +240,10 @@ def _free_names(expression: ast.expr) -> set[str]:
 
 
 def _expressions(tree: ast.Module, text: str, spans: dict[str, Span], expected: list[str],
-                 node_spans: dict[str, str | None], variables: frozenset[str] = frozenset()) -> Check:
+                 node_spans: dict[str, str | None], readable: Mapping[str, frozenset[str]] | None = None) -> Check:
     """Each linked expression is one contiguous span that evaluates alone: it parses as an expression and
-    reads nothing but the module's imports, its function's parameters and the source's variables, never any other local. Two spans
+    reads nothing but the module's imports, its function's parameters and the source variables in scope at its statement
+    (`readable`), never any other local. Two spans
     nest or stand apart, never cross."""
     problems = [f"expression node {node} has no span" for node in expected if node not in spans]
     lines = text.splitlines()
@@ -264,7 +269,7 @@ def _expressions(tree: ast.Module, text: str, spans: dict[str, Span], expected: 
             continue
         if code != code.strip():
             problems.append(f"expression node {node}: its span has surrounding whitespace")
-        allowed = module_names | variables | {a.arg for a in owner.args.args + owner.args.kwonlyargs}
+        allowed = module_names | (readable or {}).get(node, frozenset()) | {a.arg for a in owner.args.args + owner.args.kwonlyargs}
         outside = sorted(_free_names(parsed.body) - allowed)
         if outside:
             problems.append(f"expression node {node} reads {', '.join(outside)}, which only the function defines "

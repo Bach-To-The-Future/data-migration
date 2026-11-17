@@ -116,3 +116,59 @@ def test_a_span_nested_in_another_is_fine():
 
 def test_a_span_outside_every_function_fails():
     assert not checks(GOOD, expressions={"n3": layer1.Span(1, 0, 10)})["linked expressions are self-contained spans"].passed
+
+
+# ---------------------------------------------------------------- a procedure's variables (issue #50)
+
+PROCEDURE = '''"""A generated procedure."""
+
+
+def p(ss, *, n=...) -> object:
+    """Doc."""
+    spark = ss.spark
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    seen = None
+    other = None
+    seen = ss.twin.add(seen, 1, bits=32, signed=True)
+    other = ss.twin.add(n, 1, bits=32, signed=True)
+    return ss.result(seen, {}, [])
+'''
+PROCEDURE_LINKS = {6: ["n1"], 7: ["n1"], 8: ["n1"], 9: ["n1"], 10: ["n1", "n2"], 11: ["n1", "n3"], 12: ["n1"]}
+
+
+def procedure_checks(text=PROCEDURE, *, variables=("seen", "other"), readable=None):
+    code_seen = span_of(PROCEDURE, "ss.twin.add(seen, 1, bits=32, signed=True)")
+    code_other = span_of(PROCEDURE, "ss.twin.add(n, 1, bits=32, signed=True)")
+    spans = {"n2": code_seen, "n3": code_other}
+    result = layer1.run(text, links=PROCEDURE_LINKS, node_spans={"n1": "L1", "n2": "L1", "n3": "L1"}, manual_items=[],
+                        escape_hatch_uses=[], expressions=spans, expression_nodes=["n2", "n3"], variables=variables,
+                        readable={"n2": ["seen"], "n3": []} if readable is None else readable)
+    return {c.name: c for c in result.checks}
+
+
+def test_an_expression_may_read_a_source_variable_in_scope_at_its_statement():
+    found = procedure_checks()
+
+    assert found["linked expressions are self-contained spans"].passed, found
+    assert found["lint"].passed, found
+
+
+def test_an_expression_that_reads_a_source_variable_not_in_scope_there_still_fails():
+    found = procedure_checks(readable={"n2": [], "n3": []})
+
+    assert not found["linked expressions are self-contained spans"].passed
+    assert "seen" in found["linked expressions are self-contained spans"].detail
+
+
+def test_an_expression_that_reads_a_local_that_is_no_source_variable_still_fails():
+    found = procedure_checks(PROCEDURE.replace("ss.twin.add(n, 1,", "ss.twin.add(spark, 1,"))
+
+    assert not found["linked expressions are self-contained spans"].passed or not found["lint"].passed
+
+
+def test_an_unused_assignment_is_ignored_only_for_a_declared_source_variable():
+    ignored = procedure_checks(variables=("seen", "other"))
+    reported = procedure_checks(variables=("seen",))
+
+    assert ignored["lint"].passed
+    assert not reported["lint"].passed and "other" in reported["lint"].detail

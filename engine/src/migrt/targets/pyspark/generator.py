@@ -113,6 +113,7 @@ class GeneratedFile:
     signature: str                        # the arguments of the entry point, after the name
     fails_when_called: bool               # the function raises when called: all of it is manual work
     variables: list[str] = dataclasses.field(default_factory=list)   # the Python names of the source's variables
+    readable: dict[str, list[str]] = dataclasses.field(default_factory=dict)   # expression node -> variables in its scope
     discarded: list[str] = dataclasses.field(default_factory=list)   # procedural functions whose code the file does not hold:
                                                                      # the ids of their roots, each with manual items under it
 
@@ -221,6 +222,8 @@ class Generator:
         self.collects = False                          # it gives back result sets (a procedure or a batch)
         self.result_sets = "result_sets"
         self.guards_needed = False                     # it reads @@ERROR and has a statement that could fail
+        self.scopes: list[list[str]] = []              # per statement being generated: the variables in scope before it
+        self.readable: dict[str, list[str]] = {}       # expression node id -> the source variables its code may read
         self.discarded: list[Node] = []                # the procedural functions whose code is not in the file
 
     # ------------------------------------------------------------------ the file
@@ -266,8 +269,8 @@ class Generator:
         return GeneratedFile(path, "\n".join(header.lines) + "\n", header.links, self.draft.manual, self.draft.caveats, [],
                              used, header.spans, expression_nodes, self.findings, sorted(set(self.draft.settings_used)),
                              self.draft.assumptions, self.functions, self.parameters, self.columns, self.result,
-                             self.signature_text or "ss", self.draft.fails_when_called, self.variables,
-                             [c.id for c in self.discarded])
+                             self.signature_text or "ss", self.draft.fails_when_called, variables=self.variables,
+                             readable=self.readable, discarded=[c.id for c in self.discarded])
 
     def declare_parameters(self, body: Node) -> list[Node]:
         """The parameter nodes, each with its Python name; a default is the caller's to pass (reported)."""
@@ -544,7 +547,11 @@ class Generator:
         if handler is None:
             raise Unsupported(node, untranslatable.procedural_reason(node.kind), (untranslatable.PROCEDURAL,))
         self.draft.comments(node, self.pad)
-        handler(self, node, container)
+        self.scopes.append(node.attrs.get("scope", {}).get("variables", []))
+        try:
+            handler(self, node, container)
+        finally:
+            self.scopes.pop()
 
     def block(self, statements: list[Node], container: Node, owner: Node) -> None:
         """The statements of a branch or a loop body, one level in."""
@@ -664,7 +671,14 @@ class Generator:
             raise Unsupported(node, f"{node.kind} is not generated in procedural code yet", (untranslatable.PROCEDURAL,))
         code = handler(self, node)
         self.draft.pending.append((node.id, code))
+        self.note_readable(node)
         return code
+
+    def note_readable(self, node: Node) -> None:
+        """What the code of this expression may read: the source variables in scope before its statement, as the
+        representation says (a parameter is an argument of the function, and always readable)."""
+        in_scope = self.scopes[-1] if self.scopes else []
+        self.readable[node.id] = sorted({self.params[name.casefold()] for name in in_scope if name.casefold() in self.params})
 
     def values(self, node: Node) -> list[str]:
         """The code of an expression's arguments, the first generated first."""
@@ -1018,6 +1032,7 @@ class Generator:
         self.refuse_detected(node)
         code = self.expression(node, grouped)
         self.draft.pending.append((node.id, code))
+        self.note_readable(node)
         return code
 
     def expression(self, node: Node, grouped: dict) -> str:
@@ -1256,4 +1271,4 @@ def check(artefact: Artefact, generated: GeneratedFile) -> layer1.Layer1Result:
                       manual_items=[m.id for m in generated.manual_items],
                       escape_hatch_uses=generated.escape_hatch_uses, expressions=generated.expressions,
                       expression_nodes=generated.expression_nodes, project_package=PROJECT_PACKAGE,
-                      variables=generated.variables)
+                      variables=generated.variables, readable=generated.readable)
