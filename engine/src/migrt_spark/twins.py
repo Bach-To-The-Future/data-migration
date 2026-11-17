@@ -89,11 +89,14 @@ class Twins:
         return self.to_integer(-quotient if (a < 0) != (b < 0) else quotient, bits=bits, signed=signed)
 
     def modulo(self, a: int | None, b: int | None, *, bits: int, signed: bool) -> int | None:
-        """The remainder has the sign of the dividend. A zero divisor is an error."""
+        """The remainder has the sign of the dividend. A zero divisor is an error, and so is the smallest value of the type
+        divided by -1, which SQL Server computes as the quotient and so overflows (decided against SQL Server)."""
         if a is None or b is None:
             return None
         if b == 0:
             raise self._ss.fail("divide_by_zero")
+        if signed and b == -1 and a == -(1 << (bits - 1)):
+            raise self._ss.fail("arithmetic_overflow", to_type=f"integer({bits}, signed)")
         remainder = abs(a) % abs(b)
         return self.to_integer(-remainder if a < 0 else remainder, bits=bits, signed=signed)
 
