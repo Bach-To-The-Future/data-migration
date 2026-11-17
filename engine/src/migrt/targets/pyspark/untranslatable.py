@@ -35,6 +35,7 @@ CTES = "#141"                  # non-recursive common table expressions
 WAITFOR = "#142"               # WAITFOR
 LOOKUPS = "#143"               # role and catalog lookups
 SERVER_PROPERTIES = "#144"     # SERVERPROPERTY
+RAISING = "#64"                # raising a construct to an expression or a set-based step, and the Python UDF fallback
 VALUE_TYPES = "#134"           # bit, string conversions, table-valued parameters, the other non-number types
 LOWERING_ASSIST = "#63"        # lowering assist
 NUMBER_HELPERS = "#87"         # the support library's number, date and time helpers
@@ -57,6 +58,7 @@ TICKET_BY_KIND = {
     "read_changed_rows": TRIGGERS,
     "jump": GOTO, "declare_label": GOTO,
     "window": WINDOWS, "row_number": WINDOWS, "named_query": CTES, "wait": WAITFOR,
+    "for_each_row": RAISING, "atomic_region": RAISING, "named_result": RAISING, "column_expression_function": RAISING,
     "role_membership": LOOKUPS, "catalog_lookup": LOOKUPS, "session_value": SERVER_PROPERTIES,
     "sort": SORT, "union": UNION_AND_VALUES, "read_values": UNION_AND_VALUES, "limit": UNION_AND_VALUES,
     "scalar_query": SCALAR_SUBQUERY, "exists": EXISTS,

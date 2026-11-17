@@ -159,6 +159,7 @@ def test_a_cross_join_is_the_generators_own_gap_and_waits_for_no_ticket():
     ("jump", "#133"), ("declare_label", "#133"),
     ("window", "#140"), ("row_number", "#140"), ("named_query", "#141"), ("wait", "#142"),
     ("role_membership", "#143"), ("catalog_lookup", "#143"), ("session_value", "#144"),
+    ("for_each_row", "#64"), ("atomic_region", "#64"), ("named_result", "#64"), ("column_expression_function", "#64"),
     ("sort", "#128"), ("union", "#129"), ("read_values", "#129"), ("limit", "#129"), ("scalar_query", "#130"),
     ("exists", "#131"), ("convert", "#132"), ("try_convert", "#132"), ("convert_with_style", "#132"),
     ("concat_null_propagating", "#47"), ("trim", "#47"), ("upper", "#47"), ("left_part", "#47"),
@@ -169,7 +170,7 @@ def test_a_kind_without_generation_waits_for_the_ticket_that_owns_it(kind, ticke
     assert untranslatable.waits_for_kind(kind, generator.handled_kinds()) == (ticket,)
 
 
-@pytest.mark.parametrize("kind", ["for_each_row", "atomic_region", "named_result", "column_expression_function"])
+@pytest.mark.parametrize("kind", ["dynamic_sql_execution", "schema_change", "permission_change", "pivot", "lateral_join", "bulk_load"])
 def test_a_kind_no_ticket_has_taken_waits_for_nothing_rather_than_for_a_ticket_that_is_closed(kind):
     assert untranslatable.waits_for_kind(kind, generator.handled_kinds()) == ()
 
