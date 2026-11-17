@@ -11,13 +11,16 @@ prints:
 - the table by waiting ticket: the procedures each ticket stops, and the ones it is the only remaining ticket for;
 - with `--full`, the table by kind of construct and the table by procedure.
 
+Each artefact is generated with the project it belongs to, as a run does: a read of a corpus view and a call to a corpus function are
+imports, so they do not count as blockers (`--alone` measures every artefact by itself, as the tool first did).
+
 A statement reports only its first failure, so what is counted is the construct that failed plus every kind with no
 generation beneath it. It is a lower bound: a gap hidden by a decline (a type, a collation) shows up when the shallower ones
 are fixed, and the total can rise.
 
     run in the sandbox toolbox (it extracts the corpus from the sandbox SQL Server):
         docker compose -f sandbox/docker-compose.yml --profile tools run --no-deps --rm -T tools \\
-            python tools/corpus_blockers.py [--full] [--json before.json] [--compare before.json]
+            python tools/corpus_blockers.py [--full] [--alone] [--json before.json] [--compare before.json]
 
 `--json PATH` writes the measurement; `--compare PATH` prints each headline number against an earlier one. A ticket report
 quotes the output before and after, and `engine/tests/test_corpus_blockers.py` pins the numbers.
@@ -143,11 +146,13 @@ def blockers_of(artefact, generated) -> set[str]:
     return kinds
 
 
-def measure(snapshot) -> Measurement:
-    """Generate every procedure and trigger of a corpus snapshot, as the engine does, and list what stops each."""
+def measure(snapshot, project: bool = True) -> Measurement:
+    """Generate every procedure and trigger of a corpus snapshot, as the engine does, and list what stops each. With `project`, each
+    one is generated with the others that a run generates, so a view or a function it reads or calls is an import."""
     sys.path[:0] = [str(ROOT / "engine" / "src"), str(ROOT / "engine" / "tests")]
     from generation_helpers import names_for         # the recorded name rules for a snapshot, with no control database
 
+    from migrt import engine
     from migrt.core.catalog import CatalogReader
     from migrt.core.differences import Catalogue
     from migrt.sources.sqlserver import differences as source_differences, extractor, lowering, names, statement_effects
@@ -157,6 +162,8 @@ def measure(snapshot) -> Measurement:
     catalogue = Catalogue(source_differences.half(), target_differences.half())
     from migrt.sources.sqlserver import parser
 
+    in_project = {o.identity: o.kind for o in snapshot.objects if o.kind in engine.GENERATED_KINDS
+                  and reader.value(o.identity, "extractable")} if project else {}
     blockers: dict[str, frozenset[str]] = {}
     waits: dict[str, set[str]] = collections.defaultdict(set)
     for o in sorted((o for o in snapshot.objects if o.kind in ("procedure", "trigger")), key=lambda o: o.identity):
@@ -167,8 +174,11 @@ def measure(snapshot) -> Measurement:
                               reader.value(database, "compatibility_level", extractor.SOURCE),
                               reader.value(o.identity, "quoted_identifier", extractor.SOURCE))
         artefact = lowering.lower_artefact(reader, o.identity, parsed)
+        dependencies = generator.Dependencies(
+            kinds={dep: reader.kind_of(dep) for dep in artefact.dependencies if snapshot.has(dep)},
+            generated={i for i, k in in_project.items() if k in engine.CALLABLE_KINDS and i != o.identity})
         generated = generator.generate(artefact, snapshot.id, "0.0.0", catalogue, names_for(snapshot, {o.identity: o.kind}),
-                                       generator.Dependencies(), statement_effects.effect)
+                                       dependencies, statement_effects.effect)
         found = blockers_of(artefact, generated)
         blockers[o.identity] = frozenset(found)
         nodes = {n.id: n for n in artefact.nodes()}
@@ -195,6 +205,7 @@ def from_json(text: str) -> Measurement:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0] if __doc__ else None)
     parser.add_argument("--full", action="store_true", help="also print the tables by kind and by procedure")
+    parser.add_argument("--alone", action="store_true", help="generate each artefact by itself, not with the project it belongs to")
     parser.add_argument("--json", type=pathlib.Path, help="write the measurement here")
     parser.add_argument("--compare", type=pathlib.Path, help="print the headline numbers against an earlier --json file")
     args = parser.parse_args(argv)
@@ -204,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
 
     address = extractor.ServerAddress(os.environ.get("MSSQL_HOST", "sqlserver"), 1433, "migration_extractor",
                                       os.environ["MIGRT_EXTRACTOR_PASSWORD"])
-    measured = measure(extractor.extract(address, DATABASES))
+    measured = measure(extractor.extract(address, DATABASES), project=not args.alone)
     if args.json:
         args.json.write_text(to_json(measured) + "\n", encoding="utf-8")
     print(report(measured, full=args.full), end="")
