@@ -644,8 +644,7 @@ class Generator:
             raise ValueError(f"{s.id}: lowering emitted SET {option}, which this generator has no handling for")
         note = (f"{self.artefact.identity}: SET NOCOUNT only records the option in session state: generated code sends no "
                 "row counts to a client, so there is nothing for it to suppress")
-        if note not in self.draft.assumptions:
-            self.draft.assumptions.append(note)
+        self.draft.assume(note)
         self.put(f"ss.set_option({option!r}, {bool(s.attrs['value'])})", [s])
         self.done(s)
 
@@ -1076,19 +1075,26 @@ class Generator:
 
     @PLAN_STEPS("sort")
     def sort(self, node: Node) -> str:
-        """ORDER BY: nulls first ascending and last descending, which is also what SQL Server does. Rows with equal keys come in no
-        defined order on either side, so a report says so."""
+        """ORDER BY: nulls first ascending and last descending. Rows with equal keys come in no defined order, so the report says
+        so. Over an aggregate, a key is a column of the select list (by name or position): a key that is an expression over the
+        grouped rows is manual work."""
         source = self.plan(node.child("input"))
+        over_aggregate = any(n.kind == "aggregate" for n in node.child("input").walk())
         keys = []
         for key in node.children_with("order"):
             if key.attrs.get("rule"):
                 raise Unsupported(key, f"sorting by strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+            if over_aggregate and not (key.kind == "column" and key.attrs["relation"] == OUTPUT):
+                raise Unsupported(key, "sorting grouped rows by an expression over them, rather than by a column of the select "
+                                       "list, is not generated yet")
             ascending = key.attrs["direction"] == "ascending"
             keys.append(f"{self.expr(key, {})}.{'asc_nulls_first' if ascending else 'desc_nulls_last'}()")
         note = (f"{self.artefact.identity}: rows with equal sort keys come in no defined order, so a result set that is sorted "
                 "by keys that do not separate its rows may list those rows in another order from run to run")
-        if note not in self.draft.assumptions:
-            self.draft.assumptions.append(note)
+        self.draft.assume(note)
+        if self.artefact.artefact_type in ("view", "inline_function", "table_function"):
+            self.draft.assume(f"{self.artefact.identity}: its rows are sorted, but a query that reads it is free to list them in "
+                              "another order, so the order holds only for a read of it on its own")
         var = python_name("sorted_rows", self.draft.taken)
         self.step(node, f"{var} = {source}.orderBy({', '.join(keys)})")
         return var
