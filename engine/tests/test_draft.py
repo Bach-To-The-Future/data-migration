@@ -137,6 +137,6 @@ def test_a_give_up_carries_the_tickets_the_construct_waits_for_and_the_reason_st
 def test_an_item_made_for_a_construct_never_attempted_can_wait_too():
     draft = Draft()
 
-    item = draft.manual_item_at(construct("if"), "procedural code", waits_for=("#50",))
+    item = draft.manual_item_at(construct("if"), "procedural code", waits_for=("#128",))
 
-    assert item.waits_for == ("#50",) and "#50" not in item.reason
+    assert item.waits_for == ("#128",) and "#128" not in item.reason

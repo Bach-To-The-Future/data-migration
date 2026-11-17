@@ -14,6 +14,7 @@ import pytest
 
 import generation_ir as ir
 from generation_ir import column, money_product, node
+from migrt.targets.pyspark import generator, untranslatable
 
 TICKET_IN_TEXT = re.compile(r"#\d+|\bissue\b", re.IGNORECASE)
 
@@ -107,7 +108,7 @@ def test_an_xml_cast_is_manual_work_for_good_and_waits_for_nothing():
 def test_procedural_statements_wait_for_the_ticket_that_builds_their_kind():
     result = ir.generate(ir.routine("procedure", node("jump", "statement", label="done"), node("emit_message", "statement")))
 
-    assert sorted(i.waits_for for i in items(result)) == [("#119",), ("#50",)]     # a jump has no ticket of its own yet
+    assert sorted(i.waits_for for i in items(result)) == [("#119",), ("#133",)]
     assert all("procedural generation" in i.reason for i in items(result))
     no_ticket_numbers_in_the_text(result)
 
@@ -150,3 +151,39 @@ def test_a_cross_join_is_the_generators_own_gap_and_waits_for_no_ticket():
     plan = node("project", "", join, column("output", "Status"))
 
     assert one_item(ir.generate(ir.view(plan))).waits_for == ()
+
+
+# ---------------------------------------------------------------- nothing waits for a ticket that is closed
+
+@pytest.mark.parametrize("kind,ticket", [
+    ("jump", "#133"), ("declare_label", "#133"),
+    ("negate", "#127"), ("first_non_null", "#127"), ("between", "#127"), ("in_list", "#127"),
+    ("sort", "#128"), ("union", "#129"), ("read_values", "#129"), ("limit", "#129"), ("scalar_query", "#130"),
+    ("exists", "#131"), ("convert", "#132"), ("try_convert", "#132"), ("convert_with_style", "#132"),
+    ("concat_null_propagating", "#47"), ("trim", "#47"), ("upper", "#47"), ("left_part", "#47"),
+    ("date_add", "#87"), ("current_time", "#87"), ("date_diff_boundaries", "#87"), ("round", "#87"),
+    ("decimal_divide", "#87"), ("last_identity", "#87"), ("next_sequence_value", "#87"),
+])
+def test_a_kind_without_generation_waits_for_the_ticket_that_owns_it(kind, ticket):
+    assert untranslatable.waits_for_kind(kind, generator.handled_kinds()) == (ticket,)
+
+
+@pytest.mark.parametrize("kind", ["wait", "for_each_row", "atomic_region", "named_result", "role_membership",
+                                  "catalog_lookup", "session_value", "named_query", "window", "row_number"])
+def test_a_kind_no_ticket_has_taken_waits_for_nothing_rather_than_for_a_ticket_that_is_closed(kind):
+    assert untranslatable.waits_for_kind(kind, generator.handled_kinds()) == ()
+
+
+def test_no_waits_for_in_the_engine_names_the_ticket_that_was_split_into_the_others():
+    """#50 is closed: a manual item waits for the ticket that builds its kind, or for nothing."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[1] / "src"
+    found = [str(p.relative_to(root)) for p in root.rglob("*.py") if '"#50"' in p.read_text(encoding="utf-8")]
+
+    assert found == []
+
+
+def test_a_non_number_type_in_procedural_code_waits_for_the_ticket_that_holds_the_types():
+    from migrt.core.ir import VType
+    assert generator.Generator.type_waits(VType.of("guid")) == ("#134",)
+    assert generator.Generator.type_waits(VType.of("decimal", precision=9, scale=2)) == ("#87",)
