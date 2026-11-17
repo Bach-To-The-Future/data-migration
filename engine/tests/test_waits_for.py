@@ -157,7 +157,6 @@ def test_a_cross_join_is_the_generators_own_gap_and_waits_for_no_ticket():
 
 @pytest.mark.parametrize("kind,ticket", [
     ("jump", "#133"), ("declare_label", "#133"),
-    ("negate", "#127"), ("first_non_null", "#127"), ("between", "#127"), ("in_list", "#127"),
     ("sort", "#128"), ("union", "#129"), ("read_values", "#129"), ("limit", "#129"), ("scalar_query", "#130"),
     ("exists", "#131"), ("convert", "#132"), ("try_convert", "#132"), ("convert_with_style", "#132"),
     ("concat_null_propagating", "#47"), ("trim", "#47"), ("upper", "#47"), ("left_part", "#47"),

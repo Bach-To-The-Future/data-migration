@@ -66,6 +66,7 @@ SPECIAL_CAUSES = {*untranslatable.SPECIAL, untranslatable.STALE, untranslatable.
 # What a statement may be without being able to fail: reading these, comparing and assigning values cannot raise an error.
 CANNOT_FAIL = frozenset({"procedure_body", "trigger_body", "batch_script_body", "batch", "declare_parameter", "literal", "null",
                          "variable", "compare", "and", "or", "not", "is_null", "rows_affected", "last_statement_error",
+                         "first_non_null", "between", "in_list",
                          "declare_variable", "assign", "if", "while", "break", "continue", "return"})
 VALUE_TYPES = ("integer", "string")      # the types a variable's value is held as in procedural code
 
@@ -791,6 +792,29 @@ class Generator:
         raise Unsupported(node, f"the conversion of {argument.type} to {node.type} is not generated in procedural code yet",
                           self.type_waits(node.value_type if argument.value_type.name == "string" else argument.value_type))
 
+    @VALUES("negate")
+    def value_negate(self, node: Node) -> str:
+        bits, signed = self.integer_type(node)
+        self.draft.caveats[node.id] = STOPS_AT_ERROR
+        return f"ss.twin.negate({self.values(node)[0]}, bits={bits}, signed={signed})"
+
+    @VALUES("first_non_null")
+    def value_first_non_null(self, node: Node) -> str:
+        return f"ss.twin.first_non_null({', '.join(self.values(node))})"
+
+    @VALUES("between")
+    def value_between(self, node: Node) -> str:
+        if node.attrs.get("rule"):
+            raise Unsupported(node, f"BETWEEN over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        return f"ss.twin.between({', '.join(self.values(node))})"
+
+    @VALUES("in_list")
+    def value_in_list(self, node: Node) -> str:
+        if node.attrs.get("rule"):
+            raise Unsupported(node, f"IN over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        value = self.value(self.arguments(node)[0])
+        return f"ss.twin.in_list({', '.join([value] + [self.value(x) for x in node.children_with('item')])})"
+
     @VALUES("rows_affected")
     def value_rows_affected(self, node: Node) -> str:
         return "ss.rowcount"
@@ -1195,6 +1219,31 @@ class Generator:
         if node.attrs.get("rule"):
             raise Unsupported(node, f"{k} over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
         return f"F.{'min' if k == 'minimum' else 'max'}({self.expr(self.arguments(node)[0], {})})"
+
+    @EXPRESSIONS("negate")
+    def expr_negate(self, node: Node, grouped: dict) -> str:
+        self.refuse_money_typed(node)
+        if node.value_type.name != "integer":
+            raise Unsupported(node, f"negate on {node.type} has no PySpark generation yet", (untranslatable.NUMBER_HELPERS,))
+        return f'(-{self.expr(self.arguments(node)[0], grouped)}).cast("{spark_type(node.value_type, node)}")'
+
+    @EXPRESSIONS("first_non_null")
+    def expr_first_non_null(self, node: Node, grouped: dict) -> str:
+        return f"F.coalesce({', '.join(self.expr(x, grouped) for x in self.arguments(node))})"
+
+    @EXPRESSIONS("between")
+    def expr_between(self, node: Node, grouped: dict) -> str:
+        if node.attrs.get("rule"):
+            raise Unsupported(node, f"BETWEEN over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        value, low, high = (self.expr(x, grouped) for x in self.arguments(node))
+        return f"{value}.between({low}, {high})"
+
+    @EXPRESSIONS("in_list")
+    def expr_in_list(self, node: Node, grouped: dict) -> str:
+        if node.attrs.get("rule"):
+            raise Unsupported(node, f"IN over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        value = self.expr(self.arguments(node)[0], grouped)
+        return f"{value}.isin({', '.join(self.expr(x, grouped) for x in node.children_with('item'))})"
 
     @EXPRESSIONS("null_replacement")
     def expr_null_replacement(self, node: Node, grouped: dict) -> str:

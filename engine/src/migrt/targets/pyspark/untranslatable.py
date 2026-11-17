@@ -24,7 +24,6 @@ TEMP_TABLES_AND_GUARDS = "#120"    # temp tables, table variables, SELECT @v =, 
 WRITE_FORMS = "#121"           # MERGE, OUTPUT, TOP in writes, INSERT ... EXEC, global temp tables
 TRIGGERS = "#122"              # triggers fired by the write wrapper
 CURSORS = "#124"               # faithful cursors
-EXPRESSION_BASICS = "#127"     # negate, COALESCE, BETWEEN, IN
 SORT = "#128"                  # ORDER BY
 UNION_AND_VALUES = "#129"      # UNION, VALUES row sources, TOP over them
 SCALAR_SUBQUERY = "#130"       # a query used as one value
@@ -52,7 +51,6 @@ TICKET_BY_KIND = {
     "merge_rows": WRITE_FORMS, "return_changed_rows": WRITE_FORMS, "create_global_temp_table": WRITE_FORMS,
     "read_changed_rows": TRIGGERS,
     "jump": GOTO, "declare_label": GOTO,
-    "negate": EXPRESSION_BASICS, "first_non_null": EXPRESSION_BASICS, "between": EXPRESSION_BASICS, "in_list": EXPRESSION_BASICS,
     "sort": SORT, "union": UNION_AND_VALUES, "read_values": UNION_AND_VALUES, "limit": UNION_AND_VALUES,
     "scalar_query": SCALAR_SUBQUERY, "exists": EXISTS,
     "convert": CONVERSIONS, "try_convert": CONVERSIONS, "convert_with_style": CONVERSIONS,

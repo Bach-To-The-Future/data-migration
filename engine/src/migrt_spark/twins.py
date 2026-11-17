@@ -58,6 +58,25 @@ class Twins:
         """What `IF` and `WHILE` run on: a condition that is false or unknown does not."""
         return truth is True
 
+    @staticmethod
+    def first_non_null(*values: Any) -> Any:
+        """`COALESCE`: the first argument that is not NULL, NULL if there is none."""
+        return next((v for v in values if v is not None), None)
+
+    @classmethod
+    def between(cls, value: Any, low: Any, high: Any) -> bool | None:
+        """`value BETWEEN low AND high`: `value >= low AND value <= high`, three-valued."""
+        return cls.and_(cls.compare(">=", value, low), cls.compare("<=", value, high))
+
+    @classmethod
+    def in_list(cls, value: Any, *items: Any) -> bool | None:
+        """`value IN (items)`: `value = item1 OR value = item2 ...`, so a NULL value, or a NULL item when nothing matches,
+        makes it unknown."""
+        result: bool | None = False
+        for item in items:
+            result = cls.or_(result, cls.compare("=", value, item))
+        return result
+
     # ------------------------------------------------------------------ integers
 
     def to_integer(self, value: int | None, *, bits: int, signed: bool) -> int | None:
@@ -68,6 +87,10 @@ class Twins:
         if not low <= value <= high:
             raise self._ss.fail("arithmetic_overflow", to_type=f"integer({bits}, {'signed' if signed else 'unsigned'})")
         return value
+
+    def negate(self, a: int | None, *, bits: int, signed: bool) -> int | None:
+        """The number with its sign changed; the one value whose negation does not fit (the smallest) is an overflow."""
+        return None if a is None else self.to_integer(-a, bits=bits, signed=signed)
 
     def add(self, a: int | None, b: int | None, *, bits: int, signed: bool) -> int | None:
         return self._arithmetic("add", a, b, bits, signed)

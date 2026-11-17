@@ -160,3 +160,59 @@ def test_a_statement_sets_the_row_count_and_resets_the_error_unless_it_keeps_the
     assert (ss.rowcount, ss.at_error) == (4, 0)
     ss.statement_done(0, reset_error=False)
     assert (ss.rowcount, ss.at_error) == (0, 0)
+
+
+# ---------------------------------------------------------------- negation, COALESCE, BETWEEN and IN (issue #127)
+
+# SQL Server's unary minus keeps the type of its operand except for tinyint, which gives smallint (it has no negative values).
+NEGATION_RESULT = {"tinyint": (16, True), "smallint": (16, True), "int": (32, True), "bigint": (64, True)}
+
+
+@pytest.mark.parametrize("tsql_type", ["tinyint", "smallint", "int", "bigint"])
+def test_negation_gives_sql_servers_value_or_its_overflow_error(duo, tsql_type):
+    bits, signed = NEGATION_RESULT[tsql_type]
+    ss = duo.session()
+    operand_bits = {"tinyint": 8, "smallint": 16, "int": 32, "bigint": 64}[tsql_type]
+    for value in EDGES[operand_bits] + [None, 0, 1, 5]:
+        rows, errors = duo.run(f"SELECT -CAST({sql(value)} AS {tsql_type}) AS r")
+        if errors:
+            with pytest.raises(lib.TsqlError) as raised:
+                ss.twin.negate(value, bits=bits, signed=signed)
+            if bits >= 32:
+                assert raised.value.number == errors[0].number, (tsql_type, value)
+            else:       # the source half does not cover the smaller integers yet: the reserved number, flagged
+                assert raised.value.unmapped and raised.value.number == ss.errors_reserved_number, (tsql_type, value)
+        else:
+            assert ss.twin.negate(value, bits=bits, signed=signed) == rows[0]["r"], (tsql_type, value)
+
+
+def test_coalesce_gives_the_first_value_that_is_not_null(duo):
+    ss = duo.session()
+    for values in itertools.product(VALUES, repeat=3):
+        [row] = duo.tsql(f"SELECT COALESCE({', '.join(sql(v) for v in values)}, CAST(NULL AS int)) AS r")
+        assert ss.twin.first_non_null(*values) == row["r"], values
+
+
+def test_between_is_true_only_when_both_comparisons_are_and_unknown_when_a_bound_is_null_and_the_other_comparison_does_not_fail(duo):
+    ss = duo.session()
+    values = [None, 1, 2, 3]
+    for a, low, high in itertools.product(values, repeat=3):
+        for negated in (False, True):
+            test = f"{sql(a)} {'NOT ' if negated else ''}BETWEEN {sql(low)} AND {sql(high)}"
+            [row] = duo.tsql(f"SELECT CASE WHEN {test} THEN 1 WHEN NOT ({test}) THEN 0 END AS r")
+            got = ss.twin.between(a, low, high)
+            got = ss.twin.not_(got) if negated else got
+            assert got == (None if row["r"] is None else bool(row["r"])), test
+
+
+def test_in_is_unknown_when_nothing_matches_and_the_list_or_the_value_is_null(duo):
+    ss = duo.session()
+    for a in VALUES:
+        for size in (1, 2, 3):
+            for items in itertools.product(VALUES, repeat=size):
+                for negated in (False, True):
+                    test = f"{sql(a)} {'NOT ' if negated else ''}IN ({', '.join(sql(i) for i in items)})"
+                    [row] = duo.tsql(f"SELECT CASE WHEN {test} THEN 1 WHEN NOT ({test}) THEN 0 END AS r")
+                    got = ss.twin.in_list(a, *items)
+                    got = ss.twin.not_(got) if negated else got
+                    assert got == (None if row["r"] is None else bool(row["r"])), test

@@ -19,7 +19,7 @@ sys.modules[spec.name] = tool          # a dataclass looks its module up while i
 spec.loader.exec_module(tool)
 
 # What the corpus gives today (see docs/corpus/blockers-baseline.md). A ticket that moves any of these updates them.
-PINNED = {"procedures": 82, "root_blockers": 568, "at_most_1": 13, "at_most_3": 24, "whole": 0, "ceiling": 65}
+PINNED = {"procedures": 82, "root_blockers": 544, "at_most_1": 13, "at_most_3": 25, "whole": 0, "ceiling": 65}
 
 
 # ---------------------------------------------------------------- the arithmetic
@@ -90,12 +90,12 @@ def test_a_node_refused_only_because_a_barrier_made_its_scope_uncertain_is_not_a
 
 def test_a_kind_without_generation_that_sits_under_a_failed_statement_is_a_blocker_too():
     """A statement reports only its first failure; the unhandled kinds below it are blockers that wait their turn."""
-    outer = node("if", "statement", node("negate", "condition"), node("declare_cursor", "then", name="@c"))
+    outer = node("if", "statement", node("exists", "condition"), node("declare_cursor", "then", name="@c"))
     result = ir.generate(ir.routine("procedure", outer))
 
     found = tool.blockers_of(result.artefact, result.file)
 
-    assert {"negate", "declare_cursor"} <= found            # the condition fails first and hides the cursor beneath
+    assert {"exists", "declare_cursor"} <= found            # the condition fails first and hides the cursor beneath
 
 
 # ---------------------------------------------------------------- the corpus
