@@ -18,8 +18,7 @@ from ...core import vocabulary
 from ...core.ir import Artefact, Node
 
 # What a construct waits for, as `waits_for` names it (never in a reason, which a client may read).
-PROCEDURAL = "#50"             # procedural generation: what no ticket of its own has taken (its work moved to OWNERS' tickets)
-SET_OPTIONS = "#117"           # SET options
+PROCEDURAL = "#50"             # procedural generation: what no ticket of its own has taken (its work moved to the tickets of TICKET_BY_KIND)
 WRITES = "#118"                # writes and EXEC
 TRANSACTIONS_AND_ERRORS = "#119"   # transactions, XACT_ABORT, TRY/CATCH, messages
 TEMP_TABLES_AND_GUARDS = "#120"    # temp tables, table variables, SELECT @v =, guarded statements
@@ -32,8 +31,7 @@ DOOMED_TRANSACTIONS = "#113"   # the library modelling doomed transactions, whic
 STRING_HELPERS = "#47"         # the support library's comparison, collation and string helpers
 # The ticket that builds the generation of each statement kind not generated yet: a construct of that kind is manual work for want
 # of it. A kind not here waits for PROCEDURAL.
-OWNERS = {
-    "set_session_option": SET_OPTIONS,
+TICKET_BY_KIND = {
     "insert_rows": WRITES, "update_rows": WRITES, "delete_rows": WRITES, "call_procedure": WRITES,
     "begin_transaction": TRANSACTIONS_AND_ERRORS, "commit_transaction": TRANSACTIONS_AND_ERRORS,
     "rollback_transaction": TRANSACTIONS_AND_ERRORS, "save_point": TRANSACTIONS_AND_ERRORS,
@@ -64,7 +62,7 @@ class Finding:
 
 def procedural_reason(kind: str) -> str:
     return (f"{kind} is procedural code: procedural generation (variables, control flow, temp tables, writes, "
-            "calls and session options) is not built yet, so it is reported as manual work")
+            "and calls) is not built yet, so it is reported as manual work")
 
 
 def reason_for_kind(kind: str, handled: AbstractSet[str]) -> str | None:
@@ -96,8 +94,8 @@ def waits_for_kind(kind: str, handled: AbstractSet[str]) -> tuple[str, ...]:
         return (LOWERING_ASSIST,)
     if kind == "transaction_state" and kind not in handled:
         return (DOOMED_TRANSACTIONS,)
-    if kind not in handled and kind in OWNERS:
-        return (OWNERS[kind],)
+    if kind not in handled and kind in TICKET_BY_KIND:
+        return (TICKET_BY_KIND[kind],)
     if kind not in handled and (vocabulary.part_of(kind) == "procedural" or kind == "batch"):
         return (PROCEDURAL,)
     return ()

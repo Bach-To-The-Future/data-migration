@@ -13,6 +13,10 @@ from test_generation_corpus import generated
 from test_procedural_generation import PRELUDES, on_sql_server, on_target, procedure
 
 NOCOUNT = 512
+# The corpus procedures and triggers that generate without manual work. None yet: what still stops each is a statement kind a
+# later ticket builds (the failure message of the corpus test lists them). The ticket that makes the first one whole adds it
+# here, and each ticket after it adds its own.
+WHOLE: list[str] = []
 
 
 def nocount_on_sql_server(duo, batches: list[str]) -> list[int]:
@@ -163,8 +167,8 @@ def test_no_corpus_procedure_or_trigger_is_stopped_by_set_nocount_any_more(corpu
         assert nocount == [], identity
     assert len(stopping) >= 50
     whole = sorted(i for i, kinds in stopping.items() if not kinds)
-    print("\ngenerate whole:", whole)
-    print("blocking kinds:", sorted({k for kinds in stopping.values() for k in kinds}))
+    assert whole == WHOLE, (f"the corpus procedures and triggers that generate whole changed: update WHOLE. Now {whole}; "
+                            f"the statement kinds still stopping the rest: {sorted({k for s in stopping.values() for k in s})}")
 
 
 # ---------------------------------------------------------------- what each kind waits for
@@ -178,3 +182,22 @@ def test_no_corpus_procedure_or_trigger_is_stopped_by_set_nocount_any_more(corpu
 ])
 def test_a_statement_not_generated_yet_waits_for_the_ticket_that_builds_it(kind, ticket):
     assert untranslatable.waits_for_kind(kind, generator.handled_kinds()) == (ticket,)
+
+
+def test_an_option_a_trigger_sets_is_back_when_the_write_wrapper_has_run_it(duo):
+    """The wrapper fires a trigger inside a scope of its own, so the option a trigger sets does not leak into the session, as on
+    SQL Server (compared)."""
+    from support_harness import C
+
+    def trigger(ss, inserted, deleted):
+        ss.set_option("NOCOUNT", True)
+
+    duo.table("T", [C("Id", "int")])
+    duo.tsql("CREATE TRIGGER {s}.trT ON {s}.T AFTER INSERT AS SET NOCOUNT ON")
+    duo.with_triggers("T", lib.Trigger("trT", "after", frozenset({"insert"}), trigger))
+    ss = duo.session()
+
+    ss.insert_values(duo.target("T"), [{"Id": 1}])
+
+    assert nocount_on_sql_server(duo, ["INSERT {s}.T VALUES (1)"]) == [0]
+    assert ss.options["NOCOUNT"] is False
