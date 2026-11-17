@@ -105,3 +105,43 @@ def test_the_corpus_numbers_are_the_ones_the_tickets_report_against(corpus_snaps
 
     assert {"procedures": s.procedures, "root_blockers": s.root_blockers, "at_most_1": s.at_most_1,
             "at_most_3": s.at_most_3, "whole": s.whole, "ceiling": s.ceiling} == PINNED
+
+
+# ---------------------------------------------------------------- the project, not the artefact alone
+
+# Measured with every artefact alone (the tool's first form, `project=False`): a read of a corpus view and a call to a corpus function
+# counted as blockers. A project run generates them all and imports each, so the numbers a ticket reports are with the project.
+ISOLATED = {"procedures": 82, "root_blockers": 544, "at_most_1": 13, "at_most_3": 25, "whole": 0, "ceiling": 65}
+
+
+def numbers(s) -> dict:
+    return {"procedures": s.procedures, "root_blockers": s.root_blockers, "at_most_1": s.at_most_1, "at_most_3": s.at_most_3,
+            "whole": s.whole, "ceiling": s.ceiling}
+
+
+def test_measured_alone_the_corpus_is_what_it_was_before_the_project_was_counted(corpus_snapshot):
+    assert numbers(tool.summarise(tool.measure(corpus_snapshot, project=False))) == ISOLATED
+
+
+def test_each_artefact_is_generated_with_the_project_it_belongs_to(corpus_snapshot, monkeypatch):
+    """A project run imports a corpus view it reads and a corpus function it calls, so the artefact is generated knowing they are there.
+    Measured on a procedure of the sample that calls a function and reads tables: `uspGetOrdersByCustomer` calls `fnOrderAgeDays`."""
+    from migrt.targets.pyspark import generator
+
+    seen: dict[str, set[str]] = {}
+    real = generator.generate
+
+    def watching(artefact, *args, **kwargs):
+        dependencies = args[4] if len(args) > 4 else kwargs["dependencies"]
+        seen[artefact.identity] = set(dependencies.generated)
+        return real(artefact, *args, **kwargs)
+
+    monkeypatch.setattr(generator, "generate", watching)
+    function = "RetailSample.sales.fnOrderAgeDays"
+    procedure_name = "RetailSample.sales.uspGetOrdersByCustomer"
+
+    tool.measure(corpus_snapshot, project=False)
+    assert function not in seen[procedure_name]
+    tool.measure(corpus_snapshot)
+
+    assert function in seen[procedure_name] and procedure_name not in seen[procedure_name]     # a callee, not itself
