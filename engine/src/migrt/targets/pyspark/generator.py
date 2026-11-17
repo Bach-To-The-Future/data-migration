@@ -67,8 +67,6 @@ SPECIAL_CAUSES = {*untranslatable.SPECIAL, untranslatable.STALE, untranslatable.
 CANNOT_FAIL = frozenset({"procedure_body", "trigger_body", "batch_script_body", "batch", "declare_parameter", "literal", "null",
                          "variable", "compare", "and", "or", "not", "is_null", "rows_affected", "last_statement_error",
                          "declare_variable", "assign", "if", "while", "break", "continue", "return"})
-TWIN_ARITHMETIC = {"add": "add", "subtract": "subtract", "multiply": "multiply", "modulo": "modulo",
-                   "integer_divide": "integer_divide"}
 VALUE_TYPES = ("integer", "string")      # the types a variable's value is held as in procedural code
 
 
@@ -744,7 +742,7 @@ class Generator:
         bits, signed = self.integer_type(node)
         a, b = self.values(node)
         self.draft.caveats[node.id] = STOPS_AT_ERROR
-        return f"ss.twin.{TWIN_ARITHMETIC[node.kind]}({a}, {b}, bits={bits}, signed={signed})"
+        return f"ss.twin.{node.kind}({a}, {b}, bits={bits}, signed={signed})"
 
     @VALUES("implicit_convert")
     def value_implicit_convert(self, node: Node) -> str:
