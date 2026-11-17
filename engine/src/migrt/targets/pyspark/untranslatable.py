@@ -30,6 +30,11 @@ SCALAR_SUBQUERY = "#130"       # a query used as one value
 EXISTS = "#131"                # EXISTS
 CONVERSIONS = "#132"           # CAST and CONVERT
 GOTO = "#133"                  # GOTO and labels
+WINDOWS = "#140"               # window functions
+CTES = "#141"                  # non-recursive common table expressions
+WAITFOR = "#142"               # WAITFOR
+LOOKUPS = "#143"               # role and catalog lookups
+SERVER_PROPERTIES = "#144"     # SERVERPROPERTY
 VALUE_TYPES = "#134"           # bit, string conversions, table-valued parameters, the other non-number types
 LOWERING_ASSIST = "#63"        # lowering assist
 NUMBER_HELPERS = "#87"         # the support library's number, date and time helpers
@@ -51,6 +56,8 @@ TICKET_BY_KIND = {
     "merge_rows": WRITE_FORMS, "return_changed_rows": WRITE_FORMS, "create_global_temp_table": WRITE_FORMS,
     "read_changed_rows": TRIGGERS,
     "jump": GOTO, "declare_label": GOTO,
+    "window": WINDOWS, "row_number": WINDOWS, "named_query": CTES, "wait": WAITFOR,
+    "role_membership": LOOKUPS, "catalog_lookup": LOOKUPS, "session_value": SERVER_PROPERTIES,
     "sort": SORT, "union": UNION_AND_VALUES, "read_values": UNION_AND_VALUES, "limit": UNION_AND_VALUES,
     "scalar_query": SCALAR_SUBQUERY, "exists": EXISTS,
     "convert": CONVERSIONS, "try_convert": CONVERSIONS, "convert_with_style": CONVERSIONS,
