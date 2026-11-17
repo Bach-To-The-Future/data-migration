@@ -801,7 +801,8 @@
       ],
       "types": [],
       "behaviour": "Only the failing statement is rolled back; the batch continues and the third insert runs ([XACT_ABORT][m-xactabort], [transaction guide][m-txguide])",
-      "evidence": "Inferred"
+      "evidence": "Inferred",
+      "wording": "Without TRY and with XACT_ABORT off, only the failing statement is undone and the procedure goes on with the next statement"
     },
     {
       "id": "7.3",

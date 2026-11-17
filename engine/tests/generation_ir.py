@@ -13,7 +13,7 @@ from generation_helpers import names_for
 
 from migrt.core.differences import Catalogue
 from migrt.core.ir import Artefact, Node, SourceSpan, VType
-from migrt.sources.sqlserver import differences as source_differences
+from migrt.sources.sqlserver import differences as source_differences, statement_effects
 from migrt.targets.pyspark import differences as target_differences, generator
 
 TABLE = "RetailSample.sales.Order"
@@ -99,4 +99,5 @@ def generate(artefact: Artefact) -> Result:
     names = names_for(types.SimpleNamespace(objects=[]), objects)
     dependencies = generator.Dependencies(kinds={TABLE: "table", FUNCTION: "scalar_function"}, generated={FUNCTION})
     differences = Catalogue(source_differences.half(), target_differences.half())
-    return Result(artefact, generator.generate(artefact, "snapshot-test", "0.0.0", differences, names, dependencies))
+    return Result(artefact, generator.generate(artefact, "snapshot-test", "0.0.0", differences, names, dependencies,
+                                               statement_effects.effect))

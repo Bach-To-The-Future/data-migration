@@ -18,7 +18,7 @@ from collections.abc import Callable
 
 from ...core import scopes, vocabulary
 from ...core.catalog import CatalogReader
-from ...core.ir import Artefact, Node
+from ...core.ir import Artefact, Node, VType
 from . import collations, names, unparsed
 from .extractor import SOURCE
 from . import types as T
@@ -154,8 +154,19 @@ class Lowering(Errors):
                 self.row_sets[fact["name"].casefold()] = (fact["name"], self.table_type_columns(fact["declared_type"]))
             else:
                 self.variables[name.casefold()] = (fact["name"], t)
-            out.append(Node("declare_parameter", self.span(p), t, attrs, role="parameter"))
+            out.append(Node("declare_parameter", self.span(p), t, attrs, self.parameter_default(p, t), role="parameter"))
         return out
+
+    def parameter_default(self, p, t: VType) -> list[Node]:
+        """The default as an expression converted to the parameter's type, the value the parameter takes when its
+        argument is left out or is `DEFAULT`. One lowering cannot express is kept as written, with its reason."""
+        if p.Value is None:
+            return []
+        try:
+            value = self.store(self.expression(p.Value), t)
+        except Opaque as opaque:
+            value = self.opaque(p.Value, opaque.reason)
+        return [as_role(value, "default")]
 
     def table_type_columns(self, declared_type: str) -> dict:
         found = [o for o in self.reader.snapshot.objects if o.kind == "table_type"

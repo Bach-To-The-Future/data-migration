@@ -9,6 +9,7 @@ from .errors import (CounterNotInitialised, ErrorFieldUnknown, ErrorMappingNotLo
                      ScopeAborted, SettingNotSet, TsqlError, UnknownSetting, UnknownTable, UnsupportedCollation,
                      UnsupportedRaise, VersionVacuumed)
 from .recovery import ForcedRecovery, Report, forced_recoveries, recover
+from .procedures import DEFAULT, ProcedureResult
 from .session import Guard, Message, SessionState, TryBlock
 from .source_errors import Rendered, SourceErrors
 from .state import create_state_table, state_table_ddl
@@ -17,7 +18,7 @@ from .tables import Check, Column, ForeignKey, TableSpec, Trigger, Unique
 from .transactions import Transaction
 
 __all__ = [
-    "VERSION", "Config", "SessionState", "Transaction", "TableSpec", "Column", "Unique", "Check", "ForeignKey", "Trigger",
+    "VERSION", "Config", "SessionState", "DEFAULT", "ProcedureResult", "Transaction", "TableSpec", "Column", "Unique", "Check", "ForeignKey", "Trigger",
     "TsqlError", "UnknownTable", "ManualWrite", "UnsupportedCollation", "CounterNotInitialised", "SettingNotSet",
     "UnknownSetting", "RestoreRefused", "VersionVacuumed", "RecoveryRefused", "LeaseHeld", "LeaseWaitTimeout", "LeaseLost",
     "Failure", "ErrorMappingNotLoaded", "MissingDetail", "ErrorFieldUnknown", "RethrowOutsideHandler", "ScopeAborted",

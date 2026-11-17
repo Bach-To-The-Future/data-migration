@@ -9,7 +9,7 @@ from lowering_helpers import lower_text
 from migrt.core import checker, name_adjustments
 from migrt.core.differences import Catalogue
 from migrt.core.ir import Artefact
-from migrt.sources.sqlserver import differences as source_differences, lowering
+from migrt.sources.sqlserver import differences as source_differences, lowering, statement_effects
 from migrt.targets.pyspark import differences as target_differences, generator
 from migrt.targets.pyspark.layer1 import Layer1Result
 from migrt.targets.pyspark import names as target_names
@@ -58,5 +58,6 @@ def generate_text(snapshot, sql: str, kind: str = "view", name: str = "vTest", s
     dependencies = generator.Dependencies(kinds={**(dependency_kinds or {}), **(generated_in_project or {})},
                                           generated=set(generated_in_project or {}))
     differences = Catalogue(source_differences.half(), target_differences.half())
-    file = generator.generate(artefact, "snapshot-test", "0.0.0", differences, names, dependencies)
+    file = generator.generate(artefact, "snapshot-test", "0.0.0", differences, names, dependencies,
+                              statement_effects.effect)
     return Generated(artefact, file, generator.check(artefact, file))
