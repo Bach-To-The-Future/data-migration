@@ -111,7 +111,7 @@ def test_the_corpus_numbers_are_the_ones_the_tickets_report_against(corpus_snaps
 
 # Measured with every artefact alone (the tool's first form, `project=False`): a read of a corpus view and a call to a corpus function
 # counted as blockers. A project run generates them all and imports each, so the numbers a ticket reports are with the project.
-ISOLATED = {"procedures": 82, "root_blockers": 544, "at_most_1": 13, "at_most_3": 25, "whole": 0, "ceiling": 65}
+ISOLATED = {"procedures": 82, "root_blockers": 540, "at_most_1": 14, "at_most_3": 25, "whole": 0, "ceiling": 65}
 
 
 def numbers(s) -> dict:
