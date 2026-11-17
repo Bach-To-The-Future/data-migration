@@ -109,6 +109,7 @@ class SessionState:
         # what @@ROWCOUNT, @@ERROR, @@IDENTITY and friends hold
         self.rowcount, self.at_error, self.identity = 0, 0, None
         self.twin = Twins(self)                         # T-SQL's rules on single values, for procedural code
+        self.options: dict[str, bool] = {"NOCOUNT": False}   # the session options generated code sets (`set_option`)
         self.error: TsqlError | None = None
         self.messages: list[str] = []
         self.message_records: list[Message] = []
@@ -202,6 +203,13 @@ class SessionState:
         """`@@DBTS`: the last row version handed out in a database, as a number."""
         row = self.state.get("rowversion", database)
         return int(row["value"]) if row else 0
+
+    def set_option(self, name: str, on: bool) -> None:
+        """`SET <option> ON|OFF`. An option a procedure or trigger sets is back to what it was when that scope ends; one a batch
+        sets lasts for the session. An option this library does not hold is refused, never ignored."""
+        if name not in self.options:
+            raise KeyError(f"{name} is not a session option the library holds: {sorted(self.options)}")
+        self.options[name] = bool(on)
 
     def result(self, return_code: int, outputs: dict[str, Any], result_sets: list[DataFrame]) -> ProcedureResult:
         """What a procedure gives back: its return code, its output parameters and its result sets, in order. A procedure
@@ -391,6 +399,7 @@ class SessionState:
         scope, with a different number of transactions open than it was called with, SQL Server raises error 266 in the
         caller, which goes on. A transaction the procedure opened and did not close is still open there."""
         entered = self._tx.trancount
+        options = dict(self.options)
         scope = _Scope(procedure=procedure)
         self._scopes.append(scope)
         try:
@@ -404,6 +413,7 @@ class SessionState:
             raise error from exc
         finally:
             self._scopes.pop()
+            self.options = options              # an option set in the scope ends with it
             for spec in scope.temps.values():
                 self._drop_physical(spec.target)
             for name in scope.owned:

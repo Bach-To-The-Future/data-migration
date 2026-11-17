@@ -104,10 +104,10 @@ def test_an_xml_cast_is_manual_work_for_good_and_waits_for_nothing():
 
 # ---------------------------------------------------------------- waiting for a ticket that builds generation
 
-def test_procedural_statements_wait_for_procedural_generation():
-    result = ir.generate(ir.routine("procedure", node("jump", "statement", label="done"), node("set_session_option", "statement")))
+def test_procedural_statements_wait_for_the_ticket_that_builds_their_kind():
+    result = ir.generate(ir.routine("procedure", node("jump", "statement", label="done"), node("emit_message", "statement")))
 
-    assert items(result) and all(i.waits_for == ("#50",) for i in items(result))
+    assert sorted(i.waits_for for i in items(result)) == [("#119",), ("#50",)]     # a jump has no ticket of its own yet
     assert all("procedural generation" in i.reason for i in items(result))
     no_ticket_numbers_in_the_text(result)
 
@@ -135,7 +135,7 @@ def test_reading_a_temp_table_waits_for_procedural_generation():
 
     result = ir.generate(ir.view(node("project", "", temp, column("output", "Status", relation="t"))))
 
-    assert one_item(result).waits_for == ("#50",)
+    assert one_item(result).waits_for == ("#120",)
     no_ticket_numbers_in_the_text(result)
 
 

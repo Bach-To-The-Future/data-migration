@@ -223,7 +223,7 @@ def test_a_procedure_that_reads_the_error_number_and_could_fail_needs_guarded_st
     assert generated.layer1.passed, generated.layer1.failures
     assert generated.file.fails_when_called
     assert any("@@ERROR" in m.reason or "guarded" in m.reason for m in generated.file.manual_items)
-    assert all(m.waits_for == ("#50",) for m in generated.file.manual_items)
+    assert all(m.waits_for == ("#120",) for m in generated.file.manual_items)
 
 
 # ---------------------------------------------------------------- what each statement leaves in @@ROWCOUNT and @@ERROR
@@ -329,8 +329,8 @@ def test_a_procedure_with_a_statement_the_target_cannot_generate_reports_that_st
     assert generated.layer1.passed, generated.layer1.failures
     assert generated.file.fails_when_called
     kinds = sorted(n.kind for n in generated.artefact.nodes() if any(m.node == n.id for m in generated.file.manual_items))
-    assert kinds == ["call_procedure", "set_session_option"]
-    assert all(m.waits_for == ("#50",) for m in generated.file.manual_items)
+    assert kinds == ["call_procedure"]
+    assert all(m.waits_for == ("#118",) for m in generated.file.manual_items)
     assert not any("#" in m.reason for m in generated.file.manual_items)
     namespace: dict = {}
     exec(compile(generated.text, "uspTest.py", "exec"), namespace)
@@ -382,7 +382,7 @@ def test_a_trigger_that_reads_the_changed_rows_is_still_reported_statement_by_st
                               timing="AFTER", events=("INSERT",))
 
     assert generated.layer1.passed, generated.layer1.failures
-    assert generated.file.fails_when_called and {m.waits_for for m in generated.file.manual_items} == {("#50",)}
+    assert generated.file.fails_when_called and {m.waits_for for m in generated.file.manual_items} == {("#120",)}
 
 
 def _int():

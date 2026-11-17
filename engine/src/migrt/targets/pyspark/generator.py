@@ -66,7 +66,8 @@ SPECIAL_CAUSES = {*untranslatable.SPECIAL, untranslatable.STALE, untranslatable.
 # What a statement may be without being able to fail: reading these, comparing and assigning values cannot raise an error.
 CANNOT_FAIL = frozenset({"procedure_body", "trigger_body", "batch_script_body", "batch", "declare_parameter", "literal", "null",
                          "variable", "compare", "and", "or", "not", "is_null", "rows_affected", "last_statement_error",
-                         "declare_variable", "assign", "if", "while", "break", "continue", "return"})
+                         "declare_variable", "assign", "if", "while", "break", "continue", "return",
+                         "set_session_option"})
 VALUE_TYPES = ("integer", "string")      # the types a variable's value is held as in procedural code
 
 
@@ -545,7 +546,8 @@ class Generator:
         self.refuse_detected(node)
         handler = STATEMENTS.by_kind.get(node.kind)
         if handler is None:
-            raise Unsupported(node, untranslatable.procedural_reason(node.kind), (untranslatable.PROCEDURAL,))
+            raise Unsupported(node, untranslatable.procedural_reason(node.kind),
+                              untranslatable.waits_for_kind(node.kind, self.handled) or (untranslatable.PROCEDURAL,))
         self.draft.comments(node, self.pad)
         self.scopes.append(node.attrs.get("scope", {}).get("variables", []))
         try:
@@ -625,6 +627,22 @@ class Generator:
             self.depth -= 1
         self.block(s.children_with("body"), container, s)
 
+    @STATEMENTS("set_session_option")
+    def set_session_option(self, s: Node, container: Node) -> None:
+        option = s.attrs["option"]
+        if option == "IDENTITY_INSERT":
+            raise Unsupported(s, f"SET IDENTITY_INSERT {s.attrs['table']} lets a write give the identity column a value of its "
+                                 "own, which the write wrappers do and writes are not generated yet",
+                              (untranslatable.WRITES,))
+        if option != "NOCOUNT":
+            raise Unsupported(s, f"SET {option} is not generated yet", (untranslatable.SET_OPTIONS,))
+        note = (f"{self.artefact.identity}: SET NOCOUNT only records the option in session state: generated code sends no "
+                "row counts to a client, so there is nothing for it to suppress")
+        if note not in self.draft.assumptions:
+            self.draft.assumptions.append(note)
+        self.put(f"ss.set_option({option!r}, {bool(s.attrs['value'])})", [s])
+        self.done(s)
+
     @STATEMENTS("break")
     def break_statement(self, s: Node, container: Node) -> None:
         self.put("break", [s])
@@ -688,10 +706,7 @@ class Generator:
     def type_waits(t: VType | None) -> tuple[str, ...]:
         """What a type with no Python value in procedural code waits for: the number, date and time helpers for a number or
         a moment, and the rest of this work for any other."""
-        if t is not None and t.name in ("decimal", "money", "float", "date", "local_timestamp", "timestamp_with_offset",
-                                        "time_of_day"):
-            return (untranslatable.NUMBER_HELPERS,)
-        return (untranslatable.PROCEDURAL,)
+        return (untranslatable.NUMBER_HELPERS,)
 
     def integer_type(self, node: Node) -> tuple[int, bool]:
         """The width and sign of an integer-typed node, or the refusal to generate anything else in procedural code."""
@@ -777,7 +792,7 @@ class Generator:
         if self.guards_needed:
             raise Unsupported(node, "a procedure that reads @@ERROR and has a statement that could fail needs each statement "
                                     "in a guarded block, so that the error number is there to read and the procedure goes "
-                                    "on: guarded blocks are not generated yet", (untranslatable.PROCEDURAL,))
+                                    "on: guarded blocks are not generated yet", (untranslatable.TEMP_TABLES_AND_GUARDS,))
         return "ss.at_error"
 
     @BODIES("batch_script_body")
@@ -913,7 +928,7 @@ class Generator:
             raise Unsupported(node, "reading a named query has no PySpark generation yet")
         if node.attrs.get("temp_table") or node.attrs.get("row_set"):
             raise Unsupported(node, "reading a temp table or a table variable is procedural code, which is not "
-                                    "generated yet", (untranslatable.PROCEDURAL,))
+                                    "generated yet", (untranslatable.TEMP_TABLES_AND_GUARDS,))
         table, alias = node.attrs["table"], node.attrs["alias"]
         var = python_name(alias, self.draft.taken)
         kind = self.dependencies.kinds.get(table, "table")
