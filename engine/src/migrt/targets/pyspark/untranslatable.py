@@ -24,7 +24,6 @@ TEMP_TABLES_AND_GUARDS = "#120"    # temp tables, table variables, SELECT @v =, 
 WRITE_FORMS = "#121"           # MERGE, OUTPUT, TOP in writes, INSERT ... EXEC, global temp tables
 TRIGGERS = "#122"              # triggers fired by the write wrapper
 CURSORS = "#124"               # faithful cursors
-SORT = "#128"                  # ORDER BY
 UNION_AND_VALUES = "#129"      # UNION, VALUES row sources, TOP over them
 SCALAR_SUBQUERY = "#130"       # a query used as one value
 EXISTS = "#131"                # EXISTS
@@ -60,7 +59,7 @@ TICKET_BY_KIND = {
     "window": WINDOWS, "row_number": WINDOWS, "named_query": CTES, "wait": WAITFOR,
     "for_each_row": RAISING, "atomic_region": RAISING, "named_result": RAISING, "column_expression_function": RAISING,
     "role_membership": LOOKUPS, "catalog_lookup": LOOKUPS, "session_value": SERVER_PROPERTIES,
-    "sort": SORT, "union": UNION_AND_VALUES, "read_values": UNION_AND_VALUES, "limit": UNION_AND_VALUES,
+    "union": UNION_AND_VALUES, "read_values": UNION_AND_VALUES, "limit": UNION_AND_VALUES,
     "scalar_query": SCALAR_SUBQUERY, "exists": EXISTS,
     "convert": CONVERSIONS, "try_convert": CONVERSIONS, "convert_with_style": CONVERSIONS,
     "concat_null_propagating": STRING_HELPERS, "trim": STRING_HELPERS, "upper": STRING_HELPERS, "left_part": STRING_HELPERS,
