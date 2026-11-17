@@ -1,6 +1,6 @@
 """The build tickets and their blocking graph, compactly, from GitHub.
 
-    python tools/tickets.py                 every sub-issue of the parent (default #35): one line each
+    python tools/tickets.py                 every sub-issue of the parent (default #35), and theirs in turn: one line each
     python tools/tickets.py --ticket 87     one ticket: what blocks it and what it blocks
     python tools/tickets.py --open          only open tickets
     python tools/tickets.py --json          the same data as JSON
@@ -24,8 +24,23 @@ def gh(path: str):
     return json.loads(out.replace("][", ","))
 
 
+def sub_issues(parent: int, seen: set[int] | None = None) -> list[dict]:
+    """Every sub-issue of the parent, and of each of those in turn (GitHub allows 100 sub-issues to a parent, so a ticket that
+    has grown past that is split under one of its own children)."""
+    seen = set() if seen is None else seen
+    found = []
+    for issue in gh(f"issues/{parent}/sub_issues"):
+        if issue["number"] in seen:
+            continue
+        seen.add(issue["number"])
+        found.append(issue)
+        if issue.get("sub_issues_summary", {}).get("total", 0):
+            found += sub_issues(issue["number"], seen)
+    return found
+
+
 def load(parent: int) -> list[dict]:
-    subs = gh(f"issues/{parent}/sub_issues")
+    subs = sub_issues(parent)
 
     def edges(issue):
         blockers = gh(f"issues/{issue['number']}/dependencies/blocked_by")
