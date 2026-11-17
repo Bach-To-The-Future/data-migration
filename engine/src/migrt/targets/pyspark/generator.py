@@ -66,7 +66,7 @@ SPECIAL_CAUSES = {*untranslatable.SPECIAL, untranslatable.STALE, untranslatable.
 # What a statement may be without being able to fail: reading these, comparing and assigning values cannot raise an error.
 CANNOT_FAIL = frozenset({"procedure_body", "trigger_body", "batch_script_body", "batch", "declare_parameter", "literal", "null",
                          "variable", "compare", "and", "or", "not", "is_null", "rows_affected", "last_statement_error",
-                         "first_non_null", "between", "in_list",
+                         "first_non_null", "between", "in_list", "null_replacement",
                          "declare_variable", "assign", "if", "while", "break", "continue", "return"})
 VALUE_TYPES = ("integer", "string")      # the types a variable's value is held as in procedural code
 
@@ -800,20 +800,29 @@ class Generator:
 
     @VALUES("first_non_null")
     def value_first_non_null(self, node: Node) -> str:
-        return f"ss.twin.first_non_null({', '.join(self.values(node))})"
+        first, *rest = self.values(node)
+        return f"ss.twin.first_non_null({', '.join([first] + [f'lambda: {code}' for code in rest])})"
 
     @VALUES("between")
     def value_between(self, node: Node) -> str:
-        if node.attrs.get("rule"):
-            raise Unsupported(node, f"BETWEEN over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        self.refuse_named_rule(node)
         return f"ss.twin.between({', '.join(self.values(node))})"
 
     @VALUES("in_list")
     def value_in_list(self, node: Node) -> str:
-        if node.attrs.get("rule"):
-            raise Unsupported(node, f"IN over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        self.refuse_named_rule(node)
         value = self.value(self.arguments(node)[0])
         return f"ss.twin.in_list({', '.join([value] + [self.value(x) for x in node.children_with('item')])})"
+
+    @VALUES("null_replacement")
+    def value_null_replacement(self, node: Node) -> str:
+        """`ISNULL(a, b)`: `a`, or `b` where `a` is NULL. Only where `b` already has `a`'s type: a replacement SQL Server would
+        convert is left to the conversions."""
+        a, b = self.arguments(node)
+        if b.value_type != node.value_type or node.value_type.name not in VALUE_TYPES:
+            raise Unsupported(node, f"ISNULL with a replacement of type {b.type} for {node.type} is not generated in procedural "
+                                    "code yet", self.type_waits(node.value_type))
+        return f"ss.twin.first_non_null({self.value(a)}, lambda: {self.value(b)})"
 
     @VALUES("rows_affected")
     def value_rows_affected(self, node: Node) -> str:
@@ -1231,17 +1240,21 @@ class Generator:
     def expr_first_non_null(self, node: Node, grouped: dict) -> str:
         return f"F.coalesce({', '.join(self.expr(x, grouped) for x in self.arguments(node))})"
 
+    @staticmethod
+    def refuse_named_rule(node: Node) -> None:
+        """A comparison of strings that names a rule (a collation) needs the comparison helpers."""
+        if node.attrs.get("rule"):
+            raise Unsupported(node, f"{node.kind} over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+
     @EXPRESSIONS("between")
     def expr_between(self, node: Node, grouped: dict) -> str:
-        if node.attrs.get("rule"):
-            raise Unsupported(node, f"BETWEEN over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        self.refuse_named_rule(node)
         value, low, high = (self.expr(x, grouped) for x in self.arguments(node))
         return f"{value}.between({low}, {high})"
 
     @EXPRESSIONS("in_list")
     def expr_in_list(self, node: Node, grouped: dict) -> str:
-        if node.attrs.get("rule"):
-            raise Unsupported(node, f"IN over strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+        self.refuse_named_rule(node)
         value = self.expr(self.arguments(node)[0], grouped)
         return f"{value}.isin({', '.join(self.expr(x, grouped) for x in node.children_with('item'))})"
 

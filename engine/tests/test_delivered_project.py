@@ -247,7 +247,7 @@ def test_a_construct_replaced_by_a_failure_is_reported_as_manual_work_with_the_r
 
     [item] = read_json(result.report_data_path)["artefacts"]
     assert all(c["status"] == "manual work" for c in item["constructs"]), item["constructs"]
-    assert any("IN over strings" in c["reason"] for c in item["constructs"])
+    assert any("in_list over strings" in c["reason"] for c in item["constructs"])
     assert any("its code is not generated, because of manual work 1" in c["reason"] for c in item["constructs"])
 
 

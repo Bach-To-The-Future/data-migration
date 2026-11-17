@@ -73,6 +73,7 @@ def of_kind(artefact: Artefact, kind: str):
 def parameter(name: str, type_: str = "int", *, direction: str = "input", length: int = 0, readonly: bool = False,
               default=None) -> dict:
     """A procedure parameter fact as the extractor reads it (an int, or a varchar of `length`)."""
-    shape = {"int": (4, 10, 0), "varchar": (length, 0, 0), "datetime": (8, 23, 3)}[type_]
+    shape = {"int": (4, 10, 0), "bigint": (8, 19, 0), "smallint": (2, 5, 0), "tinyint": (1, 3, 0),
+             "varchar": (length, 0, 0), "datetime": (8, 23, 3)}[type_]
     return {"name": name, "declared_type": type_, "system_type": type_, "max_length": shape[0], "precision": shape[1],
             "scale": shape[2], "direction": direction, "readonly": readonly, "nullable": True, "default": default}

@@ -165,14 +165,13 @@ def test_a_statement_sets_the_row_count_and_resets_the_error_unless_it_keeps_the
 # ---------------------------------------------------------------- negation, COALESCE, BETWEEN and IN (issue #127)
 
 # SQL Server's unary minus keeps the type of its operand except for tinyint, which gives smallint (it has no negative values).
-NEGATION_RESULT = {"tinyint": (16, True), "smallint": (16, True), "int": (32, True), "bigint": (64, True)}
+NEGATION_RESULT = {"tinyint": (8, 16, True), "smallint": (16, 16, True), "int": (32, 32, True), "bigint": (64, 64, True)}   # operand bits, result
 
 
 @pytest.mark.parametrize("tsql_type", ["tinyint", "smallint", "int", "bigint"])
 def test_negation_gives_sql_servers_value_or_its_overflow_error(duo, tsql_type):
-    bits, signed = NEGATION_RESULT[tsql_type]
+    operand_bits, bits, signed = NEGATION_RESULT[tsql_type]
     ss = duo.session()
-    operand_bits = {"tinyint": 8, "smallint": 16, "int": 32, "bigint": 64}[tsql_type]
     for value in EDGES[operand_bits] + [None, 0, 1, 5]:
         rows, errors = duo.run(f"SELECT -CAST({sql(value)} AS {tsql_type}) AS r")
         if errors:

@@ -59,9 +59,14 @@ class Twins:
         return truth is True
 
     @staticmethod
-    def first_non_null(*values: Any) -> Any:
-        """`COALESCE`: the first argument that is not NULL, NULL if there is none."""
-        return next((v for v in values if v is not None), None)
+    def first_non_null(*items: Any) -> Any:
+        """`COALESCE`: the first argument that is not NULL, NULL if there is none. An argument given as a function is evaluated
+        only if the ones before it were NULL, as SQL Server evaluates it (COALESCE is a CASE): `COALESCE(1, 1 / 0)` is 1."""
+        for item in items:
+            value = item() if callable(item) else item
+            if value is not None:
+                return value
+        return None
 
     @classmethod
     def between(cls, value: Any, low: Any, high: Any) -> bool | None:
