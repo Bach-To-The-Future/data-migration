@@ -66,9 +66,15 @@ SPECIAL_CAUSES = {*untranslatable.SPECIAL, untranslatable.STALE, untranslatable.
 # What a statement may be without being able to fail: reading these, comparing and assigning values cannot raise an error.
 CANNOT_FAIL = frozenset({"procedure_body", "trigger_body", "batch_script_body", "batch", "declare_parameter", "literal", "null",
                          "variable", "compare", "and", "or", "not", "is_null", "rows_affected", "last_statement_error",
-                         "declare_variable", "assign", "if", "while", "break", "continue", "return",
-                         "set_session_option"})
+                         "declare_variable", "assign", "if", "while", "break", "continue", "return"})
 VALUE_TYPES = ("integer", "string")      # the types a variable's value is held as in procedural code
+
+
+def can_fail(node: Node) -> bool:
+    """Whether a statement or expression of a procedure could raise an error: setting NOCOUNT cannot, setting IDENTITY_INSERT can."""
+    if node.kind == "set_session_option":
+        return node.attrs.get("option") != "NOCOUNT"
+    return node.kind not in CANNOT_FAIL
 
 
 class Effect(Protocol):
@@ -475,7 +481,7 @@ class Generator:
         self.depth, self.collects = 1, role != "trigger"
         self.result_sets = python_name("result_sets", self.draft.taken)
         self.guards_needed = (any(n.kind == "last_statement_error" for n in container.walk())
-                              and any(n.kind not in CANNOT_FAIL for n in container.walk()))
+                              and any(can_fail(n) for n in container.walk()))
         self.result = "procedure" if self.collects else "none"
         self.account_for_parameters(declared)
         self.apply_defaults(declared, container)
@@ -635,7 +641,7 @@ class Generator:
                                  "own, which the write wrappers do and writes are not generated yet",
                               (untranslatable.WRITES,))
         if option != "NOCOUNT":
-            raise Unsupported(s, f"SET {option} is not generated yet", (untranslatable.SET_OPTIONS,))
+            raise ValueError(f"{s.id}: lowering emitted SET {option}, which this generator has no handling for")
         note = (f"{self.artefact.identity}: SET NOCOUNT only records the option in session state: generated code sends no "
                 "row counts to a client, so there is nothing for it to suppress")
         if note not in self.draft.assumptions:
@@ -705,8 +711,11 @@ class Generator:
     @staticmethod
     def type_waits(t: VType | None) -> tuple[str, ...]:
         """What a type with no Python value in procedural code waits for: the number, date and time helpers for a number or
-        a moment, and the rest of this work for any other."""
-        return (untranslatable.NUMBER_HELPERS,)
+        a moment, and what no ticket has taken yet for any other."""
+        if t is not None and t.name in ("decimal", "money", "float", "date", "local_timestamp", "timestamp_with_offset",
+                                        "time_of_day"):
+            return (untranslatable.NUMBER_HELPERS,)
+        return (untranslatable.PROCEDURAL,)
 
     def integer_type(self, node: Node) -> tuple[int, bool]:
         """The width and sign of an integer-typed node, or the refusal to generate anything else in procedural code."""
