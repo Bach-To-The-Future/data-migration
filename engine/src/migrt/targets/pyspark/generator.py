@@ -40,6 +40,7 @@ from collections.abc import Callable, Sequence
 from typing import NoReturn, Protocol
 
 from ...core import vocabulary
+from ...core.checker import OUTPUT
 from ...core.differences import Catalogue
 from ...core.ir import Artefact, Node, VType
 from . import layer1, untranslatable
@@ -1073,6 +1074,25 @@ class Generator:
         self.draft.emit("    )", [_shallow(node)])
         return selected
 
+    @PLAN_STEPS("sort")
+    def sort(self, node: Node) -> str:
+        """ORDER BY: nulls first ascending and last descending, which is also what SQL Server does. Rows with equal keys come in no
+        defined order on either side, so a report says so."""
+        source = self.plan(node.child("input"))
+        keys = []
+        for key in node.children_with("order"):
+            if key.attrs.get("rule"):
+                raise Unsupported(key, f"sorting by strings: {STRING_COMPARISON}", (untranslatable.STRING_HELPERS,))
+            ascending = key.attrs["direction"] == "ascending"
+            keys.append(f"{self.expr(key, {})}.{'asc_nulls_first' if ascending else 'desc_nulls_last'}()")
+        note = (f"{self.artefact.identity}: rows with equal sort keys come in no defined order, so a result set that is sorted "
+                "by keys that do not separate its rows may list those rows in another order from run to run")
+        if note not in self.draft.assumptions:
+            self.draft.assumptions.append(note)
+        var = python_name("sorted_rows", self.draft.taken)
+        self.step(node, f"{var} = {source}.orderBy({', '.join(keys)})")
+        return var
+
     def output_line(self, output: Node, generate) -> None:
         name = output.attrs["output_name"]
         code = self.draft.attempt(functools.partial(generate, output), output=output)
@@ -1109,6 +1129,8 @@ class Generator:
 
     @EXPRESSIONS("column")
     def expr_column(self, node: Node, grouped: dict) -> str:
+        if node.attrs["relation"] == OUTPUT:         # a sort key that names a column of the select list
+            return f'F.col("{node.attrs["column"]}")'
         ref = (node.attrs["relation"], node.attrs["column"])
         if grouped:
             if ref not in grouped:

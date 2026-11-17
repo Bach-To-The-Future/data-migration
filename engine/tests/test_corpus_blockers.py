@@ -19,7 +19,7 @@ sys.modules[spec.name] = tool          # a dataclass looks its module up while i
 spec.loader.exec_module(tool)
 
 # What the corpus gives today (see docs/corpus/blockers-baseline.md). A ticket that moves any of these updates them.
-PINNED = {"procedures": 82, "root_blockers": 544, "at_most_1": 13, "at_most_3": 25, "whole": 0, "ceiling": 65}
+PINNED = {"procedures": 82, "root_blockers": 540, "at_most_1": 14, "at_most_3": 25, "whole": 0, "ceiling": 65}
 
 
 # ---------------------------------------------------------------- the arithmetic
