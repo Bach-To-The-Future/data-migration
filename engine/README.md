@@ -159,6 +159,10 @@ CI runs the same script after a from-scratch corpus build, on every push to mast
 
 Tests that need no server, such as `tests/test_differences.py`, `test_secrets.py`, `test_name_adjustments.py`, `test_name_resolution.py` and `test_recognised_artefacts.py`, also run on the host for a quick loop: `cd engine && PYTHONPATH=src python -m pytest tests/test_differences.py`. The sandbox run above stays the gate.
 
+**How far the corpus is from generating whole** is measured by [`tools/corpus_blockers.py`](../tools/corpus_blockers.py): for each of the 82 corpus procedures and triggers, what still stops it, as root blockers (one for each procedure and kind of construct, with the cascades of a scope barrier collapsed), the procedures with at most 1 and at most 3 left, the whole ones against the ceiling (a procedure with dynamic SQL or a schema change is manual work for good), and the table by waiting ticket. Every ticket report quotes its output before and after (`--json before.json`, then `--compare before.json`); `tests/test_corpus_blockers.py` pins the numbers, and [`docs/corpus/blockers-baseline.md`](../docs/corpus/blockers-baseline.md) holds the full tables as they were when it was built. It runs in the toolbox:
+
+    docker compose -f sandbox/docker-compose.yml --profile tools run --no-deps --rm -T tools python tools/corpus_blockers.py --full
+
 **A refactor that must not change output** is checked with [`tools/generation_snapshot.py`](../tools/generation_snapshot.py), the standard check for it: capture everything generation produces for the three corpus databases before the change (each artefact's generated text, links and spans, manual items, assumptions, caveats, settings, layer-1 result and report entry, or the error it fails with), change the code, capture again, and compare byte for byte. The capture runs in the toolbox; the comparison needs only Python and names every file that differs, is missing, or exists on one side only (an empty capture is a failure). Capture twice on the same code first if in doubt: the two must be identical.
 
 ```
