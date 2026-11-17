@@ -368,9 +368,8 @@ class Expressions:
         t = operand.value_type
         if not T.is_numeric(t):
             raise Opaque(e, f"negating {t} is not lowered yet")
-        if t.name == "integer" and t.int_param("bits") == 8:
-            t = T.integer(16)               # a tinyint has no negative values: its negation is a smallint
-        return self.node("negate", e, t, children=[as_role(operand, "argument")])
+        result = T.integer(16) if t.name == "integer" and t.int_param("bits") == 8 else t   # tinyint has no negative values
+        return self.node("negate", e, result, children=[as_role(operand, "argument")])
 
     def x_BinaryExpression(self, e) -> Node:
         op = BINARY.get(str(e.BinaryExpressionType))
