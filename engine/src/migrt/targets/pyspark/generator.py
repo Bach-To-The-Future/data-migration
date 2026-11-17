@@ -553,7 +553,7 @@ class Generator:
         handler = STATEMENTS.by_kind.get(node.kind)
         if handler is None:
             raise Unsupported(node, untranslatable.procedural_reason(node.kind),
-                              untranslatable.waits_for_kind(node.kind, self.handled) or (untranslatable.PROCEDURAL,))
+                              untranslatable.waits_for_kind(node.kind, self.handled))
         self.draft.comments(node, self.pad)
         self.scopes.append(node.attrs.get("scope", {}).get("variables", []))
         try:
@@ -577,13 +577,11 @@ class Generator:
         """What the statement leaves in `@@ROWCOUNT` and `@@ERROR` once it has succeeded, as the source says it does. `rows`
         is the code of the count, for a statement that leaves the number of rows it read or changed."""
         if self.effects is None:
-            raise Unsupported(node, "what each statement leaves in @@ROWCOUNT and @@ERROR was not given to generation",
-                              (untranslatable.PROCEDURAL,))
+            raise ValueError("what each statement leaves in @@ROWCOUNT and @@ERROR was not given to generation")
         effect = self.effects(node)
         counts = {"keeps": None, "one": "1", "zero": "0", "rows": rows}.get(effect.rows, ...)
         if counts is ... or (effect.rows == "rows" and rows is None) or effect.error not in ("keeps", "reset"):
-            raise Unsupported(node, f"what a {node.kind} leaves in @@ROWCOUNT and @@ERROR is not known to generation",
-                              (untranslatable.PROCEDURAL,))
+            raise ValueError(f"{node.id}: what a {node.kind} leaves in @@ROWCOUNT and @@ERROR is not known to generation")
         if counts is None and effect.error == "keeps":
             return
         self.put(f"ss.statement_done({counts}{'' if effect.error == 'reset' else ', reset_error=False'})",
@@ -692,7 +690,8 @@ class Generator:
         self.refuse_detected(node)
         handler = VALUES.by_kind.get(node.kind)
         if handler is None:
-            raise Unsupported(node, f"{node.kind} is not generated in procedural code yet", (untranslatable.PROCEDURAL,))
+            raise Unsupported(node, f"{node.kind} is not generated in procedural code yet",
+                              untranslatable.waits_for_kind(node.kind, self.handled))
         code = handler(self, node)
         self.draft.pending.append((node.id, code))
         self.note_readable(node)
@@ -711,11 +710,11 @@ class Generator:
     @staticmethod
     def type_waits(t: VType | None) -> tuple[str, ...]:
         """What a type with no Python value in procedural code waits for: the number, date and time helpers for a number or
-        a moment, and what no ticket has taken yet for any other."""
+        a moment, and the ticket that holds the other types for any other."""
         if t is not None and t.name in ("decimal", "money", "float", "date", "local_timestamp", "timestamp_with_offset",
                                         "time_of_day"):
             return (untranslatable.NUMBER_HELPERS,)
-        return (untranslatable.PROCEDURAL,)
+        return (untranslatable.VALUE_TYPES,)
 
     def integer_type(self, node: Node) -> tuple[int, bool]:
         """The width and sign of an integer-typed node, or the refusal to generate anything else in procedural code."""
@@ -861,11 +860,12 @@ class Generator:
 
     @staticmethod
     def statement_reason(container: Node, node: Node) -> tuple[str, tuple[str, ...]]:
-        """Why a statement no finding covers is manual work, and what it waits for."""
+        """Why a statement no finding covers is manual work, and what it waits for: a scalar function waits for raising it to one
+        expression, and a multi-statement table function for the table variable that is its result."""
         if container.kind == "scalar_function_body":
             return ("this function is more than one expression, so it is not a column expression; raising it to "
                     "one and the Python UDF fallback are not built yet", (UDF_FALLBACK,))
-        return untranslatable.procedural_reason(node.kind), (untranslatable.PROCEDURAL,)
+        return untranslatable.procedural_reason(node.kind), (untranslatable.TEMP_TABLES_AND_GUARDS,)
 
     @staticmethod
     def stub_message(name: str, noun: str, count: int) -> str:

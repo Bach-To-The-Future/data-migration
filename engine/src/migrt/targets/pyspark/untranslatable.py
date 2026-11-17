@@ -18,19 +18,26 @@ from ...core import vocabulary
 from ...core.ir import Artefact, Node
 
 # What a construct waits for, as `waits_for` names it (never in a reason, which a client may read).
-PROCEDURAL = "#50"             # procedural generation: what no ticket of its own has taken (its work moved to the tickets of TICKET_BY_KIND)
 WRITES = "#118"                # writes and EXEC
 TRANSACTIONS_AND_ERRORS = "#119"   # transactions, XACT_ABORT, TRY/CATCH, messages
 TEMP_TABLES_AND_GUARDS = "#120"    # temp tables, table variables, SELECT @v =, guarded statements
 WRITE_FORMS = "#121"           # MERGE, OUTPUT, TOP in writes, INSERT ... EXEC, global temp tables
 TRIGGERS = "#122"              # triggers fired by the write wrapper
 CURSORS = "#124"               # faithful cursors
+EXPRESSION_BASICS = "#127"     # negate, COALESCE, BETWEEN, IN
+SORT = "#128"                  # ORDER BY
+UNION_AND_VALUES = "#129"      # UNION, VALUES row sources, TOP over them
+SCALAR_SUBQUERY = "#130"       # a query used as one value
+EXISTS = "#131"                # EXISTS
+CONVERSIONS = "#132"           # CAST and CONVERT
+GOTO = "#133"                  # GOTO and labels
+VALUE_TYPES = "#134"           # bit, string conversions, table-valued parameters, the other non-number types
 LOWERING_ASSIST = "#63"        # lowering assist
 NUMBER_HELPERS = "#87"         # the support library's number, date and time helpers
 DOOMED_TRANSACTIONS = "#113"   # the library modelling doomed transactions, which reading XACT_STATE() depends on
 STRING_HELPERS = "#47"         # the support library's comparison, collation and string helpers
 # The ticket that builds the generation of each statement kind not generated yet: a construct of that kind is manual work for want
-# of it. A kind not here waits for PROCEDURAL.
+# of it. A kind not here waits for nothing: no ticket has taken it, which a manual item says by an empty `waits_for`.
 TICKET_BY_KIND = {
     "insert_rows": WRITES, "update_rows": WRITES, "delete_rows": WRITES, "call_procedure": WRITES,
     "begin_transaction": TRANSACTIONS_AND_ERRORS, "commit_transaction": TRANSACTIONS_AND_ERRORS,
@@ -44,6 +51,15 @@ TICKET_BY_KIND = {
     "assign_from_single_value": TEMP_TABLES_AND_GUARDS,
     "merge_rows": WRITE_FORMS, "return_changed_rows": WRITE_FORMS, "create_global_temp_table": WRITE_FORMS,
     "read_changed_rows": TRIGGERS,
+    "jump": GOTO, "declare_label": GOTO,
+    "negate": EXPRESSION_BASICS, "first_non_null": EXPRESSION_BASICS, "between": EXPRESSION_BASICS, "in_list": EXPRESSION_BASICS,
+    "sort": SORT, "union": UNION_AND_VALUES, "read_values": UNION_AND_VALUES, "limit": UNION_AND_VALUES,
+    "scalar_query": SCALAR_SUBQUERY, "exists": EXISTS,
+    "convert": CONVERSIONS, "try_convert": CONVERSIONS, "convert_with_style": CONVERSIONS,
+    "concat_null_propagating": STRING_HELPERS, "trim": STRING_HELPERS, "upper": STRING_HELPERS, "left_part": STRING_HELPERS,
+    "date_add": NUMBER_HELPERS, "current_time": NUMBER_HELPERS, "date_diff_boundaries": NUMBER_HELPERS,
+    "round": NUMBER_HELPERS, "decimal_divide": NUMBER_HELPERS, "last_identity": NUMBER_HELPERS,
+    "next_sequence_value": NUMBER_HELPERS,
     "declare_cursor": CURSORS, "open_cursor": CURSORS, "fetch_cursor": CURSORS, "fetch_status": CURSORS,
     "close_cursor": CURSORS, "deallocate_cursor": CURSORS, "write_current_row": CURSORS,
 }
@@ -97,7 +113,7 @@ def waits_for_kind(kind: str, handled: AbstractSet[str]) -> tuple[str, ...]:
     if kind not in handled and kind in TICKET_BY_KIND:
         return (TICKET_BY_KIND[kind],)
     if kind not in handled and (vocabulary.part_of(kind) == "procedural" or kind == "batch"):
-        return (PROCEDURAL,)
+        return ()
     return ()
 
 

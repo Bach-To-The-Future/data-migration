@@ -199,7 +199,7 @@ def test_a_multi_statement_table_function_is_manual_work_statement_by_statement(
     assert generated.layer1.passed, generated.layer1.failures
     assert "def fnSplit(ss, List) -> DataFrame:" in generated.text
     assert "procedural generation" in manual_text(generated) and "#" not in manual_text(generated)
-    assert {w for m in generated.file.manual_items for w in m.waits_for} == {"#50"}
+    assert {w for m in generated.file.manual_items for w in m.waits_for} == {"#120"}
 
 
 # ---------------------------------------------------------------- procedures, triggers, batches

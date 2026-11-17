@@ -52,3 +52,11 @@ def test_every_sample_batch_script_generates_or_is_reported_with_its_reasons(cor
             failures[path.name] = layer1.failures
         assert file.manual_items or not file.fails_when_called, path.name
     assert count >= 1 and failures == {}
+
+
+def test_nothing_in_the_corpus_waits_for_a_ticket_that_is_closed(corpus_snapshot):
+    """A manual item waits for the open ticket that builds its kind, or for nothing (manual work for good)."""
+    waits = {w for _, artefact, _ in lowered_modules(corpus_snapshot) if artefact.artefact_type in ("procedure", "trigger")
+             for m in generated(corpus_snapshot, artefact, artefact.artefact_type)[0].manual_items for w in m.waits_for}
+
+    assert waits and "#50" not in waits, sorted(waits)
