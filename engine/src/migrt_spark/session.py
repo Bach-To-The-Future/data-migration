@@ -30,7 +30,9 @@ from .config import TRIGGER_NESTING_LIMIT, VERSION_TAG, Config
 from .errors import (CounterNotInitialised, ErrorFieldUnknown, ErrorMappingNotLoaded, Failure, LeaseHeld, LeaseLost,
                      LeaseWaitTimeout, ManualWrite, RethrowOutsideHandler, ScopeAborted, TsqlError, UnknownTable,
                      UnsupportedRaise)
+from .procedures import ProcedureResult
 from .settings import Settings
+from .twins import Twins
 from .source_errors import Rendered, SourceErrors
 from .target_errors import Classified, SparkFailures
 from .state import StateTable, lit
@@ -106,6 +108,7 @@ class SessionState:
         self.prefix = f"ms_{VERSION_TAG}_{re.sub(r'[^0-9A-Za-z]', '_', run)}_"
         # what @@ROWCOUNT, @@ERROR, @@IDENTITY and friends hold
         self.rowcount, self.at_error, self.identity = 0, 0, None
+        self.twin = Twins(self)                         # T-SQL's rules on single values, for procedural code
         self.error: TsqlError | None = None
         self.messages: list[str] = []
         self.message_records: list[Message] = []
@@ -199,6 +202,19 @@ class SessionState:
         """`@@DBTS`: the last row version handed out in a database, as a number."""
         row = self.state.get("rowversion", database)
         return int(row["value"]) if row else 0
+
+    def result(self, return_code: int, outputs: dict[str, Any], result_sets: list[DataFrame]) -> ProcedureResult:
+        """What a procedure gives back: its return code, its output parameters and its result sets, in order. A procedure
+        returns an integer: `RETURN NULL` gives zero, as SQL Server does."""
+        return ProcedureResult(0 if return_code is None else return_code, outputs, result_sets)
+
+    def statement_done(self, rows: int | None = None, *, reset_error: bool = True) -> None:
+        """What a statement leaves behind when it succeeds: the number of rows it read or changed in `@@ROWCOUNT` (`None`
+        for a statement that keeps the count), and a zero in `@@ERROR` unless it keeps that too."""
+        if rows is not None:
+            self.rowcount = rows
+        if reset_error:
+            self.at_error = 0
 
     def print(self, text: str) -> None:
         self.messages.append(text)

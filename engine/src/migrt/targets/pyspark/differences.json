@@ -466,7 +466,8 @@
       "section": "7. Errors and transactions",
       "behaviour": "An uncaught Python exception stops the script at the second statement, so the third never runs. This is Python's behaviour and is not stated in the Spark documentation",
       "reproduces": "A SQL compound statement with a `CONTINUE HANDLER`, which resumes at the next statement ([Spark SQL scripting][s-scripting], [compound statement][d-compound]); in Python, a `try` around each statement",
-      "evidence": "Inferred"
+      "evidence": "Inferred",
+      "wording": "A statement that fails ends the function with its error, and the statements after it do not run"
     },
     {
       "id": "7.3",

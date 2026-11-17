@@ -603,3 +603,18 @@ def test_the_checker_refuses_a_missing_or_a_spurious_stale_flag(corpus_snapshot)
     [assign] = of_kind(artefact, "assign")
     assign.attrs["scope_may_be_stale"] = "L1:1-L1:2"
     assert any("no scope barrier" in f.message for f in checked(artefact, reader))
+
+
+# ---------------------------------------------------------------- parameter defaults (issue #50)
+
+def test_a_parameter_default_is_lowered_as_an_expression_converted_to_the_parameters_type(corpus_snapshot):
+    artefact = lowered(corpus_snapshot, "RETURN @n;", "@n int = 5, @s varchar(10) = 'x', @z int = NULL, @plain int",
+                       [parameter("@n"), parameter("@s", "varchar", length=10), parameter("@z"), parameter("@plain")])
+
+    declared = {p.attrs["name"]: p for p in artefact.body.children_with("parameter")}
+    assert declared["@plain"].children_with("default") == []
+    assert declared["@n"].child("default").kind == "literal" and declared["@n"].child("default").attrs["value"] == 5
+    assert declared["@z"].child("default").kind == "null"
+    assert declared["@s"].child("default").attrs["value"] == "x"
+    # the text stays, for the report and the manifest
+    assert declared["@n"].attrs["default"] == "5"

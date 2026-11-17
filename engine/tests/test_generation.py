@@ -41,9 +41,11 @@ def manual_text(generated) -> str:
 
 
 def covered(generated) -> set[str]:
-    """Ids of every node under a manual item's replaced subtree."""
+    """Ids of every node whose code the file does not hold: under a manual item's replaced subtree, or in a procedural
+    function with manual work, which raises when called so that none of its code is there."""
     nodes = {n.id: n for n in generated.artefact.nodes()}
-    return {n.id for m in generated.file.manual_items for n in nodes[m.replaces].walk()}
+    return ({n.id for m in generated.file.manual_items for n in nodes[m.replaces].walk()}
+            | {n.id for root in generated.file.discarded for n in nodes[root].walk()})
 
 
 # ---------------------------------------------------------------- views and expressions
@@ -210,10 +212,12 @@ def test_a_procedure_keeps_its_parameters_and_reports_every_statement(corpus_sna
         kind="procedure", name="uspTest", parameters=[parameter("@n"), parameter("@name", "varchar", length=10)])
 
     assert generated.layer1.passed, generated.layer1.failures
-    assert "def uspTest(ss, *, n, name) -> None:" in generated.text
-    assert "set_session_option" in manual_text(generated) and "emit_result_set" in manual_text(generated)
+    assert "def uspTest(ss, *, n, name=...) -> object:" in generated.text
+    assert "set_session_option" in manual_text(generated) and "emit_result_set" not in manual_text(generated)
     assert "procedural generation" in manual_text(generated) and "#" not in manual_text(generated)
     assert generated.file.manual_items and all(m.waits_for == ("#50",) for m in generated.file.manual_items)
+    # the select is generated, but the procedure raises when called, so none of its code is in the file
+    assert generated.file.fails_when_called and "spark.read.table" not in generated.text
     assert {n.id for n in generated.artefact.nodes() if n.kind != "declare_parameter" and vocabulary.part_of(n.kind)} \
         <= covered(generated)
 
@@ -236,7 +240,7 @@ def test_a_batch_script_is_one_function_per_go_batch_and_a_list_giving_their_ord
 
     assert generated.layer1.passed, generated.layer1.failures
     assert generated.file.relative_path == "generated/RetailSample/batches/load.py"
-    assert "def batch_1(ss) -> None:" in generated.text and "def batch_2(ss) -> None:" in generated.text
+    assert "def batch_1(ss) -> object:" in generated.text and "def batch_2(ss) -> object:" in generated.text
     assert "BATCHES = [batch_1, batch_2]" in generated.text
 
 

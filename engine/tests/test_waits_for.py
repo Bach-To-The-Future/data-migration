@@ -105,7 +105,7 @@ def test_an_xml_cast_is_manual_work_for_good_and_waits_for_nothing():
 # ---------------------------------------------------------------- waiting for a ticket that builds generation
 
 def test_procedural_statements_wait_for_procedural_generation():
-    result = ir.generate(ir.routine("procedure", node("if", "statement"), node("set_session_option", "statement")))
+    result = ir.generate(ir.routine("procedure", node("jump", "statement", label="done"), node("set_session_option", "statement")))
 
     assert items(result) and all(i.waits_for == ("#50",) for i in items(result))
     assert all("procedural generation" in i.reason for i in items(result))

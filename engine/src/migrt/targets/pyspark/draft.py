@@ -86,6 +86,15 @@ class Lines:
             for line in comment.splitlines():
                 self.emit(f"{indent}# original: {line.strip()}")
 
+    def indent_since(self, mark: int, pad: str) -> None:
+        """Indent every line emitted after the first `mark` lines by `pad`, moving the spans of the expressions on them: for
+        code generated at the function's own level and placed inside a block."""
+        for i in range(mark, len(self.lines)):
+            if self.lines[i]:
+                self.lines[i] = pad + self.lines[i]
+        self.spans = {node: layer1.Span(s.line, s.start + len(pad), s.end + len(pad)) if s.line > mark else s
+                      for node, s in self.spans.items()}
+
     def append(self, block: "Lines") -> None:
         """Add another block after this one's lines, carrying its links and spans."""
         offset = len(self.lines)
@@ -113,15 +122,23 @@ class Draft(Lines):
         records why (`output` is the column that fails in place of the construct, `replaces` the root of the subtree
         whose code the file does not hold; by default the construct itself), and `GivenUp` is returned. Attempts
         nest: an inner give-up is a manual item inside the outer attempt, and an outer give-up discards it."""
-        saved = {name: copy.copy(value) for name, value in vars(self).items()}
+        saved = self.checkpoint()
         try:
             return produce()
         except Unsupported as unsupported:
-            vars(self).update(saved)
+            self.restore(saved)
             where = unsupported.node.span
             return GivenUp(self._record(f"{unsupported.reason} (source {where})", output or unsupported.node,
                                      output.id if output else None, str(where),
                                      (output or replaces or unsupported.node).id, unsupported.waits_for))
+
+    def checkpoint(self) -> dict:
+        """Every field as it is now, one level deep, to give back with `restore`."""
+        return {name: copy.copy(value) for name, value in vars(self).items()}
+
+    def restore(self, saved: dict) -> None:
+        """Every field as `checkpoint` took it. Use a checkpoint once: the containers in it are the draft's after this."""
+        vars(self).update(saved)
 
     def manual_item_at(self, node: Node, reason: str, waits_for: Sequence[str] = ()) -> ManualItem:
         """A manual item for a construct that was never attempted, such as a statement of a procedure."""

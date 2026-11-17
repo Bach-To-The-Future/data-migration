@@ -24,7 +24,7 @@ from .core.differences import Catalogue
 from .core.catalog import CatalogReader, Snapshot, origin
 from .core.ir import FORMAT_VERSION, Artefact
 from .core import vocabulary
-from .sources.sqlserver import differences as source_differences, error_comparisons, error_mapping as source_errors, extractor, lowering, names, shapes
+from .sources.sqlserver import differences as source_differences, error_comparisons, error_mapping as source_errors, extractor, lowering, names, shapes, statement_effects
 from .sources.sqlserver import folders as folder_source
 from .sources.sqlserver.extractor import (ExtractorPermissionError, SettingsRequired, TimeZoneRequired,
                                           UnknownLanguage, UnsupportedServer)
@@ -463,10 +463,11 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
     dependencies = generator.Dependencies(
         kinds={dep: reader.kind_of(dep) for dep in artefact.dependencies if snapshot.has(dep)},
         generated={i for i, k in project_kinds.items() if k in CALLABLE_KINDS and i != found})
-    generated = generator.generate(artefact, snapshot.id, TOOL_VERSION, differences, adjusted_names, dependencies)
+    generated = generator.generate(artefact, snapshot.id, TOOL_VERSION, differences, adjusted_names, dependencies,
+                                   statement_effects.effect)
     checks = generator.check(artefact, generated)
 
-    manual_nodes = _manual_by_node(artefact, generated.manual_items)
+    manual_nodes = _manual_by_node(artefact, generated.manual_items, generated.discarded)
     constructs = []
     for node in artefact.nodes():
         if vocabulary.part_of(node.kind) is None and node.kind not in REPORTED_KINDS:
@@ -504,14 +505,22 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
     return _Generated(artefact, reader, generated, checks, item)
 
 
-def _manual_by_node(artefact: Artefact,
-                    items: list[generator.ManualItem]) -> dict[str, tuple[str, str, tuple[str, ...]]]:
+def _manual_by_node(artefact: Artefact, items: list[generator.ManualItem],
+                    discarded: tuple[str, ...] | list[str] = ()) -> dict[str, tuple[str, str, tuple[str, ...]]]:
     """node id -> (reason, manual item id, what the item waits for), for every node whose code the file does not
     hold. A node under the one that failed gets that item's reason; a node the failure replaced elsewhere in the
     query is reported as not generated because of it, and waits for what the item waits for. The most specific item
     wins."""
     nodes = {n.id: n for n in artefact.nodes()}
     found: dict[str, tuple[str, str, tuple[str, ...]]] = {}
+    for root in discarded:       # a procedural function with manual work raises when called: none of its code runs
+        under = {n.id for n in nodes[root].walk()}
+        causes = [m for m in items if m.replaces in under]
+        numbers = ", ".join(m.id[1:] for m in causes)
+        waits = tuple(sorted({w for m in causes for w in m.waits_for}))
+        for n in nodes[root].walk():
+            found[n.id] = (f"its code is not generated: the function raises when called, because of manual work {numbers}",
+                           causes[0].id, waits)
     for item in sorted(items, key=lambda m: -sum(1 for _ in nodes[m.replaces].walk())):
         for n in nodes[item.replaces].walk():
             found[n.id] = (f"its code is not generated, because of manual work {item.id[1:]} ({item.source_position})",

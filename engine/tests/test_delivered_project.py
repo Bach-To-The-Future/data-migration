@@ -92,7 +92,7 @@ def test_every_module_of_the_project_imports_and_defines_what_the_manifest_says(
                 assert callable(getattr(module, function)), (entry["module"], function)
             [first, *_] = entry["functions"]
             parameters = list(inspect.signature(getattr(module, first)).parameters)
-            assert parameters == [a for a in entry["signature"].split(", ") if a != "*"], entry["artefact"]
+            assert parameters == [a.split("=")[0] for a in entry["signature"].split(", ") if a != "*"], entry["artefact"]
             assert [p["python_name"] for p in entry["parameters"]] == [
                 a for a in parameters[1:] if a not in ("inserted", "deleted")][:len(entry["parameters"])]
     finally:
