@@ -21,6 +21,7 @@ from ...core.ir import Artefact, Node
 PROCEDURAL = "#50"             # procedural generation
 LOWERING_ASSIST = "#63"        # lowering assist
 NUMBER_HELPERS = "#87"         # the support library's number, date and time helpers
+DOOMED_TRANSACTIONS = "#113"   # the library modelling doomed transactions, which reading XACT_STATE() depends on
 STRING_HELPERS = "#47"         # the support library's comparison, collation and string helpers
 SPECIAL = ("opaque_fragment", "dynamic_sql_execution", "schema_change", "permission_change", "external_reference")
 STALE = "scope_may_be_stale"
@@ -54,6 +55,9 @@ def reason_for_kind(kind: str, handled: AbstractSet[str]) -> str | None:
         return "a permission change is not generated: it is manual work (spec section 4, item 6)"
     if kind == "opaque_fragment":
         return "kept as written by lowering, which could not express it: lowering assist is not built yet"
+    if kind == "transaction_state":
+        return ("reading the state of the transaction needs the support library to model a transaction that an error has "
+                "doomed, which it does not yet, so it is manual work")
     if vocabulary.part_of(kind) == "procedural" or kind == "batch":
         return procedural_reason(kind)
     return f"{kind} has no PySpark generation yet"
@@ -64,6 +68,8 @@ def waits_for_kind(kind: str, handled: AbstractSet[str]) -> tuple[str, ...]:
     SQL, schema and permission changes are manual work for good, and so are kinds nothing is planned for."""
     if kind == "opaque_fragment":
         return (LOWERING_ASSIST,)
+    if kind == "transaction_state" and kind not in handled:
+        return (DOOMED_TRANSACTIONS,)
     if kind not in handled and (vocabulary.part_of(kind) == "procedural" or kind == "batch"):
         return (PROCEDURAL,)
     return ()

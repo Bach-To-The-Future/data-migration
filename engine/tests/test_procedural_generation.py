@@ -387,3 +387,12 @@ def test_a_trigger_that_reads_the_changed_rows_is_still_reported_statement_by_st
 
 def _int():
     return {"system_type": "int", "max_length": 4, "precision": 10, "scale": 0, "collation": None}
+
+
+def test_reading_the_transaction_state_is_manual_work_that_waits_for_doomed_transactions(corpus_snapshot):
+    sql = "CREATE PROCEDURE sales.uspTest AS BEGIN\nDECLARE @s int = XACT_STATE();\nRETURN @s;\nEND"
+    generated = generate_text(corpus_snapshot, sql, kind="procedure", name="uspTest")
+
+    assert generated.layer1.passed, generated.layer1.failures
+    [item] = [m for m in generated.file.manual_items if "state of the transaction" in m.reason]
+    assert item.waits_for == ("#113",) and "#" not in item.reason
