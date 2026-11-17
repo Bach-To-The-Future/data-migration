@@ -140,6 +140,11 @@ class Draft(Lines):
         """Every field as `checkpoint` took it. Use a checkpoint once: the containers in it are the draft's after this."""
         vars(self).update(saved)
 
+    def assume(self, text: str) -> None:
+        """Record what generation assumed, once however many times the code that assumes it is generated."""
+        if text not in self.assumptions:
+            self.assumptions.append(text)
+
     def manual_item_at(self, node: Node, reason: str, waits_for: Sequence[str] = ()) -> ManualItem:
         """A manual item for a construct that was never attempted, such as a statement of a procedure."""
         text = " ".join(reason.split())
