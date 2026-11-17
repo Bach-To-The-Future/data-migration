@@ -207,15 +207,15 @@ def test_a_multi_statement_table_function_is_manual_work_statement_by_statement(
 def test_a_procedure_keeps_its_parameters_and_reports_every_statement(corpus_snapshot):
     generated = generate_text(
         corpus_snapshot,
-        "CREATE PROCEDURE sales.uspTest @n int, @name varchar(10) = 'x' AS BEGIN\nSET NOCOUNT ON;\n"
+        "CREATE PROCEDURE sales.uspTest @n int, @name varchar(10) = 'x' AS BEGIN\nPRINT 'start';\n"
         "SELECT o.OrderId FROM sales.[Order] AS o WHERE o.CustomerId = @n;\nEND",
         kind="procedure", name="uspTest", parameters=[parameter("@n"), parameter("@name", "varchar", length=10)])
 
     assert generated.layer1.passed, generated.layer1.failures
     assert "def uspTest(ss, *, n, name=...) -> object:" in generated.text
-    assert "set_session_option" in manual_text(generated) and "emit_result_set" not in manual_text(generated)
+    assert "emit_message" in manual_text(generated) and "emit_result_set" not in manual_text(generated)
     assert "procedural generation" in manual_text(generated) and "#" not in manual_text(generated)
-    assert generated.file.manual_items and all(m.waits_for == ("#50",) for m in generated.file.manual_items)
+    assert generated.file.manual_items and all(m.waits_for == ("#119",) for m in generated.file.manual_items)
     # the select is generated, but the procedure raises when called, so none of its code is in the file
     assert generated.file.fails_when_called and "spark.read.table" not in generated.text
     assert {n.id for n in generated.artefact.nodes() if n.kind != "declare_parameter" and vocabulary.part_of(n.kind)} \
