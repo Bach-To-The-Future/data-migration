@@ -80,6 +80,8 @@ INSERTS = {
     "a query that finds nothing": "INSERT sales.Inventory (ProductId, OnHand, ReorderLevel) "
                                   "SELECT i.ProductId + 100, i.OnHand, i.ReorderLevel FROM sales.Inventory AS i "
                                   "WHERE i.OnHand > 1000;",
+    "a query without a column list": "INSERT sales.Inventory SELECT i.ProductId + 100, i.OnHand, i.ReorderLevel "
+                                     "FROM sales.Inventory AS i;",
     "a query that names its columns in another order": "INSERT sales.Inventory (OnHand, ProductId, ReorderLevel) "
                                                        "SELECT i.OnHand, i.ProductId + 100, i.ReorderLevel "
                                                        "FROM sales.Inventory AS i;",
@@ -508,3 +510,59 @@ def test_a_balanced_callee_does_not_raise_266(corpus_snapshot, duo, monkeypatch)
     _, _, function = define(duo, monkeypatch, corpus_snapshot, callee_sql, [], caller_sql, [])
 
     assert function(duo.session()).return_code == 3
+
+
+# ---------------------------------------------------------------- what a call leaves, and the calls not generated
+
+@pytest.mark.parametrize("callee_body", [
+    "UPDATE sales.Inventory SET OnHand = OnHand + 1 WHERE OnHand > 2;\nRETURN 7;",
+    "UPDATE sales.Inventory SET OnHand = OnHand + 1 WHERE OnHand > 2;\nDELETE sales.Inventory WHERE ProductId = 999;",
+], ids=["a RETURN after a write", "a write that matches nothing last"])
+def test_rowcount_and_error_after_a_call_are_what_the_callees_last_statement_left_for_a_return_and_a_write_that_matches_nothing(
+        corpus_snapshot, duo, monkeypatch, callee_body):
+    world(duo)
+    callee_sql = f"CREATE PROCEDURE sales.uspCallee AS BEGIN\n{callee_body}\nEND"
+    caller_sql = "CREATE PROCEDURE sales.uspCaller AS BEGIN\nEXEC sales.uspCallee;\nEND"
+    callee, caller, function = define(duo, monkeypatch, corpus_snapshot, callee_sql, [], caller_sql, [])
+    duo.tsql(callee_sql.replace("sales.", "{s}."))
+    [expected] = duo.run("DECLARE @pre int = 1; EXEC {s}.uspCallee; SELECT @@ROWCOUNT AS rc, @@ERROR AS err")[0]
+    ss = duo.session()
+
+    function(ss)
+
+    assert (ss.rowcount, ss.at_error) == (expected["rc"], expected["err"])
+    assert caller.file.manual_items == []
+
+
+@pytest.mark.parametrize("call, reason", [
+    ("EXEC sales.uspCallee @a = 1, @b = @y OUTPUT;", "does not declare it OUTPUT"),
+    ("EXEC sales.uspCallee @a = 1, @b = DEFAULT, @c = DEFAULT, @x = 1;", None),
+], ids=["OUTPUT given to an input parameter", "an argument that matches no parameter"])
+def test_a_call_that_is_not_generated_says_why(corpus_snapshot, duo, call, reason):
+    caller_sql = ("CREATE PROCEDURE sales.uspCaller @y int OUTPUT AS BEGIN\n" + call + "\nEND")
+    snapshot = synthetic_module(corpus_snapshot, CALLEE, kind="procedure", name="uspCallee",
+                                parameters=CALLEE_PARAMETERS)[0].snapshot
+    generated = generate_text(snapshot, caller_sql, kind="procedure", name="uspCaller",
+                              parameters=[parameter("@y", direction="output")],
+                              generated_in_project={"RetailSample.sales.uspCallee": "procedure"})
+
+    [item] = generated.file.manual_items
+    if reason:
+        assert reason in item.reason
+
+
+def test_a_default_given_to_a_parameter_that_has_none_is_manual_work(corpus_snapshot, duo):
+    caller_sql = "CREATE PROCEDURE sales.uspCaller AS BEGIN\nEXEC sales.uspCallee @a = DEFAULT;\nEND"
+    _, caller, _, _ = generated_pair(corpus_snapshot, duo, CALLEE, CALLEE_PARAMETERS, caller_sql, [])
+
+    [item] = caller.file.manual_items
+    assert "@a" in item.reason and "no default" in item.reason
+
+
+def test_an_output_received_by_a_variable_of_another_type_is_manual_work_that_waits_for_the_conversions(corpus_snapshot, duo):
+    caller_sql = ("CREATE PROCEDURE sales.uspCaller AS BEGIN\nDECLARE @v bigint;\n"
+                  "EXEC sales.uspCallee @a = 1, @c = @v OUTPUT;\nEND")
+    _, caller, _, _ = generated_pair(corpus_snapshot, duo, CALLEE, CALLEE_PARAMETERS, caller_sql, [])
+
+    [item] = caller.file.manual_items
+    assert item.waits_for == ("#134",) and "another type" in item.reason
