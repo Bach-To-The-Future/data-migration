@@ -856,13 +856,18 @@ class Procedural(Queries):
             if found is None:
                 raise Opaque(s, f"{spec.Variable.Name} is not declared before this point in its batch")
             return_variable = found[0]
-        arguments = []
+        arguments, defaulted = [], []
         for position, p in enumerate(entity.Parameters):
             named = str(p.Variable.Name) if p.Variable is not None else None
             fact = next((d for d in declared if named and d["name"].casefold() == named.casefold()), None) \
                 if named else (declared[position] if position < len(declared) else None)
             if fact is None:
                 raise Opaque(p, "an argument does not match a parameter of the procedure")
+            if type_name(p.ParameterValue) == "DefaultLiteral":
+                if p.IsOutput:
+                    raise Opaque(p, "DEFAULT given to an OUTPUT argument is not lowered")
+                defaulted.append(fact["name"])           # the parameter takes the default the procedure declares
+                continue
             value = self.lowered_or_opaque(p.ParameterValue)
             if p.IsOutput:
                 if value.kind != "variable":
@@ -872,8 +877,18 @@ class Procedural(Queries):
             node = as_role(value, "argument")
             node.attrs = dict(node.attrs, parameter=fact["name"], output=bool(p.IsOutput), named=named is not None)
             arguments.append(node)
-        return Node("call_procedure", self.span(s), None, {"procedure": procedure, "return_variable": return_variable,
-                                                           "may_touch_temp_tables": True}, arguments)
+        return Node("call_procedure", self.span(s), None,
+                    {"procedure": procedure, "return_variable": return_variable, "may_touch_temp_tables": True,
+                     "declared_parameters": [self.declared_parameter(d) for d in declared], "defaulted": defaulted},
+                    arguments)
+
+    def declared_parameter(self, fact: dict) -> dict:
+        """What a call needs of one parameter the procedure declares: its name, direction and type (an output value is
+        converted from it) and whether it has a default, which an argument left out or `DEFAULT` takes."""
+        table = fact["system_type"] == "table"
+        return {"name": fact["name"], "direction": fact["direction"], "table": table,
+                "has_default": fact.get("default") is not None or "default_unknown" in fact,
+                "type": None if table else T.from_column(fact, default=self.default_label).to_json()}
 
     def dynamic_sql(self, statement) -> Node | None:
         """EXEC (string) and sp_executesql: the expressions that build the text are lowered; the statement is a

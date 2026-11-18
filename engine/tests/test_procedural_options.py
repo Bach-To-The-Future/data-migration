@@ -1,6 +1,6 @@
 """SET options in generated code (issue #117, spec section 6): `SET NOCOUNT` generates, the option a procedure or a trigger
 changes is back to its old value when it ends, and a batch's change lasts for the session, as on SQL Server, which is the
-oracle for each of these (`@@OPTIONS & 512` is NOCOUNT). `SET IDENTITY_INSERT` waits for the writes, and an option lowering
+oracle for each of these (`@@OPTIONS & 512` is NOCOUNT). `SET IDENTITY_INSERT` waits for the option to be held, and an option lowering
 does not emit stays an opaque fragment with its reason."""
 import pytest
 
@@ -130,13 +130,13 @@ def test_set_nocount_leaves_in_rowcount_and_error_what_sql_server_does(corpus_sn
 
 # ---------------------------------------------------------------- what is not generated yet
 
-def test_set_identity_insert_waits_for_the_writes(corpus_snapshot):
+def test_set_identity_insert_waits_for_session_state_to_hold_the_option(corpus_snapshot):
     sql = "CREATE PROCEDURE sales.uspTest AS BEGIN\nSET IDENTITY_INSERT sales.[Order] ON;\nRETURN 0;\nEND"
     file = generate_text(corpus_snapshot, sql, kind="procedure", name="uspTest")
 
     assert file.layer1.passed, file.layer1.failures
     [item] = file.file.manual_items
-    assert item.waits_for == ("#118",) and "#" not in item.reason and "IDENTITY_INSERT" in item.reason
+    assert item.waits_for == ("#158",) and "#" not in item.reason and "IDENTITY_INSERT" in item.reason
     assert file.file.fails_when_called
 
 
@@ -174,7 +174,6 @@ def test_no_corpus_procedure_or_trigger_is_stopped_by_set_nocount_any_more(corpu
 # ---------------------------------------------------------------- what each kind waits for
 
 @pytest.mark.parametrize("kind,ticket", [
-    ("insert_rows", "#118"), ("update_rows", "#118"), ("delete_rows", "#118"), ("call_procedure", "#118"),
     ("begin_transaction", "#119"), ("try_catch", "#119"), ("raise_error", "#119"), ("emit_message", "#119"),
     ("set_abort_on_error", "#119"), ("create_temp_table", "#120"), ("assign_from_rows", "#120"),
     ("declare_row_set_variable", "#120"), ("merge_rows", "#121"), ("return_changed_rows", "#121"),

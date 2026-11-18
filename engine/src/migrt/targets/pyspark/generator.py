@@ -32,11 +32,12 @@ the source's behaviour is worded by the source half (ADR 0019).
 from __future__ import annotations
 
 import ast
+import contextlib
 import dataclasses
 import functools
 import keyword
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import NoReturn, Protocol
 
 from ...core import vocabulary
@@ -234,6 +235,7 @@ class Generator:
         self.scopes: list[list[str]] = []              # per statement being generated: the variables in scope before it
         self.readable: dict[str, list[str]] = {}       # expression node id -> the source variables its code may read
         self.discarded: list[Node] = []                # the procedural functions whose code is not in the file
+        self.write_alias: str | None = None            # the row source whose columns a write's code names without it
 
     # ------------------------------------------------------------------ the file
 
@@ -581,13 +583,23 @@ class Generator:
         if self.effects is None:
             raise ValueError("what each statement leaves in @@ROWCOUNT and @@ERROR was not given to generation")
         effect = self.effects(node)
-        counts = {"keeps": None, "one": "1", "zero": "0", "rows": rows}.get(effect.rows, ...)
+        counts = {"keeps": None, "one": "1", "zero": "0", "rows": rows, "callee": None}.get(effect.rows, ...)
         if counts is ... or (effect.rows == "rows" and rows is None) or effect.error not in ("keeps", "reset"):
             raise ValueError(f"{node.id}: what a {node.kind} leaves in @@ROWCOUNT and @@ERROR is not known to generation")
         if counts is None and effect.error == "keeps":
             return
         self.put(f"ss.statement_done({counts}{'' if effect.error == 'reset' else ', reset_error=False'})",
                  [_shallow(node)])
+
+    def done_by_wrapper(self, node: Node) -> None:
+        """A write wrapper leaves the number of rows it changed in `@@ROWCOUNT` and zero in `@@ERROR` itself. That is what the
+        source must say the statement leaves, and generation refuses to run on if it does not."""
+        if self.effects is None:
+            raise ValueError("what each statement leaves in @@ROWCOUNT and @@ERROR was not given to generation")
+        effect = self.effects(node)
+        if (effect.rows, effect.error) != ("rows", "reset"):
+            raise ValueError(f"{node.id}: a {node.kind} leaves {effect.rows} in @@ROWCOUNT and {effect.error} in @@ERROR, "
+                             "which is not what a write wrapper leaves")
 
     # ---- the statements
 
@@ -638,8 +650,8 @@ class Generator:
         option = s.attrs["option"]
         if option == "IDENTITY_INSERT":
             raise Unsupported(s, f"SET IDENTITY_INSERT {s.attrs['table']} lets a write give the identity column a value of its "
-                                 "own, which the write wrappers do and writes are not generated yet",
-                              (untranslatable.WRITES,))
+                                 "own, which the write wrappers allow only while the option is on, and generation does not "
+                                 "hold the option yet", (untranslatable.JOINED_WRITES,))
         if option != "NOCOUNT":
             raise ValueError(f"{s.id}: lowering emitted SET {option}, which this generator has no handling for")
         note = (f"{self.artefact.identity}: SET NOCOUNT only records the option in session state: generated code sends no "
@@ -683,6 +695,165 @@ class Generator:
         self.draft.caveats[s.id] = STOPS_AT_ERROR
         self.put(f"{self.result_sets}.append({frame})", [s])
         self.done(s, f"{frame}.count()")
+
+    # ------------------------------------------------------------------ writes and calls (issue #118)
+
+    def written_table(self, s: Node) -> str:
+        """The table a write names, as the project calls it, and the note that its session must describe it: the write wrappers
+        enforce what the session's catalog says of a table, and refuse a table it does not describe."""
+        target = s.attrs["target"]
+        self.draft.assume(f"{self.artefact.identity}: it writes {target} through session state's write wrappers, which enforce "
+                          "the keys, constraints, identity values and triggers of a table as the session describes it: the "
+                          "session must be given the description of that table")
+        return self.recorded_names.table(target)
+
+    def refuse_write(self, s: Node) -> None:
+        """What a write cannot be generated from: a target that is not a table, and anything below it that is manual work
+        (an OUTPUT clause, a TOP, a common table expression, a construct of its own). The reasons are the first found."""
+        kind = s.attrs["target_kind"]
+        if kind in ("temp_table", "row_set"):
+            raise Unsupported(s, f"a write to {'a temp table' if kind == 'temp_table' else 'a table variable'} needs temp tables "
+                                 "and table variables, which are not generated yet", (untranslatable.TEMP_TABLES_AND_GUARDS,))
+        if kind != "table":
+            raise Unsupported(s, f"a write to a {kind.replace('_', ' ')} is not generated yet", (untranslatable.WRITE_FORMS,))
+        for node in s.walk():
+            self.refuse_detected(node)
+
+    def rows_of_one_table(self, s: Node) -> tuple[Node, Node | None]:
+        """The rows an UPDATE or DELETE works on, when they are the target's own: the table read, and the condition on it. The
+        wrappers take a condition on the table alone, so rows from a join or from any other plan are manual work."""
+        plan, condition = s.child("input"), None
+        if plan.kind == "filter":
+            plan, condition = plan.child("input"), plan.child("condition")
+        if plan.kind != "read_table" or plan.attrs.get("table") != s.attrs["target"]:
+            raise Unsupported(s, f"an {s.kind.split('_')[0].upper()} over the rows of a join or of a query, not of the one table "
+                                 "it changes, is not generated yet", (untranslatable.JOINED_WRITES,))
+        return plan, condition
+
+    @STATEMENTS("insert_rows")
+    def insert_rows(self, s: Node, container: Node) -> None:
+        self.refuse_write(s)
+        source = s.child("source")
+        if source.kind == "call_procedure":
+            raise Unsupported(s, "INSERT ... EXEC takes the rows a procedure returns as the rows to insert, which is not "
+                                 "generated yet", (untranslatable.WRITE_FORMS,))
+        table, columns = self.written_table(s), s.attrs["columns"]
+        self.draft.caveats[s.id] = STOPS_AT_ERROR
+        if source.kind == "read_values":
+            self.insert_values(s, source, table, columns)
+        else:
+            mark = len(self.draft.lines)
+            frame = self.plan(source)
+            self.draft.indent_since(mark, "    " * (self.depth - 1))
+            self.put(f'ss.insert("{table}", {frame}.toDF({", ".join(repr(c) for c in columns)}))', [s])
+        self.done_by_wrapper(s)
+
+    def insert_values(self, s: Node, source: Node, table: str, columns: list[str]) -> None:
+        """`INSERT ... VALUES`: one dictionary for each row, by column name, each value a Python value (`None` is NULL)."""
+        cells = source.children_with("value")
+        self.put(f'ss.insert_values("{table}", [', [_shallow(s), _shallow(source)])
+        for row in range(source.attrs["rows"]):
+            mine = cells[row * len(columns):(row + 1) * len(columns)]
+            code = ", ".join(f"{column!r}: {self.value(cell)}" for column, cell in zip(columns, mine))
+            self.put(f"    {{{code}}},", [_shallow(s), *mine])
+        self.put("])", [_shallow(s)])
+
+    @STATEMENTS("update_rows")
+    def update_rows(self, s: Node, container: Node) -> None:
+        self.refuse_write(s)
+        _, condition = self.rows_of_one_table(s)
+        table = self.written_table(s)
+        self.draft.caveats[s.id] = STOPS_AT_ERROR
+        with self.unqualified(s.attrs["target_alias"]):
+            assignments = ", ".join(f"{column!r}: {self.expr(value, {})}"
+                                    for column, value in zip(s.attrs["columns"], s.children_with("value")))
+            where = f", where={self.expr(condition, {})}" if condition is not None else ""
+        self.put(f'ss.update("{table}", set={{{assignments}}}{where})', [s])
+        self.done_by_wrapper(s)
+
+    @STATEMENTS("delete_rows")
+    def delete_rows(self, s: Node, container: Node) -> None:
+        self.refuse_write(s)
+        _, condition = self.rows_of_one_table(s)
+        table = self.written_table(s)
+        self.draft.caveats[s.id] = STOPS_AT_ERROR
+        with self.unqualified(s.attrs["target_alias"]):
+            where = f", where={self.expr(condition, {})}" if condition is not None else ""
+        self.put(f'ss.delete("{table}"{where})', [s])
+        self.done_by_wrapper(s)
+
+    @contextlib.contextmanager
+    def unqualified(self, alias: str) -> Iterator[None]:
+        """Columns of the row source called `alias` are written without it: the write wrappers read the table they change and
+        take their conditions and values over its own columns."""
+        saved, self.write_alias = self.write_alias, alias
+        try:
+            yield
+        finally:
+            self.write_alias = saved
+
+    @PLAN_STEPS("read_values")
+    def read_values(self, node: Node) -> str:
+        """A list of rows is generated as the rows of an INSERT, by that statement's own handler; as a row source of a query it
+        waits for the set-like row sources."""
+        raise Unsupported(node, "read_values has no PySpark generation yet as a row source of a query",
+                          (untranslatable.UNION_AND_VALUES,))
+
+    def callee_parameters(self, function: str, declared: Sequence[dict]) -> dict[str, str]:
+        """The Python name each parameter of the callee has in its own file: the names are given in order, and one taken (by a
+        Python keyword, by the function, by `ss`, or by another parameter) is changed, as `declare_parameter` does it."""
+        taken = set(Draft().taken) | {function}
+        return {d["name"].casefold(): python_name(d["name"].lstrip("@"), taken) for d in declared}
+
+    @STATEMENTS("call_procedure")
+    def call_procedure(self, s: Node, container: Node) -> None:
+        callee = s.attrs["procedure"]
+        if not self.collects:
+            raise Unsupported(s, "a call in a trigger may give result sets, which would go nowhere", (untranslatable.TRIGGERS,))
+        if callee == self.artefact.identity:
+            raise Unsupported(s, f"{callee} calls itself, which would make its file import itself")
+        if callee not in self.dependencies.generated or self.dependencies.kinds.get(callee) != "procedure":
+            raise Unsupported(s, f"{callee} is a procedure that is not generated in this project, so there is nothing to call")
+        _, function = self.recorded_names.module(callee, "procedure")
+        declared = s.attrs["declared_parameters"]
+        names = self.callee_parameters(function, declared)
+        passed = {a.attrs["parameter"].casefold(): a for a in s.children_with("argument")}
+        defaulted = {name.casefold() for name in s.attrs["defaulted"]}
+        arguments: list[str] = []
+        received: list[tuple[str, str]] = []             # (the callee's output parameter, the variable that receives it)
+        for d in declared:
+            key, argument = d["name"].casefold(), passed.get(d["name"].casefold())
+            if d["table"]:
+                raise Unsupported(s, f"{callee} takes a table-valued parameter, {d['name']}, which is not generated yet",
+                                  (untranslatable.VALUE_TYPES,))
+            if argument is None:
+                if not d["has_default"]:
+                    raise Unsupported(s, f"{callee} is called without {d['name']}, which has no default: SQL Server stops the "
+                                         "call with an error that generation does not raise yet")
+                if key in defaulted:
+                    arguments.append(f"{names[key]}=...")        # DEFAULT: the callee applies its default
+                continue
+            code = self.value(argument)
+            if argument.attrs["output"]:
+                if d["direction"] != "output":
+                    raise Unsupported(argument, f"{d['name']} is passed with OUTPUT but {callee} does not declare it OUTPUT, "
+                                                "which SQL Server refuses")
+                if argument.type is None or argument.type.to_json() != d["type"]:
+                    raise Unsupported(argument, f"the output parameter {d['name']} is received by a variable of another type "
+                                                f"({argument.type}), a conversion that is not generated yet",
+                                      (untranslatable.VALUE_TYPES,))
+                received.append((names[key], code))
+            arguments.append(f"{names[key]}={code}")
+        result = python_name("call_result", self.draft.taken)
+        local = self.callee(callee, "procedure")
+        self.put(f"with ss.scope({callee.rsplit('.', 1)[-1]!r}, procedure_call=True):", [_shallow(s)])
+        self.put(f"    {result} = {local}({', '.join(['ss', *arguments])})", [s])
+        if s.attrs.get("return_variable"):
+            self.put(f"{self.params[s.attrs['return_variable'].casefold()]} = {result}.return_code", [_shallow(s)])
+        for output, variable in received:
+            self.put(f"{variable} = {result}.outputs[{output!r}]", [_shallow(s)])
+        self.put(f"{self.result_sets}.extend({result}.result_sets)", [_shallow(s)])
+        self.done(s)
 
     # ------------------------------------------------------------------ values of procedural code
 
@@ -1138,6 +1309,8 @@ class Generator:
         if node.attrs["relation"] == OUTPUT:         # a sort key that names a column of the select list
             return f'F.col("{node.attrs["column"]}")'
         ref = (node.attrs["relation"], node.attrs["column"])
+        if self.write_alias is not None and ref[0] == self.write_alias and not grouped:
+            return f'F.col("{ref[1]}")'
         if grouped:
             if ref not in grouped:
                 raise Unsupported(node, "a column outside an aggregate that is not a grouping key")

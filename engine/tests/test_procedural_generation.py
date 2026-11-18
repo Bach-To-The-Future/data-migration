@@ -276,7 +276,8 @@ def test_a_return_leaves_one_and_a_return_of_the_row_count_reads_the_count_befor
 
 
 def test_every_statement_kind_the_generator_handles_has_an_effect_the_source_decided():
-    handled_statements = {"declare_variable", "assign", "if", "while", "break", "continue", "return", "emit_result_set"}
+    handled_statements = {"declare_variable", "assign", "if", "while", "break", "continue", "return", "emit_result_set",
+                          "insert_rows", "update_rows", "delete_rows", "call_procedure"}
 
     assert handled_statements <= statement_effects.statement_kinds()
 
@@ -330,7 +331,7 @@ def test_a_procedure_with_a_statement_the_target_cannot_generate_reports_that_st
     assert generated.file.fails_when_called
     kinds = sorted(n.kind for n in generated.artefact.nodes() if any(m.node == n.id for m in generated.file.manual_items))
     assert kinds == ["call_procedure"]
-    assert all(m.waits_for == ("#118",) for m in generated.file.manual_items)
+    assert all(m.waits_for == () and "not generated in this project" in m.reason for m in generated.file.manual_items)
     assert not any("#" in m.reason for m in generated.file.manual_items)
     namespace: dict = {}
     exec(compile(generated.text, "uspTest.py", "exec"), namespace)

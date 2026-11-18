@@ -18,7 +18,7 @@ from ...core import vocabulary
 from ...core.ir import Artefact, Node
 
 # What a construct waits for, as `waits_for` names it (never in a reason, which a client may read).
-WRITES = "#118"                # writes and EXEC
+JOINED_WRITES = "#158"         # UPDATE and DELETE over joined rows, SET IDENTITY_INSERT
 TRANSACTIONS_AND_ERRORS = "#119"   # transactions, XACT_ABORT, TRY/CATCH, messages
 TEMP_TABLES_AND_GUARDS = "#120"    # temp tables, table variables, SELECT @v =, guarded statements
 WRITE_FORMS = "#121"           # MERGE, OUTPUT, TOP in writes, INSERT ... EXEC, global temp tables
@@ -43,7 +43,6 @@ STRING_HELPERS = "#47"         # the support library's comparison, collation and
 # The ticket that builds the generation of each statement kind not generated yet: a construct of that kind is manual work for want
 # of it. A kind not here waits for nothing: no ticket has taken it, which a manual item says by an empty `waits_for`.
 TICKET_BY_KIND = {
-    "insert_rows": WRITES, "update_rows": WRITES, "delete_rows": WRITES, "call_procedure": WRITES,
     "begin_transaction": TRANSACTIONS_AND_ERRORS, "commit_transaction": TRANSACTIONS_AND_ERRORS,
     "rollback_transaction": TRANSACTIONS_AND_ERRORS, "save_point": TRANSACTIONS_AND_ERRORS,
     "rollback_to_save_point": TRANSACTIONS_AND_ERRORS, "transaction_depth": TRANSACTIONS_AND_ERRORS,
