@@ -164,6 +164,7 @@ def measure(snapshot, project: bool = True) -> Measurement:
 
     in_project = {o.identity: o.kind for o in snapshot.objects if o.kind in engine.GENERATED_KINDS
                   and reader.value(o.identity, "extractable")} if project else {}
+    closing = engine.closing_calls(snapshot, in_project)
     blockers: dict[str, frozenset[str]] = {}
     waits: dict[str, set[str]] = collections.defaultdict(set)
     for o in sorted((o for o in snapshot.objects if o.kind in ("procedure", "trigger")), key=lambda o: o.identity):
@@ -176,7 +177,8 @@ def measure(snapshot, project: bool = True) -> Measurement:
         artefact = lowering.lower_artefact(reader, o.identity, parsed)
         dependencies = generator.Dependencies(
             kinds={dep: reader.kind_of(dep) for dep in artefact.dependencies if snapshot.has(dep)},
-            generated={i for i, k in in_project.items() if k in engine.CALLABLE_KINDS and i != o.identity})
+            generated={i for i, k in in_project.items() if k in engine.CALLABLE_KINDS and i != o.identity},
+            closing=closing.get(o.identity, frozenset()))
         generated = generator.generate(artefact, snapshot.id, "0.0.0", catalogue, names_for(snapshot, {o.identity: o.kind}),
                                        dependencies, statement_effects.effect)
         found = blockers_of(artefact, generated)

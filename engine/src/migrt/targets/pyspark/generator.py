@@ -100,6 +100,7 @@ class Dependencies:
     of them are generated into this project (a dependency there is an import)."""
     kinds: dict[str, str] = dataclasses.field(default_factory=dict)
     generated: set[str] = dataclasses.field(default_factory=set)
+    closing: frozenset[str] = frozenset()      # the callees among them that call this artefact again, directly or through others
 
 
 @dataclasses.dataclass
@@ -801,6 +802,13 @@ class Generator:
         taken = set(Draft().taken) | {function}
         return {d["name"].casefold(): python_name(d["name"].lstrip("@"), taken) for d in declared}
 
+    def refuse_ring(self, node: Node, callee: str) -> None:
+        """A call to an artefact that calls this one again, directly or through others, would make two files import each other,
+        which Python refuses at run time: it is manual work until a callee is imported where it is called."""
+        if callee in self.dependencies.closing:
+            raise Unsupported(node, f"{callee} calls this one again, directly or through others, and files that call each other "
+                                    "would import each other, which is not generated yet", (untranslatable.CALL_RINGS,))
+
     @STATEMENTS("call_procedure")
     def call_procedure(self, s: Node, container: Node) -> None:
         callee = s.attrs["procedure"]
@@ -808,6 +816,7 @@ class Generator:
             raise Unsupported(s, "a call in a trigger may give result sets, which would go nowhere", (untranslatable.TRIGGERS,))
         if callee not in self.dependencies.generated or self.dependencies.kinds.get(callee) != "procedure":
             raise Unsupported(s, f"{callee} is a procedure that is not generated in this project, so there is nothing to call")
+        self.refuse_ring(s, callee)
         _, function = self.recorded_names.module(callee, "procedure")
         declared = s.attrs["declared_parameters"]
         names = self.callee_parameters(function, declared)
@@ -1336,6 +1345,7 @@ class Generator:
         if function not in self.dependencies.generated:
             raise Unsupported(node, f"{function} is a function that is not generated in this project, so there "
                                     "is nothing to import")
+        self.refuse_ring(node, function)
         local = self.callee(function, "scalar_function")
         return f"{local}({', '.join(['ss'] + [self.expr(x, grouped) for x in self.arguments(node)])})"
 
