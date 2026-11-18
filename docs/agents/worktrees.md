@@ -14,6 +14,8 @@ A rebase can conflict with another session that changed the same file. Resolve i
 
 **Never remove a worktree with `--force`.** Commit or stash everything first, and let `git worktree remove` refuse if anything is uncommitted: its refusal is the check that nothing is about to be lost. Forcing the removal deletes uncommitted work with no way back (it has happened: review fixes made after a squash were lost this way and had to be written again). The same holds for `git branch -D`: use `-d`, which refuses a branch that is not merged. Before removing, `git status` must be clean and the branch's commits must be on `master`.
 
+**A session removes only the worktree and the branch it created itself, never another session's, even one that looks finished** (its pull request merged, its directory idle, its branch gone from the remote). Another session may still be working in it, or may be about to remove it as part of its own step 4, and a worktree that disappears under a running session loses what that session had not yet committed. `git worktree list` shows what exists; leave every entry that is not yours, and if one looks abandoned, say so to the owner instead of removing it.
+
 ## Names that never collide
 
 Every scratch database, schema and engagement created by the tests or the engine carries a per-run suffix, so one run never drops or reads another's.
