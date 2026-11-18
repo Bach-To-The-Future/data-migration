@@ -19,7 +19,7 @@ import pathlib
 import uuid
 from typing import Sequence
 
-from .core import checker, control_db, report, secrets
+from .core import callgraph, checker, control_db, report, secrets
 from .core.differences import Catalogue
 from .core.catalog import CatalogReader, Snapshot, origin
 from .core.ir import FORMAT_VERSION, Artefact
@@ -261,8 +261,10 @@ def preview_run(engagement: Engagement, source: SqlServerSource | None, artefact
 
     results, report_items, run_rows, units = [], [], [], []
     project_kinds = _project_kinds(snapshot, artefacts)
+    closing = closing_calls(snapshot, project_kinds)
     for identity in artefacts:
-        built = _generate_artefact(snapshot, identity, differences, target_names.Names(adjusted, parts), project_kinds)
+        built = _generate_artefact(snapshot, identity, differences, target_names.Names(adjusted, parts), project_kinds,
+                                   closing)
         units.append(project.Unit(built.ir, built.file))
         results.append(ArtefactResult(identity, report.NOT_RECONCILED, out_dir / built.file.relative_path,
                                       built.layer1, built.file.manual_items))
@@ -414,6 +416,19 @@ def _resolve(reader: CatalogReader, snapshot: Snapshot, identity: str) -> str:
     return found
 
 
+def closing_calls(snapshot: Snapshot, project_kinds: dict[str, str]) -> dict[str, frozenset[str]]:
+    """For each artefact of the project, the artefacts it imports that import it again, directly or through others: a file
+    cannot import such a callee, since the two would import each other. Each artefact is lowered for its calls."""
+    reader = CatalogReader(snapshot, names.resolve)
+    callable_here = {i for i, k in project_kinds.items() if k in CALLABLE_KINDS}
+    calls = {}
+    for identity in sorted(callable_here):
+        if reader.value(identity, "extractable"):
+            artefact = lowering.lower_source(reader, identity)
+            calls[identity] = {d for d in artefact.dependencies if d in callable_here and d != identity}
+    return callgraph.closing_calls(calls)
+
+
 def _project_kinds(snapshot: Snapshot, artefacts: list[str]) -> dict[str, str]:
     """The catalog kind of each artefact the run generates, which is what a dependency between them needs."""
     reader = CatalogReader(snapshot, names.resolve)
@@ -450,7 +465,7 @@ def _semantic_settings(snapshot: Snapshot) -> dict:
 
 
 def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue, adjusted_names: target_names.Names,
-             project_kinds: dict[str, str]) -> _Generated:
+             project_kinds: dict[str, str], closing: dict[str, frozenset[str]]) -> _Generated:
     """Lower, check, generate and run layer 1 for one artefact."""
     reader = CatalogReader(snapshot, names.resolve)
     found = _resolve(reader, snapshot, identity)
@@ -463,7 +478,8 @@ def _generate_artefact(snapshot: Snapshot, identity: str, differences: Catalogue
     checker.require(artefact, lowering.columns_of(reader))
     dependencies = generator.Dependencies(
         kinds={dep: reader.kind_of(dep) for dep in artefact.dependencies if snapshot.has(dep)},
-        generated={i for i, k in project_kinds.items() if k in CALLABLE_KINDS and i != found})
+        generated={i for i, k in project_kinds.items() if k in CALLABLE_KINDS and i != found},
+        closing=closing.get(found, frozenset()))
     generated = generator.generate(artefact, snapshot.id, TOOL_VERSION, differences, adjusted_names, dependencies,
                                    statement_effects.effect)
     checks = generator.check(artefact, generated)

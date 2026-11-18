@@ -18,6 +18,7 @@ from ...core import vocabulary
 from ...core.ir import Artefact, Node
 
 # What a construct waits for, as `waits_for` names it (never in a reason, which a client may read).
+CALL_RINGS = "#160"            # artefacts that call each other: imports inside the calling function
 JOINED_WRITES = "#158"         # UPDATE and DELETE over joined rows, SET IDENTITY_INSERT
 TRANSACTIONS_AND_ERRORS = "#119"   # transactions, XACT_ABORT, TRY/CATCH, messages
 TEMP_TABLES_AND_GUARDS = "#120"    # temp tables, table variables, SELECT @v =, guarded statements

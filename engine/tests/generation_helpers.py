@@ -49,14 +49,14 @@ class Generated:
 
 def generate_text(snapshot, sql: str, kind: str = "view", name: str = "vTest", schema: str = "sales",
                   generated_in_project: dict[str, str] | None = None, dependency_kinds: dict[str, str] | None = None,
-                  **lowering_arguments) -> Generated:
+                  closing: frozenset[str] | set[str] = frozenset(), **lowering_arguments) -> Generated:
     """`generated_in_project` is the other artefacts of the project, {identity: catalog kind}; `dependency_kinds`
     the catalog kind of everything else the artefact reads."""
     artefact, reader = lower_text(snapshot, sql, kind=kind, name=name, schema=schema, **lowering_arguments)
     assert checker.check(artefact, lowering.columns_of(reader)) == []
     names = names_for(snapshot, {artefact.identity: kind, **(generated_in_project or {})})
     dependencies = generator.Dependencies(kinds={**(dependency_kinds or {}), **(generated_in_project or {})},
-                                          generated=set(generated_in_project or {}))
+                                          generated=set(generated_in_project or {}), closing=frozenset(closing))
     differences = Catalogue(source_differences.half(), target_differences.half())
     file = generator.generate(artefact, "snapshot-test", "0.0.0", differences, names, dependencies,
                               statement_effects.effect)
