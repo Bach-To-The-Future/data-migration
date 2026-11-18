@@ -719,16 +719,18 @@ class Generator:
         for node in s.walk():
             self.refuse_detected(node)
 
-    def rows_of_one_table(self, s: Node) -> tuple[Node, Node | None]:
-        """The rows an UPDATE or DELETE works on, when they are the target's own: the table read, and the condition on it. The
-        wrappers take a condition on the table alone, so rows from a join or from any other plan are manual work."""
+    def one_table_write(self, s: Node) -> tuple[str, Node | None]:
+        """What an UPDATE or DELETE of the one table it changes needs: the table as the project calls it, and the condition on its
+        rows. The wrappers take a condition on the table alone, so rows from a join or from any other plan are manual work."""
+        self.refuse_write(s)
         plan, condition = s.child("input"), None
         if plan.kind == "filter":
             plan, condition = plan.child("input"), plan.child("condition")
         if plan.kind != "read_table" or plan.attrs.get("table") != s.attrs["target"]:
             raise Unsupported(s, f"an {s.kind.split('_')[0].upper()} over the rows of a join or of a query, not of the one table "
                                  "it changes, is not generated yet", (untranslatable.JOINED_WRITES,))
-        return plan, condition
+        self.draft.caveats[s.id] = STOPS_AT_ERROR
+        return self.written_table(s), condition
 
     @STATEMENTS("insert_rows")
     def insert_rows(self, s: Node, container: Node) -> None:
@@ -760,10 +762,7 @@ class Generator:
 
     @STATEMENTS("update_rows")
     def update_rows(self, s: Node, container: Node) -> None:
-        self.refuse_write(s)
-        _, condition = self.rows_of_one_table(s)
-        table = self.written_table(s)
-        self.draft.caveats[s.id] = STOPS_AT_ERROR
+        table, condition = self.one_table_write(s)
         with self.unqualified(s.attrs["target_alias"]):
             assignments = ", ".join(f"{column!r}: {self.expr(value, {})}"
                                     for column, value in zip(s.attrs["columns"], s.children_with("value")))
@@ -773,10 +772,7 @@ class Generator:
 
     @STATEMENTS("delete_rows")
     def delete_rows(self, s: Node, container: Node) -> None:
-        self.refuse_write(s)
-        _, condition = self.rows_of_one_table(s)
-        table = self.written_table(s)
-        self.draft.caveats[s.id] = STOPS_AT_ERROR
+        table, condition = self.one_table_write(s)
         with self.unqualified(s.attrs["target_alias"]):
             where = f", where={self.expr(condition, {})}" if condition is not None else ""
         self.put(f'ss.delete("{table}"{where})', [s])
@@ -810,8 +806,6 @@ class Generator:
         callee = s.attrs["procedure"]
         if not self.collects:
             raise Unsupported(s, "a call in a trigger may give result sets, which would go nowhere", (untranslatable.TRIGGERS,))
-        if callee == self.artefact.identity:
-            raise Unsupported(s, f"{callee} calls itself, which would make its file import itself")
         if callee not in self.dependencies.generated or self.dependencies.kinds.get(callee) != "procedure":
             raise Unsupported(s, f"{callee} is a procedure that is not generated in this project, so there is nothing to call")
         _, function = self.recorded_names.module(callee, "procedure")
@@ -828,8 +822,8 @@ class Generator:
                                   (untranslatable.VALUE_TYPES,))
             if argument is None:
                 if not d["has_default"]:
-                    raise Unsupported(s, f"{callee} is called without {d['name']}, which has no default: SQL Server stops the "
-                                         "call with an error that generation does not raise yet")
+                    raise Unsupported(s, f"{callee} is called without {d['name']}, which has no default, so the call is not "
+                                         "generated")
                 if key in defaulted:
                     arguments.append(f"{names[key]}=...")        # DEFAULT: the callee applies its default
                 continue
@@ -837,7 +831,7 @@ class Generator:
             if argument.attrs["output"]:
                 if d["direction"] != "output":
                     raise Unsupported(argument, f"{d['name']} is passed with OUTPUT but {callee} does not declare it OUTPUT, "
-                                                "which SQL Server refuses")
+                                                "so the call is not generated")
                 if argument.type is None or argument.type.to_json() != d["type"]:
                     raise Unsupported(argument, f"the output parameter {d['name']} is received by a variable of another type "
                                                 f"({argument.type}), a conversion that is not generated yet",

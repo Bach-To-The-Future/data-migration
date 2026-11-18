@@ -855,6 +855,9 @@ class Procedural(Queries):
             found = self.variables.get(str(spec.Variable.Name).casefold())
             if found is None:
                 raise Opaque(s, f"{spec.Variable.Name} is not declared before this point in its batch")
+            if found[1].name != "integer" or found[1].int_param("bits") != 32:
+                raise Opaque(s, f"{spec.Variable.Name} receives the return code of a procedure, which is an int, by a "
+                                "conversion that is not lowered yet")
             return_variable = found[0]
         arguments, defaulted = [], []
         for position, p in enumerate(entity.Parameters):
