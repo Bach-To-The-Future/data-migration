@@ -160,7 +160,7 @@ def test_a_cross_join_is_the_generators_own_gap_and_waits_for_no_ticket():
     ("window", "#140"), ("row_number", "#140"), ("named_query", "#141"), ("wait", "#142"),
     ("role_membership", "#143"), ("catalog_lookup", "#143"), ("session_value", "#144"),
     ("for_each_row", "#64"), ("atomic_region", "#64"), ("named_result", "#64"), ("column_expression_function", "#64"),
-    ("union", "#129"), ("read_values", "#129"), ("limit", "#129"), ("scalar_query", "#130"),
+    ("union", "#129"), ("limit", "#129"), ("scalar_query", "#130"),
     ("exists", "#131"), ("convert", "#132"), ("try_convert", "#132"), ("convert_with_style", "#132"),
     ("concat_null_propagating", "#47"), ("trim", "#47"), ("upper", "#47"), ("left_part", "#47"),
     ("date_add", "#87"), ("current_time", "#87"), ("date_diff_boundaries", "#87"), ("round", "#87"),

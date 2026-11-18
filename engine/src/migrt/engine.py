@@ -389,7 +389,7 @@ def _shape_degradations(found: dict) -> list[dict]:
 GENERATED_KINDS = {"view", "scalar_function", "inline_function", "table_function", "procedure", "trigger",
                    "query_batch"}
 # Kinds another generated artefact can import: a function of session state returning a DataFrame or a Column.
-CALLABLE_KINDS = {"view", "scalar_function", "inline_function", "table_function"}
+CALLABLE_KINDS = {"view", "scalar_function", "inline_function", "table_function", "procedure"}
 # The values T-SQL reads from the machine, and what the Databricks runtime maps each to by default (spec section 7).
 RUNTIME_IDENTITY = {
     "SUSER_SNAME": "the current Databricks user",
